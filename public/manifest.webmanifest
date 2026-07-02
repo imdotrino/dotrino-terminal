@@ -1,0 +1,17 @@
+{
+  "name": "Terminal — Dotrino",
+  "short_name": "Terminal",
+  "description": "Abre una consola en tu propia máquina desde el navegador. Solo tu dispositivo enlazado al vault entra; cifrado punto a punto.",
+  "start_url": "./",
+  "scope": "./",
+  "launch_handler": { "client_mode": "focus-existing" },
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e0b1a",
+  "theme_color": "#0e0b1a",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

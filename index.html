@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Terminal — Dotrino</title>
+  <meta name="description" content="Abre una terminal en tu propia máquina desde el navegador. Solo tu dispositivo enlazado al vault puede entrar; el resto queda fuera. Sin cuentas, sin rastreo." />
+  <link rel="canonical" href="https://terminal.dotrino.com/" />
+
+  <meta name="theme-color" content="#0e0b1a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Terminal" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Terminal — Dotrino" />
+  <meta property="og:description" content="Una terminal a tu máquina desde el navegador, autorizada por tu vault. Tu información, en tu servidor, bajo tus reglas." />
+  <meta property="og:url" content="https://terminal.dotrino.com/" />
+  <meta property="og:image" content="https://terminal.dotrino.com/og.jpg" />
+  <meta property="og:locale" content="es_ES" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"WebApplication","name":"Dotrino Terminal","url":"https://terminal.dotrino.com/","applicationCategory":"DeveloperApplication","operatingSystem":"Any","offers":{"@type":"Offer","price":"0"}}
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./">
+      <img src="./icon.svg" alt="" width="28" height="28" />
+      <span>Terminal</span>
+    </a>
+    <div class="actions">
+      <button id="unlinkBtn" class="ghost" hidden>Desenlazar</button>
+      <button id="installBtn" class="ghost" hidden>Instalar</button>
+      <!-- perfil inmediatamente a la izquierda de la moneda (§5) -->
+      <div id="profileSlot"></div>
+      <dotrino-support lang="es"></dotrino-support>
+    </div>
+  </header>
+
+  <main id="app"></main>
+
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@dotrino/support@0.6/dist/dotrino-support.js"></script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
