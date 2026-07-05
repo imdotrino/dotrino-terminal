@@ -30,6 +30,12 @@ button:disabled { opacity: .5; cursor: default; }
 main { flex: 1; padding: 20px 16px; display: flex; justify-content: center; }
 .card { width: 100%; max-width: 820px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
 .card h1 { margin: 0 0 8px; font-size: 1.4rem; }
+.card p { line-height: 1.6; margin: 0 0 10px; }
+.card .cta {
+  background: #1b1830; border: 1px solid var(--brand); border-radius: 10px;
+  padding: 14px 18px; font-weight: 600; margin-top: 16px;
+}
+.card .cta a { color: var(--brand); text-underline-offset: 3px; }
 .steps { color: var(--muted); line-height: 1.7; }
 code { background: #0b0820; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; font-size: .9em; }
 textarea { width: 100%; min-height: 92px; margin: 12px 0; background: #0b0820; color: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; }

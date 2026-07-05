@@ -1,7 +1,7 @@
 /**
  * main.js — UI de Dotrino Terminal. Dos estados:
- *   1. Sin enlazar → pegar el QR del vault (`dotrino-vault pair`) y emparejar
- *      (comparás un código SAS y aprobás en el PC). Queda un dispositivo enlazado.
+ *   1. Sin enlazar → instrucciones para descargar y configurar el vault
+ *      en tu máquina antes de usar la terminal.
  *   2. Enlazado → Conectar: abre una shell real en la máquina del vault, cifrada
  *      punto a punto. Solo este dispositivo puede.
  */
@@ -9,7 +9,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
-import { loadLink, clearLink, parseQr, enroll } from './vaultLink.js'
+import { loadLink, clearLink } from './vaultLink.js'
 import { AgentClient } from './agentClient.js'
 
 const app = document.getElementById('app')
@@ -23,7 +23,7 @@ window.addEventListener('appinstalled', () => { installBtn.hidden = true; deferr
 installBtn.addEventListener('click', async () => { if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; installBtn.hidden = true } })
 
 unlinkBtn.addEventListener('click', () => {
-  if (confirm('¿Desenlazar este dispositivo? Tendrás que emparejarlo de nuevo. (Revocá también en el vault con `dotrino-vault revoke`).')) {
+  if (confirm('¿Desenlazar este dispositivo? Tendrás que emparejarlo de nuevo. (Revoca también en el vault con `dotrino-vault revoke`).')) {
     clearLink(); render()
   }
 })
@@ -37,49 +37,18 @@ function render () {
   app.appendChild(link ? terminalScreen(link) : linkScreen())
 }
 
-// --- Pantalla: enlazar dispositivo ---
+// --- Pantalla: vault requerido ---
 function linkScreen () {
   const node = el(`
     <section class="card">
-      <h1>Enlaza este dispositivo</h1>
-      <p>La terminal abre una consola en <b>tu</b> máquina —la que corre el vault—.
-      Solo dispositivos que enlaces con el vault pueden entrar.</p>
-      <ol class="steps">
-        <li>En la máquina del vault: <code>dotrino-vault pair</code> y copia el QR/JSON.</li>
-        <li>Pégalo aquí y pulsa <b>Enlazar</b>.</li>
-        <li>Compara el código de 6 dígitos y apruébalo en el vault:
-          <code>dotrino-vault approve &lt;código&gt;</code>.</li>
-      </ol>
-      <textarea id="qr" placeholder='{"v":2,"iss":"…","proxy":"wss://proxy.dotrino.com","token":"…","sn":"…"}'></textarea>
-      <div class="row">
-        <button id="linkBtn" class="primary">Enlazar</button>
-        <span id="linkStatus" class="status"></span>
-      </div>
-      <div id="sas" class="sas" hidden></div>
+      <h1>Dotrino Vault requerido</h1>
+      <p>Dotrino Terminal necesita un <b>vault</b> corriendo en tu máquina.</p>
+      <p>El vault es tu certificador personal: custodia tu identidad y autoriza
+      qué dispositivos pueden acceder a tu máquina. Sin él, la terminal no puede
+      abrir una consola.</p>
+      <p class="cta">Descárgalo, instálalo y enlaza este dispositivo desde
+      <a href="https://vault.dotrino.com" target="_blank" rel="noopener">vault.dotrino.com</a></p>
     </section>`)
-  const qs = (s) => node.querySelector(s)
-  qs('#linkBtn').addEventListener('click', async () => {
-    const status = qs('#linkStatus'); const sasBox = qs('#sas')
-    status.textContent = ''; sasBox.hidden = true
-    let qr
-    try { qr = parseQr(qs('#qr').value) } catch (e) { status.textContent = 'QR inválido'; return }
-    qs('#linkBtn').disabled = true; status.textContent = 'Conectando al vault…'
-    try {
-      await enroll(qr, {
-        onChallenge: ({ deviceId, sas }) => {
-          sasBox.hidden = false
-          sasBox.innerHTML = `<p>Verifica que este código coincide con el del vault, y aprueba allí:</p>
-            <div class="code">${sas}</div>
-            <p class="muted">dispositivo <code>${deviceId}</code> · en el PC: <code>dotrino-vault approve ${sas}</code></p>`
-          status.textContent = 'Esperando aprobación en el vault…'
-        }
-      })
-      render()
-    } catch (e) {
-      status.textContent = 'No se pudo enlazar: ' + e.message
-      qs('#linkBtn').disabled = false
-    }
-  })
   return node
 }
 
