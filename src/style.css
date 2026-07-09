@@ -71,6 +71,17 @@ textarea { width: 100%; min-height: 92px; margin: 12px 0; background: #0b0820; c
 .sas { margin-top: 16px; padding: 14px; border: 1px dashed var(--brand); border-radius: 12px; }
 .sas .code { font-size: 2rem; letter-spacing: .3em; font-family: ui-monospace, monospace; text-align: center; margin: 8px 0; }
 
+/* Tus máquinas (autodescubiertas del vault) */
+.machines { margin-bottom: 12px; }
+.machine-list { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.machine { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-color: var(--brand); font-weight: 600; }
+.machine:hover { background: #1b1830; }
+.setup { background: #0b0820; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-top: 10px; }
+.setup pre { background: #06040f; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; font-size: .85rem; }
+.manual { margin-bottom: 10px; }
+.manual summary { color: var(--muted); font-size: .9rem; cursor: pointer; }
+.manual .machine-bar { margin-top: 10px; }
+
 .machine-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
 .machine-bar input { flex: 1; min-width: 200px; background: #0b0820; color: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; }
 .machine-bar input.alias { flex: 0 0 150px; min-width: 120px; }

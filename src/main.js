@@ -36,6 +36,15 @@ const M = {
     addr_ph: 'Dirección de la máquina (la que imprime el agente)',
     alias_ph: 'Alias (opcional)',
     open_console: 'Abrir consola',
+    machines_title: 'Tus máquinas',
+    machines_loading: 'Buscando tus máquinas…',
+    machines_none: 'Aún no tienes ninguna máquina con el agente instalado.',
+    machines_err: 'No se pudo consultar tu bóveda (¿está encendida?).',
+    manual_addr: 'Conectar por dirección (avanzado)',
+    setup_title: 'Instala el agente en la máquina que quieres controlar',
+    setup_body: 'En esa máquina (servidor, otra PC…), con Node 20+ y git:',
+    setup_s1: 'Enlázala a tu bóveda: te pedirá el código de <code>dotrino-vault pair</code> (en el PC de tu bóveda) y su aprobación.',
+    setup_s2: 'Déjalo corriendo. La máquina aparecerá aquí sola, en "Tus máquinas".',
     linked_to: (dev) => `Dispositivo <code>${dev}</code> conectado a tu bóveda · abre una o varias consolas en tus máquinas.`,
     need_addr: 'Pega la dirección de la máquina (la imprime `dotrino-terminal-agent`).',
     connecting: (a) => `Conectando a ${a}…`,
@@ -64,6 +73,15 @@ const M = {
     addr_ph: 'Machine address (the one the agent prints)',
     alias_ph: 'Alias (optional)',
     open_console: 'Open console',
+    machines_title: 'Your machines',
+    machines_loading: 'Looking for your machines…',
+    machines_none: 'You have no machine with the agent installed yet.',
+    machines_err: 'Could not reach your vault (is it on?).',
+    manual_addr: 'Connect by address (advanced)',
+    setup_title: 'Install the agent on the machine you want to control',
+    setup_body: 'On that machine (a server, another PC…), with Node 20+ and git:',
+    setup_s1: 'Link it to your vault: it will ask for the code from <code>dotrino-vault pair</code> (on your vault PC) and its approval.',
+    setup_s2: 'Leave it running. The machine will show up here by itself, under "Your machines".',
     linked_to: (dev) => `Device <code>${dev}</code> connected to your vault · open one or more consoles on your machines.`,
     need_addr: 'Paste the machine address (printed by `dotrino-terminal-agent`).',
     connecting: (a) => `Connecting to ${a}…`,
@@ -206,18 +224,71 @@ function rememberMachine (pub, alias) {
 function terminalScreen (link) {
   const node = el(`
     <section class="card term-card">
-      <div class="machine-bar">
-        <select id="machineSel" data-testid="machine-select"><option value="">${t('saved_machine')}</option></select>
-        <input id="machineAddr" data-testid="machine-addr" type="text" placeholder="${esc(t('addr_ph'))}" />
-        <input id="machineAlias" data-testid="machine-alias" type="text" class="alias" placeholder="${esc(t('alias_ph'))}" />
-        <button id="openBtn" data-testid="open-console" class="primary">${t('open_console')}</button>
+      <div id="machines" class="machines">
+        <span class="status">${t('machines_loading')}</span>
       </div>
+      <details class="manual">
+        <summary>${t('manual_addr')}</summary>
+        <div class="machine-bar">
+          <select id="machineSel" data-testid="machine-select"><option value="">${t('saved_machine')}</option></select>
+          <input id="machineAddr" data-testid="machine-addr" type="text" placeholder="${esc(t('addr_ph'))}" />
+          <input id="machineAlias" data-testid="machine-alias" type="text" class="alias" placeholder="${esc(t('alias_ph'))}" />
+          <button id="openBtn" data-testid="open-console" class="primary">${t('open_console')}</button>
+        </div>
+      </details>
       <div id="tabs" class="tabs"></div>
       <div id="terms" class="terms"></div>
       <span id="hint" class="status">${t('linked_to', esc(link.deviceId || ''))}</span>
     </section>`)
   const qs = (s) => node.querySelector(s)
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
+
+  // --- AUTODESCUBRIMIENTO: tus máquinas = los dispositivos enrolados en TU vault
+  // (vault.devices trae la pubkey `sub` de cada uno = su dirección en el proxy).
+  // Sin pegar nada: eliges y abres. El manual queda como camino avanzado.
+  ;(async () => {
+    const box = qs('#machines')
+    try {
+      const { devices } = await link.id.listVaultDevices()
+      const mine = link.id.me?.publickey
+      const now = Date.now()
+      const bySub = new Map() // dedupe por pubkey (renovaciones/re-emparejes) → el cert más nuevo
+      for (const d of devices || []) {
+        if (!d.sub || d.sub === mine || (d.exp && d.exp <= now)) continue
+        // Solo MÁQUINAS con agente (label propio, p. ej. 'terminal-agent'); los
+        // navegadores enrolados quedan con label 'cli' y no atienden consolas.
+        if (!d.label || d.label === 'cli') continue
+        if (!bySub.has(d.sub) || (d.exp || 0) > (bySub.get(d.sub).exp || 0)) bySub.set(d.sub, d)
+      }
+      const list = [...bySub.values()]
+      if (!list.length) {
+        box.innerHTML = `
+          <p class="status">${t('machines_none')}</p>
+          <div class="setup">
+            <b>${t('setup_title')}</b>
+            <p class="status">${t('setup_body')}</p>
+            <pre><code>git clone https://github.com/imdotrino/dotrino-terminal
+cd dotrino-terminal/agent
+npm install
+npx dotrino-terminal-agent enroll   # 1 · ${lang === 'en' ? 'once' : 'una vez'}
+npx dotrino-terminal-agent          # 2 · ${lang === 'en' ? 'keep it running' : 'déjalo corriendo'}</code></pre>
+            <p class="status">1 · ${t('setup_s1')}</p>
+            <p class="status">2 · ${t('setup_s2')}</p>
+          </div>`
+        return
+      }
+      box.innerHTML = `<b>${t('machines_title')}</b><div class="machine-list"></div>`
+      const holder = box.querySelector('.machine-list')
+      for (const d of list) {
+        const name = d.label && d.label !== 'cli' ? `${d.label} · ${d.deviceId}` : d.deviceId
+        const b = el(`<button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}">🖥 ${esc(name)}</button>`)
+        b.addEventListener('click', () => openConsole(d.sub, name))
+        holder.appendChild(b)
+      }
+    } catch {
+      box.innerHTML = `<span class="status">${t('machines_err')}</span>`
+    }
+  })()
 
   // sesiones: { id, alias, pub, agent, term, fit, box, tab, status, onResize }
   const sessions = []
