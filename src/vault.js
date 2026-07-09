@@ -27,6 +27,9 @@ export async function getLink () {
   const id = await identity()
   const status = await id.vaultStatus().catch(() => ({ paired: false }))
   if (!status.paired) return { paired: false, id }
+  // Cert vencido = el vault rechazará todo ("no autorizado"): tratar como no
+  // emparejado y avisar para re-conectar (profile.dotrino.com/#vault).
+  if (status.exp && status.exp <= Date.now()) return { paired: false, expired: true, exp: status.exp, id }
   const v = await id.getVaultCert().catch(() => null)
   if (!v?.cert) return { paired: false, id }
   return {

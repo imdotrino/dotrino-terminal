@@ -26,6 +26,7 @@ const M = {
     recheck: 'Ya lo conecté',
     checking: 'Comprobando…',
     still_not: 'Este dispositivo aún no está conectado a una bóveda.',
+    expired: (d) => `Tu conexión con la bóveda <b>venció</b> (${d}). Vuelve a conectar este dispositivo (paso 2).`,
     unlink: 'Desconectar',
     unlink_q: '¿Desconectar este dispositivo de tu bóveda? Tendrás que emparejarlo de nuevo (y afecta a todas las apps Dotrino de este navegador).',
     unlink_yes: 'Sí, desconectar',
@@ -53,6 +54,7 @@ const M = {
     recheck: 'I connected it',
     checking: 'Checking…',
     still_not: 'This device is not connected to a vault yet.',
+    expired: (d) => `Your vault connection <b>expired</b> (${d}). Connect this device again (step 2).`,
     unlink: 'Disconnect',
     unlink_q: 'Disconnect this device from your vault? You will have to pair it again (this affects every Dotrino app in this browser).',
     unlink_yes: 'Yes, disconnect',
@@ -174,6 +176,7 @@ function linkScreen () {
   const node = el(`
     <section class="card">
       <h1>${t('linked_title')}</h1>
+      ${link?.expired ? `<p class="cta">${t('expired', new Date(link.exp).toLocaleDateString())}</p>` : ''}
       <p>${t('need_vault')}</p>
       <p class="cta">${t('step1')} <a href="https://vault.dotrino.com" target="_blank" rel="noopener">vault.dotrino.com</a></p>
       <p class="cta">${t('step2')} <a href="https://profile.dotrino.com/#vault" target="_blank" rel="noopener">profile.dotrino.com</a></p>
