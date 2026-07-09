@@ -1,16 +1,94 @@
 /**
- * main.js — UI de Dotrino Terminal. Dos estados:
- *   1. Sin enlazar → instrucciones para descargar y configurar el vault
- *      en tu máquina antes de usar la terminal.
- *   2. Enlazado → Conectar: abre una shell real en la máquina del vault, cifrada
- *      punto a punto. Solo este dispositivo puede.
+ * main.js — UI de Dotrino Terminal. Tres estados:
+ *   1. Sin vault/enlace → pasos: instala el vault y conecta este dispositivo
+ *      desde profile.dotrino.com/#vault (emparejamiento estándar del ecosistema).
+ *   2. Enlazado → abre una o varias shells en tus máquinas, cifradas punto a punto.
+ * El enlace vive en el pilar de identidad (ver vault.js), NO en esta app.
  */
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
-import { loadLink, clearLink } from './vaultLink.js'
+import { avatarDataUri } from '@dotrino/identity/capabilities'
+import { createVaultProfileProvider } from '@dotrino/profile'
+import { createVaultReputation } from '@dotrino/reputation'
+import { getLink, unpair, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
+
+// ---------- i18n (bilingüe es/en, §9) ----------
+const M = {
+  es: {
+    linked_title: 'Conecta tu bóveda',
+    need_vault: 'Dotrino Terminal abre una consola en tus máquinas. Para entrar, este dispositivo debe estar conectado a tu bóveda (tu certificador personal).',
+    step1: '1 · Instala la bóveda en tu PC desde',
+    step2: '2 · Conecta este dispositivo (escanea el QR de <code>dotrino-vault pair</code>) en',
+    step3: '3 · Vuelve aquí y pulsa:',
+    recheck: 'Ya lo conecté',
+    checking: 'Comprobando…',
+    still_not: 'Este dispositivo aún no está conectado a una bóveda.',
+    unlink: 'Desconectar',
+    unlink_q: '¿Desconectar este dispositivo de tu bóveda? Tendrás que emparejarlo de nuevo (y afecta a todas las apps Dotrino de este navegador).',
+    unlink_yes: 'Sí, desconectar',
+    cancel: 'Cancelar',
+    install: 'Instalar',
+    saved_machine: '— máquina guardada —',
+    addr_ph: 'Dirección de la máquina (la que imprime el agente)',
+    alias_ph: 'Alias (opcional)',
+    open_console: 'Abrir consola',
+    linked_to: (dev) => `Dispositivo <code>${dev}</code> conectado a tu bóveda · abre una o varias consolas en tus máquinas.`,
+    need_addr: 'Pega la dirección de la máquina (la imprime `dotrino-terminal-agent`).',
+    connecting: (a) => `Conectando a ${a}…`,
+    connected: (a) => `Conectado a ${a}`,
+    conn_fail: 'No se pudo conectar: ',
+    error: 'Error: ',
+    close: 'Cerrar',
+    my_profile: 'Mi perfil'
+  },
+  en: {
+    linked_title: 'Connect your vault',
+    need_vault: 'Dotrino Terminal opens a console on your machines. To get in, this device must be connected to your vault (your personal certifier).',
+    step1: '1 · Install the vault on your PC from',
+    step2: '2 · Connect this device (scan the QR from <code>dotrino-vault pair</code>) at',
+    step3: '3 · Come back here and press:',
+    recheck: 'I connected it',
+    checking: 'Checking…',
+    still_not: 'This device is not connected to a vault yet.',
+    unlink: 'Disconnect',
+    unlink_q: 'Disconnect this device from your vault? You will have to pair it again (this affects every Dotrino app in this browser).',
+    unlink_yes: 'Yes, disconnect',
+    cancel: 'Cancel',
+    install: 'Install',
+    saved_machine: '— saved machine —',
+    addr_ph: 'Machine address (the one the agent prints)',
+    alias_ph: 'Alias (optional)',
+    open_console: 'Open console',
+    linked_to: (dev) => `Device <code>${dev}</code> connected to your vault · open one or more consoles on your machines.`,
+    need_addr: 'Paste the machine address (printed by `dotrino-terminal-agent`).',
+    connecting: (a) => `Connecting to ${a}…`,
+    connected: (a) => `Connected to ${a}`,
+    conn_fail: 'Could not connect: ',
+    error: 'Error: ',
+    close: 'Close',
+    my_profile: 'My profile'
+  }
+}
+const LANG_KEY = 'dotrino-terminal:lang'
+let lang = 'es'
+try { lang = localStorage.getItem(LANG_KEY) || ((navigator.language || 'es').startsWith('en') ? 'en' : 'es') } catch {}
+if (lang !== 'en') lang = 'es'
+const t = (k, ...a) => { const v = M[lang][k]; return typeof v === 'function' ? v(...a) : v }
+function setLang (l) {
+  lang = l
+  try { localStorage.setItem(LANG_KEY, l) } catch {}
+  document.documentElement.lang = l
+  document.getElementById('lang-es').classList.toggle('on', l === 'es')
+  document.getElementById('lang-en').classList.toggle('on', l === 'en')
+  document.querySelector('dotrino-support')?.setAttribute('lang', l)
+  profileBtn.title = t('my_profile'); profileBtn.setAttribute('aria-label', t('my_profile'))
+  render()
+}
+document.getElementById('lang-es').addEventListener('click', () => setLang('es'))
+document.getElementById('lang-en').addEventListener('click', () => setLang('en'))
 
 const app = document.getElementById('app')
 const unlinkBtn = document.getElementById('unlinkBtn')
@@ -22,33 +100,93 @@ window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); defe
 window.addEventListener('appinstalled', () => { installBtn.hidden = true; deferredPrompt = null })
 installBtn.addEventListener('click', async () => { if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; installBtn.hidden = true } })
 
+function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return tpl.content.firstElementChild }
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
+// ---------- Mi perfil (§6.1: <dotrino-profile> compartido + avatar del perfil activo) ----------
+const profileBtn = document.getElementById('profileBtn')
+let _provider = null
+async function ensureProvider (id) {
+  if (_provider) return _provider
+  let reputation = null
+  try { reputation = createVaultReputation(id) } catch {}
+  try { _provider = createVaultProfileProvider({ identity: id, reputation }) } catch { _provider = null }
+  return _provider
+}
+async function openMyProfile () {
+  const id = await identity().catch(() => null)
+  const pk = id?.me?.publickey
+  if (!pk) return
+  document.querySelector('dotrino-profile')?.remove()
+  const p = document.createElement('dotrino-profile')
+  p.setAttribute('modal', '')
+  p.setAttribute('mode', 'self')
+  p.setAttribute('pubkey', pk)
+  if (id.me?.nickname) p.setAttribute('name', id.me.nickname)
+  p.setAttribute('lang', lang)
+  ensureProvider(id).then((prov) => { if (prov) p.provider = prov })
+  p.addEventListener('cc-profile-close', () => p.remove())
+  document.body.appendChild(p)
+}
+profileBtn.addEventListener('click', openMyProfile)
+profileBtn.title = t('my_profile'); profileBtn.setAttribute('aria-label', t('my_profile'))
+;(async () => { // avatar del perfil ACTIVO (identicon determinista del pubkey)
+  try {
+    const id = await identity()
+    const prof = id.currentProfile ? await id.currentProfile() : null
+    const pk = prof?.pubkey || id?.me?.publickey
+    if (pk) profileBtn.querySelector('img').src = avatarDataUri(pk, { size: 64 })
+    profileBtn.hidden = false
+  } catch { profileBtn.hidden = false }
+})()
+
+// ---------- Desconectar (modal propio, sin confirm() — §5) ----------
 unlinkBtn.addEventListener('click', () => {
-  if (confirm('¿Desenlazar este dispositivo? Tendrás que emparejarlo de nuevo. (Revoca también en el vault con `dotrino-vault revoke`).')) {
-    clearLink(); render()
-  }
+  document.querySelector('.modal-back')?.remove()
+  const m = el(`<div class="modal-back"><div class="modal card">
+    <p>${t('unlink_q')}</p>
+    <div class="modal-row">
+      <button class="ghost" data-act="no">${t('cancel')}</button>
+      <button class="primary" data-act="yes">${t('unlink_yes')}</button>
+    </div></div></div>`)
+  m.addEventListener('click', (e) => { if (e.target === m || e.target.dataset.act === 'no') m.remove() })
+  m.querySelector('[data-act=yes]').addEventListener('click', async () => {
+    try { await unpair() } catch {}
+    m.remove(); render()
+  })
+  document.body.appendChild(m)
 })
 
-function el (html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild }
+// ---------- Render de estados ----------
+let link = null // { paired, id, cert, iss, proxy, deviceId }
 
-function render () {
-  const link = loadLink()
-  unlinkBtn.hidden = !link
+async function render () {
+  link = await getLink().catch(() => ({ paired: false }))
+  unlinkBtn.hidden = !link.paired
+  unlinkBtn.textContent = t('unlink')
+  installBtn.textContent = t('install')
   app.innerHTML = ''
-  app.appendChild(link ? terminalScreen(link) : linkScreen())
+  app.appendChild(link.paired ? terminalScreen(link) : linkScreen())
 }
 
-// --- Pantalla: vault requerido ---
+// --- Pantalla: conectar la bóveda ---
 function linkScreen () {
   const node = el(`
     <section class="card">
-      <h1>Dotrino Vault requerido</h1>
-      <p>Dotrino Terminal necesita un <b>vault</b> corriendo en tu máquina.</p>
-      <p>El vault es tu certificador personal: custodia tu identidad y autoriza
-      qué dispositivos pueden acceder a tu máquina. Sin él, la terminal no puede
-      abrir una consola.</p>
-      <p class="cta">Descárgalo, instálalo y enlaza este dispositivo desde
-      <a href="https://vault.dotrino.com" target="_blank" rel="noopener">vault.dotrino.com</a></p>
+      <h1>${t('linked_title')}</h1>
+      <p>${t('need_vault')}</p>
+      <p class="cta">${t('step1')} <a href="https://vault.dotrino.com" target="_blank" rel="noopener">vault.dotrino.com</a></p>
+      <p class="cta">${t('step2')} <a href="https://profile.dotrino.com/#vault" target="_blank" rel="noopener">profile.dotrino.com</a></p>
+      <p>${t('step3')} <button id="recheck" class="primary">${t('recheck')}</button> <span id="chkmsg" class="status"></span></p>
     </section>`)
+  node.querySelector('#recheck').addEventListener('click', async (e) => {
+    e.target.disabled = true
+    node.querySelector('#chkmsg').textContent = t('checking')
+    const l = await getLink().catch(() => ({ paired: false }))
+    if (l.paired) return render()
+    node.querySelector('#chkmsg').textContent = t('still_not')
+    e.target.disabled = false
+  })
   return node
 }
 
@@ -66,14 +204,14 @@ function terminalScreen (link) {
   const node = el(`
     <section class="card term-card">
       <div class="machine-bar">
-        <select id="machineSel"><option value="">— máquina guardada —</option></select>
-        <input id="machineAddr" type="text" placeholder="Dirección de la máquina (la que imprime el agente)" />
-        <input id="machineAlias" type="text" class="alias" placeholder="Alias (opcional)" />
-        <button id="openBtn" class="primary">Abrir consola</button>
+        <select id="machineSel" data-testid="machine-select"><option value="">${t('saved_machine')}</option></select>
+        <input id="machineAddr" data-testid="machine-addr" type="text" placeholder="${esc(t('addr_ph'))}" />
+        <input id="machineAlias" data-testid="machine-alias" type="text" class="alias" placeholder="${esc(t('alias_ph'))}" />
+        <button id="openBtn" data-testid="open-console" class="primary">${t('open_console')}</button>
       </div>
       <div id="tabs" class="tabs"></div>
       <div id="terms" class="terms"></div>
-      <span id="hint" class="status">Enlazado a <code>${link.iss.slice(0, 12)}…</code> · abre una o varias consolas en tus máquinas.</span>
+      <span id="hint" class="status">${t('linked_to', esc(link.deviceId || ''))}</span>
     </section>`)
   const qs = (s) => node.querySelector(s)
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
@@ -87,8 +225,8 @@ function terminalScreen (link) {
     const sel = qs('#machineSel')
     const machines = loadMachines()
     sel.hidden = !machines.length
-    sel.innerHTML = '<option value="">— máquina guardada —</option>' +
-      machines.map((m) => `<option value="${m.pub}">${m.alias}</option>`).join('')
+    sel.innerHTML = `<option value="">${t('saved_machine')}</option>` +
+      machines.map((m) => `<option value="${esc(m.pub)}">${esc(m.alias)}</option>`).join('')
   }
   refreshMachineSelect()
   qs('#machineSel').addEventListener('change', (e) => {
@@ -117,7 +255,7 @@ function terminalScreen (link) {
   }
 
   function renderTab (s) {
-    s.tab = el(`<button class="tab"><span class="dot"></span><span class="tlabel">${s.alias}</span><span class="x" title="Cerrar">×</span></button>`)
+    s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel">${esc(s.alias)}</span><span class="x" title="${t('close')}">×</span></button>`)
     s.tab.querySelector('.tlabel').addEventListener('click', () => setActive(s))
     s.tab.addEventListener('click', (e) => { if (!e.target.classList.contains('x')) setActive(s) })
     s.tab.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); closeSession(s) })
@@ -135,10 +273,10 @@ function terminalScreen (link) {
     termsEl.appendChild(s.box)
     sessions.push(s)
     renderTab(s); setActive(s); setTabState(s, 'conn')
-    hint.textContent = `Conectando a ${s.alias}…`
+    hint.textContent = t('connecting', s.alias)
     try {
       s.agent = new AgentClient(link, { agentPubkey: pub })
-      s.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = 'Error: ' + e.message }
+      s.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
       await s.agent.connect()
 
       s.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0e0b1a' } })
@@ -151,11 +289,11 @@ function terminalScreen (link) {
       window.addEventListener('resize', s.onResize)
       rememberMachine(pub, alias); refreshMachineSelect()
       s.status = 'conectado'; setTabState(s, 'ok')
-      if (active === s) hint.textContent = `Conectado a ${s.alias}`
+      if (active === s) hint.textContent = t('connected', s.alias)
       setActive(s)
     } catch (e) {
       s.status = e.message; setTabState(s, 'err')
-      if (active === s) hint.textContent = 'No se pudo conectar: ' + e.message
+      if (active === s) hint.textContent = t('conn_fail') + e.message
       if (s.term) { try { s.term.write(`\r\n\x1b[31m${e.message}\x1b[0m\r\n`) } catch {} }
     }
   }
@@ -163,7 +301,7 @@ function terminalScreen (link) {
   qs('#openBtn').addEventListener('click', () => {
     const pub = qs('#machineAddr').value.trim()
     const alias = qs('#machineAlias').value.trim()
-    if (!pub) { hint.textContent = 'Pega la dirección de la máquina (la imprime `dotrino-terminal-agent`).'; return }
+    if (!pub) { hint.textContent = t('need_addr'); return }
     qs('#machineAddr').value = ''; qs('#machineAlias').value = ''
     openConsole(pub, alias)
   })
@@ -171,6 +309,9 @@ function terminalScreen (link) {
   return node
 }
 
+document.documentElement.lang = lang
+document.getElementById(`lang-${lang}`).classList.add('on')
+document.querySelector('dotrino-support')?.setAttribute('lang', lang)
 render()
 
 // --- Service worker ---

@@ -5,18 +5,24 @@
  * su `cert` encadena a la maestra que este dispositivo vio al enlazar. Ambas
  * puntas son peers certificados por el vault; ninguna tiene la clave maestra.
  *
- * Handshake: firmamos con nuestra `D` (autorización) → el agente responde un ack
- * firmado con SU `D` + su `cert` → verificamos la cadena a la maestra pineada
- * (anti-MITM del relay) → levantamos el canal cifrado (ECDH → AES-GCM).
+ * La firma de este lado la hace el PILAR de identidad (`id.signData`, dentro del
+ * iframe id.dotrino.com): la clave del dispositivo es la identidad del navegador
+ * y su cert (`P ← maestra`) viene del emparejamiento estándar del ecosistema
+ * (profile.dotrino.com/#vault). Nada de claves privadas en la app.
+ *
+ * Handshake: firmamos la autorización → el agente responde un ack firmado con SU
+ * `D` + su `cert` → verificamos la cadena a la maestra pineada (anti-MITM del
+ * relay) → levantamos el canal cifrado (ECDH → AES-GCM).
  */
-import { signWithDevice, verifyChain } from '@dotrino/identity/capabilities'
+import { verifyChain } from '@dotrino/identity/capabilities'
 import { makeEphemeral, deriveKey, seal, open } from '../shared/e2e.js'
 
 const T = { HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT: 'terminal.out', ERROR: 'terminal.error' }
 
 export class AgentClient {
+  /** @param {{ id:object, cert:object, iss:string, proxy?:string }} link enlace de vault.js */
   constructor (link, { agentPubkey, proxyUrl } = {}) {
-    this.link = link                                  // { device, cert, iss, proxy }
+    this.link = link                                  // { id, cert, iss, proxy }
     this.agentPubkey = agentPubkey                    // pubkey de la máquina destino
     this.proxyUrl = proxyUrl || link.proxy || 'wss://proxy.dotrino.com'
     this.client = null
@@ -28,9 +34,14 @@ export class AgentClient {
 
   async _identify () {
     if (!this.client.token) return
-    const data = { op: 'identify', publickey: this.link.device.publickey, token: this.client.token, ts: Date.now() }
-    const { signature } = await signWithDevice({ privateJwk: this.link.device.privateJwk, data })
-    await this.client.identify({ data, signature })
+    // Patrón estándar del ecosistema (messenger): identify firmado por id.signData
+    // + cert del vault → el proxy enruta también lo dirigido a la maestra.
+    const { id, cert } = this.link
+    const publickey = id.me?.publickey
+    if (!publickey) return
+    const data = { op: 'identify', publickey, token: this.client.token, ts: Date.now() }
+    const { signature } = await id.signData(data)
+    await this.client.identify({ data, signature, cert })
   }
 
   async connect () {
@@ -49,8 +60,10 @@ export class AgentClient {
     })
 
     const eph = await makeEphemeral()
-    const data = { op: 'terminal.hs', eph: eph.pub, ts: Date.now() }
-    const { signature } = await signWithDevice({ privateJwk: this.link.device.privateJwk, data })
+    // `publickey` va DENTRO del dato firmado: verifyChain verifica la firma
+    // contra data.publickey y exige cert.sub === data.publickey.
+    const data = { op: 'terminal.hs', eph: eph.pub, publickey: this.link.id.me?.publickey, ts: Date.now() }
+    const { signature } = await this.link.id.signData(data)
 
     const acked = new Promise((resolve, reject) => {
       const off = this.client.on('message', (_from, p) => {

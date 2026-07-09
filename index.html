@@ -16,16 +16,27 @@
   <link rel="manifest" href="./manifest.webmanifest" />
 
   <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Dotrino" />
   <meta property="og:title" content="Terminal — Dotrino" />
   <meta property="og:description" content="Una terminal a tu máquina desde el navegador, autorizada por tu vault. Tu información, en tu servidor, bajo tus reglas." />
   <meta property="og:url" content="https://terminal.dotrino.com/" />
   <meta property="og:image" content="https://terminal.dotrino.com/og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
   <meta property="og:locale" content="es_ES" />
+  <meta property="og:locale:alternate" content="en_US" />
   <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Terminal — Dotrino" />
+  <meta name="twitter:description" content="Una terminal a tu máquina desde el navegador, autorizada por tu vault." />
+  <meta name="twitter:image" content="https://terminal.dotrino.com/og.jpg" />
 
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"WebApplication","name":"Dotrino Terminal","url":"https://terminal.dotrino.com/","applicationCategory":"DeveloperApplication","operatingSystem":"Any","offers":{"@type":"Offer","price":"0"}}
+  {"@context":"https://schema.org","@type":"WebApplication","name":"Dotrino Terminal","url":"https://terminal.dotrino.com/","description":"Abre una terminal en tu propia máquina desde el navegador; solo tu dispositivo enlazado al vault puede entrar.","applicationCategory":"DeveloperApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"publisher":{"@type":"Organization","name":"Dotrino","url":"https://dotrino.com/"}}
   </script>
+
+  <!-- Analítica cookieless autohosteada (GoatCounter); no cuenta en localhost/LAN. -->
+  <script>window.goatcounter={path:function(p){return location.hostname+p}}</script>
+  <script data-goatcounter="https://goat.dotrino.com/count" async src="https://goat.dotrino.com/count.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -34,17 +45,28 @@
       <span>Terminal</span>
     </a>
     <div class="actions">
-      <button id="unlinkBtn" class="ghost" hidden>Desenlazar</button>
+      <button id="unlinkBtn" class="ghost" hidden>Desconectar</button>
       <button id="installBtn" class="ghost" hidden>Instalar</button>
-      <!-- perfil inmediatamente a la izquierda de la moneda (§5) -->
-      <div id="profileSlot"></div>
-      <dotrino-support lang="es"></dotrino-support>
+      <!-- toggle de idioma (§9): siempre ambas opciones -->
+      <div class="lang" role="group" aria-label="es / en">
+        <button id="lang-es">ES</button>
+        <button id="lang-en">EN</button>
+      </div>
+      <!-- perfil inmediatamente a la izquierda de la moneda (§6.1) -->
+      <button id="profileBtn" class="profile-btn" data-testid="my-profile" hidden>
+        <img alt="" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" />
+        </svg>
+      </button>
+      <dotrino-support href="https://ko-fi.com/dotrino" repo="imdotrino/dotrino-terminal" discord="https://discord.gg/D648uq7cth" lang="es"></dotrino-support>
     </div>
   </header>
 
   <main id="app"></main>
 
-  <script type="module" src="https://cdn.jsdelivr.net/npm/@dotrino/support@0.6/dist/dotrino-support.js"></script>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@dotrino/support@0.7/src/index.js"></script>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

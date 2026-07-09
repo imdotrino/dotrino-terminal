@@ -117,7 +117,9 @@ export async function startAgent (opts = {}) {
     const key = await deriveKey(eph.privateKey, data.eph, sid)
     // Ack firmado con la D de ESTA máquina + su cert: el cliente verifica la
     // cadena a la maestra y que la pub efímera viene de una máquina certificada.
-    const ack = { op: 'terminal.hs.ack', sid, seph: eph.pub, ceph: data.eph, machine: myPub, ts: Date.now() }
+    // `publickey` va DENTRO del dato firmado (verifyChain lo exige: firma contra
+    // data.publickey y cert.sub === data.publickey).
+    const ack = { op: 'terminal.hs.ack', sid, seph: eph.pub, ceph: data.eph, machine: myPub, publickey: myPub, ts: Date.now() }
     const { signature: ackSig } = await signWithDevice({ privateJwk: link.device.privateJwk, data: ack })
 
     sessions.set(sid, { sid, key, term: null, from, exp: Date.now() + SESSION_TTL_MS })
