@@ -34,19 +34,22 @@ datos en ${dataDir()} (override DOTRINO_TERMINAL_DIR)`)
 try {
   if (cmd === 'enroll') {
     console.log('Enlazar esta máquina con tu vault.')
-    console.log('En la máquina del vault: `dotrino-vault pair` y copia el QR/JSON.\n')
-    const text = await ask('Pega el QR/JSON del vault y Enter:\n> ')
+    console.log('El código lo generas en el CERTIFICADOR (tu vault). Hay dos formas:')
+    console.log('  · Sin vault externo → abre https://terminal.dotrino.com, elige')
+    console.log('    "Usar este dispositivo como bóveda" → "Enlazar otra máquina" y copia el código.')
+    console.log('  · Con vault en un PC → ahí corre `dotrino-vault pair` y copia el QR/JSON.\n')
+    const text = await ask('Pega el código y Enter:\n> ')
     const qr = parseQr(text)
-    console.log('\nConectando al vault…')
+    console.log('\nConectando…')
     const link = await enroll({
       qr,
       dir: opt('--dir'),
       label: opt('--label') || 'terminal-agent',
       onChallenge: ({ deviceId, sas }) => {
-        console.log('\n  Compara que este código coincida y apruébalo EN EL VAULT:')
+        console.log('\n  Compara este código con el del certificador y apruébalo allí:')
         console.log(`    código: ${sas}`)
-        console.log(`    máquina ${deviceId}`)
-        console.log(`    en el PC del vault:  dotrino-vault approve ${sas}\n`)
+        console.log(`    máquina: ${deviceId}`)
+        console.log('    (en terminal.dotrino.com pulsa "Aprobar", o en el PC del vault: dotrino-vault approve)\n')
         console.log('  Esperando aprobación…')
       }
     })
