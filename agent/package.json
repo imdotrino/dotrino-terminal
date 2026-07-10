@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/terminal-agent",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Agente de Dotrino Terminal: abre una shell (PTY) en la máquina del vault solo para el dispositivo enlazado, vía @dotrino/tunnel y cifrado E2E.",
   "type": "module",
   "bin": {
@@ -15,7 +15,7 @@
   "dependencies": {
     "@dotrino/identity": "0.17.0",
     "@dotrino/proxy-client": "0.6.4",
-    "node-pty": "1.1.0",
+    "@homebridge/node-pty-prebuilt-multiarch": "0.13.1",
     "ws": "8.21.0"
   },
   "license": "MIT"

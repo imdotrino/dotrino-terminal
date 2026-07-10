@@ -42,7 +42,9 @@ const M = {
     machine_remove: 'Quitar',
     remove_confirm: (dev) => `¿Quitar la máquina <code>${dev}</code>? Se revoca su acceso; para reconectarla tendrás que enrolarla de nuevo.`,
     setup_title: 'Instala el agente en la máquina que quieres controlar',
-    setup_body: 'En esa máquina (servidor, otra PC…), con Node 20+ y git:',
+    setup_body: 'En esa máquina (servidor, otra PC…), pega esto y listo:',
+    install_alt: 'O, si ya tienes Node 20+:',
+    install_win: 'En Windows (PowerShell):',
     setup_s1: 'Enlázala a tu bóveda: te pedirá el código de <code>dotrino-vault pair</code> (en el PC de tu bóveda) y su aprobación.',
     setup_s2: 'Déjalo corriendo. La máquina aparecerá aquí sola, en "Tus máquinas".',
     linked_to: (dev) => `Dispositivo <code>${dev}</code> conectado a tu bóveda · abre una o varias consolas en tus máquinas.`,
@@ -60,7 +62,7 @@ const M = {
     self_choice_self_d: 'Sin vault: la identidad de este navegador certifica tus máquinas directamente.',
     self_active: (dev) => `La identidad de este navegador (<code>${dev}</code>) es tu bóveda. Enlaza tus máquinas abajo y abre consolas en ellas.`,
     self_pair_title: 'Enlaza una máquina',
-    self_pair_body: 'En la máquina destino (servidor, otra PC…), con Node 20+:',
+    self_pair_body: 'En la máquina destino (servidor, otra PC…), pega esto y listo:',
     self_pair_step1: '1 · Pega este código al enrolar el agente (o pégalo después):',
     self_pair_step2: '2 · Cuando la máquina se conecte, escribe aquí el código de 6 dígitos que <b>ella</b> muestra y apruébala.',
     self_pair_wait: 'Esperando a que la máquina se conecte…',
@@ -103,7 +105,9 @@ const M = {
     machine_remove: 'Remove',
     remove_confirm: (dev) => `Remove machine <code>${dev}</code>? Its access is revoked; to reconnect it you'll need to enroll it again.`,
     setup_title: 'Install the agent on the machine you want to control',
-    setup_body: 'On that machine (a server, another PC…), with Node 20+ and git:',
+    setup_body: 'On that machine (a server, another PC…), paste this and you\'re set:',
+    install_alt: 'Or, if you already have Node 20+:',
+    install_win: 'On Windows (PowerShell):',
     setup_s1: 'Link it to your vault: it will ask for the code from <code>dotrino-vault pair</code> (on your vault PC) and its approval.',
     setup_s2: 'Leave it running. The machine will show up here by itself, under "Your machines".',
     linked_to: (dev) => `Device <code>${dev}</code> connected to your vault · open one or more consoles on your machines.`,
@@ -121,7 +125,7 @@ const M = {
     self_choice_self_d: 'No vault: this browser\'s identity certifies your machines directly.',
     self_active: (dev) => `This browser's identity (<code>${dev}</code>) is your vault. Link your machines below and open consoles on them.`,
     self_pair_title: 'Link a machine',
-    self_pair_body: 'On the target machine (a server, another PC…), with Node 20+:',
+    self_pair_body: 'On the target machine (a server, another PC…), paste this and you\'re set:',
     self_pair_step1: '1 · Paste this code when enrolling the agent (or paste it later):',
     self_pair_step2: '2 · When the machine connects, type here the 6-digit code <b>it</b> shows and approve it.',
     self_pair_wait: 'Waiting for the machine to connect…',
@@ -162,6 +166,21 @@ installBtn.addEventListener('click', async () => { if (deferredPrompt) { deferre
 
 function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return tpl.content.firstElementChild }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
+// Comandos para instalar/correr el agente en la máquina destino. El one-liner
+// curl/irm (instalador universal hosteado en dotrino.com) baja Node si falta →
+// "pega y ya"; npx queda como alternativa si ya tienes Node. Mismo instalador
+// reutilizable por cualquier app del ecosistema (solo cambia el paquete).
+const AGENT_PKG = '@dotrino/terminal-agent'
+function installCmds (sub) {
+  const arg = sub ? ' ' + sub : ''
+  const sh = `curl -fsSL https://dotrino.com/install.sh | sh -s -- ${AGENT_PKG}${arg}`
+  const ps = `& ([scriptblock]::Create((irm https://dotrino.com/install.ps1))) ${AGENT_PKG}${arg}`
+  const npx = `npx ${AGENT_PKG}${arg}`
+  return `<pre><code>${esc(sh)}</code></pre>
+      <p class="status">${t('install_win')} <code>${esc(ps)}</code></p>
+      <p class="status">${t('install_alt')} <code>${esc(npx)}</code></p>`
+}
 
 // Confirmación con modal propio (nunca confirm() del navegador — §5). Devuelve bool.
 function confirmModal (html, { okText, danger = false } = {}) {
@@ -418,8 +437,7 @@ function terminalScreen (link) {
           <div class="setup">
             <b>${t('setup_title')}</b>
             <p class="status">${t('setup_body')}</p>
-            <pre><code>npx @dotrino/terminal-agent enroll   # 1 · ${lang === 'en' ? 'once' : 'una vez'}
-npx @dotrino/terminal-agent          # 2 · ${lang === 'en' ? 'keep it running' : 'déjalo corriendo'}</code></pre>
+            ${installCmds('enroll')}
             <p class="status">1 · ${t('setup_s1')}</p>
             <p class="status">2 · ${t('setup_s2')}</p>
           </div>`
@@ -482,7 +500,7 @@ async function selfTerminalScreen () {
     pairBox.innerHTML = `<div class="setup">
       <b>${t('self_pair_title')}</b>
       <p class="status">${t('self_pair_body')}</p>
-      <pre><code>npx @dotrino/terminal-agent enroll</code></pre>
+      ${installCmds('enroll')}
       <button id="startPair" class="primary">${t('self_pair_new')}</button>
     </div>`
     pairBox.querySelector('#startPair').addEventListener('click', startPairing)
@@ -493,7 +511,7 @@ async function selfTerminalScreen () {
     pairBox.innerHTML = `<div class="setup">
       <b>${t('self_pair_title')}</b>
       <p class="status">${t('self_pair_body')}</p>
-      <pre><code>npx @dotrino/terminal-agent enroll</code></pre>
+      ${installCmds('enroll')}
       <p class="status">${t('self_pair_step1')}</p>
       <div class="qr-wrap" title="${esc(t('self_qr_alt'))}">${qrSvg(payload)}</div>
       <div class="qr-code"><pre><code>${esc(payload)}</code></pre></div>

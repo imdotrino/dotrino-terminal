@@ -48,9 +48,14 @@ export async function startAgent (opts = {}) {
 
   installNodeGlobals(dir)
 
+  // PTY nativo con binarios PREBUILT (Linux/macOS/Windows, sin toolchain): el fork
+  // `@homebridge/node-pty-prebuilt-multiarch` es API-idéntico a node-pty. Fallback a
+  // `node-pty` por si una instalación vieja lo trae.
   let pty
-  try { pty = require('node-pty') } catch {
-    throw new Error('falta node-pty. En agent/: `npm install`.')
+  try { pty = require('@homebridge/node-pty-prebuilt-multiarch') } catch {
+    try { pty = require('node-pty') } catch {
+      throw new Error('falta el módulo PTY. Reinstala el agente: `npx @dotrino/terminal-agent` (baja el binario prebuilt).')
+    }
   }
 
   const { getWebSocketProxyClient } = await import('@dotrino/proxy-client')
