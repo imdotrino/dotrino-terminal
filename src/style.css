@@ -15,31 +15,17 @@ body {
   display: flex; flex-direction: column; min-height: 100vh;
 }
 
-.topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 16px; border-bottom: 1px solid var(--line);
-  flex-wrap: wrap;
+/* El header lo provee <dotrino-topbar> (@dotrino/topbar). Lo tematizamos con las
+   variables del componente para que combine con la estética de la terminal. */
+dotrino-topbar {
+  --dotrino-topbar-bg: var(--panel);
+  --dotrino-topbar-border: var(--line);
+  --dotrino-topbar-text: var(--text);
+  --dotrino-topbar-muted: var(--muted);
+  --dotrino-topbar-accent: var(--brand);
 }
-.brand { display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; font-weight: 700; }
-.actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-/* Móvil (§5): la marca queda en su fila; las acciones bajan a una segunda fila a la derecha. */
-@media (max-width: 560px) { .topbar .actions { flex-basis: 100%; justify-content: flex-end; } }
-
-/* Toggle de idioma (§9): siempre ambas opciones, la activa resaltada. */
-.lang { display: flex; gap: 6px; }
-.lang button { padding: 4px 10px; font-size: 14px; color: var(--muted); background: none; }
-.lang button.on { color: var(--text); border-color: var(--brand); }
-
-/* Botón "Mi perfil" (§6.1): circular ghost con el avatar del perfil activo. */
-.profile-btn {
-  width: 36px; height: 36px; padding: 0; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: transparent; overflow: hidden; color: var(--muted);
-}
-.profile-btn img { width: 100%; height: 100%; border-radius: 50%; display: none; }
-.profile-btn img[src] { display: block; }
-.profile-btn img[src] + svg { display: none; }
-.profile-btn svg { width: 20px; height: 20px; }
+/* Botones propios de la app en el slot "end" (Desconectar / Instalar). */
+.tb-action { padding: 6px 12px; font-size: 14px; background: transparent; }
 
 /* Modal propio (sin confirm() del navegador — §5). */
 .modal-back {

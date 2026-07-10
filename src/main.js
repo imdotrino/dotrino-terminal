@@ -9,6 +9,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
+import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil+support)
 import { avatarDataUri } from '@dotrino/identity/capabilities'
 import { createVaultProfileProvider } from '@dotrino/profile'
 import { createVaultReputation } from '@dotrino/reputation'
@@ -92,28 +93,18 @@ const M = {
     my_profile: 'My profile'
   }
 }
-const LANG_KEY = 'dotrino-terminal:lang'
+// Idioma: lo gobierna <dotrino-topbar> (clave compartida del ecosistema
+// 'dotrino.lang'); aquí solo reflejamos su valor para traducir el contenido.
+const topbar = document.getElementById('topbar')
 let lang = 'es'
-try { lang = localStorage.getItem(LANG_KEY) || ((navigator.language || 'es').startsWith('en') ? 'en' : 'es') } catch {}
-if (lang !== 'en') lang = 'es'
+try { lang = (localStorage.getItem('dotrino.lang') || (navigator.language || 'es').slice(0, 2)) === 'en' ? 'en' : 'es' } catch {}
 const t = (k, ...a) => { const v = M[lang][k]; return typeof v === 'function' ? v(...a) : v }
-function setLang (l) {
-  lang = l
-  try { localStorage.setItem(LANG_KEY, l) } catch {}
-  document.documentElement.lang = l
-  document.getElementById('lang-es').classList.toggle('on', l === 'es')
-  document.getElementById('lang-en').classList.toggle('on', l === 'en')
-  document.querySelector('dotrino-support')?.setAttribute('lang', l)
-  profileBtn.title = t('my_profile'); profileBtn.setAttribute('aria-label', t('my_profile'))
-  render()
-}
-document.getElementById('lang-es').addEventListener('click', () => setLang('es'))
-document.getElementById('lang-en').addEventListener('click', () => setLang('en'))
+topbar.addEventListener('dotrino-lang', (e) => { lang = e.detail.lang; render() })
 
 const app = document.getElementById('app')
 const unlinkBtn = document.getElementById('unlinkBtn')
 
-// --- Instalar (PWA) ---
+// --- Instalar (PWA): botón propio en el slot "end" del topbar ---
 let deferredPrompt = null
 const installBtn = document.getElementById('installBtn')
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; installBtn.hidden = false })
@@ -123,8 +114,7 @@ installBtn.addEventListener('click', async () => { if (deferredPrompt) { deferre
 function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return tpl.content.firstElementChild }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
-// ---------- Mi perfil (§6.1: <dotrino-profile> compartido + avatar del perfil activo) ----------
-const profileBtn = document.getElementById('profileBtn')
+// ---------- Mi perfil (§6.1): el botón lo pone el topbar; abrimos <dotrino-profile> ----------
 let _provider = null
 async function ensureProvider (id) {
   if (_provider) return _provider
@@ -148,16 +138,14 @@ async function openMyProfile () {
   p.addEventListener('cc-profile-close', () => p.remove())
   document.body.appendChild(p)
 }
-profileBtn.addEventListener('click', openMyProfile)
-profileBtn.title = t('my_profile'); profileBtn.setAttribute('aria-label', t('my_profile'))
-;(async () => { // avatar del perfil ACTIVO (identicon determinista del pubkey)
+topbar.addEventListener('dotrino-profile', openMyProfile)
+;(async () => { // avatar del perfil ACTIVO → se lo pasamos al topbar por atributo
   try {
     const id = await identity()
     const prof = id.currentProfile ? await id.currentProfile() : null
     const pk = prof?.pubkey || id?.me?.publickey
-    if (pk) profileBtn.querySelector('img').src = avatarDataUri(pk, { size: 64 })
-    profileBtn.hidden = false
-  } catch { profileBtn.hidden = false }
+    if (pk) topbar.setAttribute('avatar', avatarDataUri(pk, { size: 64 }))
+  } catch {}
 })()
 
 // ---------- Desconectar (modal propio, sin confirm() — §5) ----------
@@ -381,8 +369,6 @@ npx @dotrino/terminal-agent          # 2 · ${lang === 'en' ? 'keep it running' 
 }
 
 document.documentElement.lang = lang
-document.getElementById(`lang-${lang}`).classList.add('on')
-document.querySelector('dotrino-support')?.setAttribute('lang', lang)
 render()
 
 // --- Service worker ---

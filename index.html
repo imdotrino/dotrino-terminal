@@ -39,34 +39,17 @@
   <script data-goatcounter="https://goat.dotrino.com/count" async src="https://goat.dotrino.com/count.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="./">
-      <img src="./icon.svg" alt="" width="28" height="28" />
-      <span>Terminal</span>
-    </a>
-    <div class="actions">
-      <button id="unlinkBtn" class="ghost" hidden>Desconectar</button>
-      <button id="installBtn" class="ghost" hidden>Instalar</button>
-      <!-- toggle de idioma (§9): siempre ambas opciones -->
-      <div class="lang" role="group" aria-label="es / en">
-        <button id="lang-es">ES</button>
-        <button id="lang-en">EN</button>
-      </div>
-      <!-- perfil inmediatamente a la izquierda de la moneda (§6.1) -->
-      <button id="profileBtn" class="profile-btn" data-testid="my-profile" hidden>
-        <img alt="" />
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" />
-        </svg>
-      </button>
-      <dotrino-support href="https://ko-fi.com/dotrino" repo="imdotrino/dotrino-terminal" discord="https://discord.gg/D648uq7cth" lang="es"></dotrino-support>
-    </div>
-  </header>
+  <!-- Barra superior estándar del ecosistema en UN componente (@dotrino/topbar):
+       marca + volver + slot de acciones + idioma + perfil + moneda de support. -->
+  <dotrino-topbar id="topbar" brand="Terminal" icon="./icon.svg"
+    support-repo="imdotrino/dotrino-terminal" support-discord="https://discord.gg/D648uq7cth"
+    profile>
+    <button id="unlinkBtn" slot="end" class="tb-action" hidden>Desconectar</button>
+    <button id="installBtn" slot="end" class="tb-action" hidden>Instalar</button>
+  </dotrino-topbar>
 
   <main id="app"></main>
 
-  <script type="module" src="https://cdn.jsdelivr.net/npm/@dotrino/support@0.7/src/index.js"></script>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
