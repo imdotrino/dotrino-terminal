@@ -16,6 +16,7 @@ import { createVaultReputation } from '@dotrino/reputation'
 import { getLink, getSelfLink, identity } from './vault.js'
 import { selfModeEnabled, setSelfMode, startSelfMaster } from './selfMaster.js'
 import { AgentClient } from './agentClient.js'
+import { qrSvg } from './qr.js'
 
 // ---------- i18n (bilingüe es/en, §9) ----------
 const M = {
@@ -490,6 +491,7 @@ async function selfTerminalScreen () {
 
   // --- Emparejamiento: generar QR y aprobar máquinas que pidan acceso ---
   const pairBox = qs('#selfPair')
+  let _autoPaired = false // primera entrada sin máquinas → mostrar el QR de una
   function renderPairIdle () {
     pairBox.innerHTML = `<div class="setup">
       <b>${t('self_pair_title')}</b>
@@ -507,6 +509,7 @@ async function selfTerminalScreen () {
       <p class="status">${t('self_pair_body')}</p>
       <pre><code>npx @dotrino/terminal-agent enroll</code></pre>
       <p class="status">${t('self_pair_step1')}</p>
+      <div class="qr-wrap" title="${esc(t('self_qr_alt'))}">${qrSvg(payload)}</div>
       <div class="qr-code"><pre><code>${esc(payload)}</code></pre></div>
       <button id="copyQr" class="link">${t('self_copy')}</button>
       <span class="status" id="copyMsg"></span>
@@ -553,13 +556,16 @@ async function selfTerminalScreen () {
       const list = await sm.listMachines()
       if (!list.length) {
         box.innerHTML = `<p class="status">${t('self_empty')}</p>`
+        // Aún sin máquinas: enseña el QR + código directamente (no tras un botón),
+        // salvo que ya haya una máquina esperando aprobación (SAS) en el panel.
+        if (!_autoPaired && !sm.listPending().length) { _autoPaired = true; startPairing() }
         return
       }
       box.innerHTML = `<b>${t('machines_title')}</b><div class="machine-list"></div>`
       const holder = box.querySelector('.machine-list')
       for (const d of list) {
-        const name = d.label ? `${d.label} · ${(d.sub || '').slice(0, 8)}…` : (d.sub || '').slice(0, 12)
-        const b = el(`<button class="machine" data-testid="machine-item">🖥 ${esc(name)}</button>`)
+        const name = d.label ? `${d.label} · ${d.deviceId}` : d.deviceId
+        const b = el(`<button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}">🖥 ${esc(name)}</button>`)
         b.addEventListener('click', () => host.openConsole(d.sub, name))
         holder.appendChild(b)
       }

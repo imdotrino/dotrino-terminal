@@ -204,7 +204,8 @@ export async function startSelfMaster (id, { proxyUrl } = {}) {
       if (!x.label || x.label === 'cli') continue // los navegadores enrolados no atienden consolas
       if (!bySub.has(x.sub) || (x.exp || 0) > (bySub.get(x.sub).exp || 0)) bySub.set(x.sub, x)
     }
-    return [...bySub.values()]
+    // Adjuntar el deviceId legible (C440-AC0E) — sin él la UI cae al JWK crudo.
+    return Promise.all([...bySub.values()].map(async (x) => ({ ...x, deviceId: await deviceIdOf(x.sub) })))
   }
 
   async function revoke (nonce) {

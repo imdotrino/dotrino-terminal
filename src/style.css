@@ -102,5 +102,7 @@ textarea { width: 100%; min-height: 92px; margin: 12px 0; background: #0b0820; c
 .pending { background: #0b0820; border: 1px solid var(--brand); border-radius: 12px; padding: 16px; margin-top: 10px; }
 .pending .sas { text-align: center; font-size: 2rem; letter-spacing: .35em; font-family: ui-monospace, monospace; margin: 10px 0 4px; }
 .pair-actions { display: flex; gap: 10px; justify-content: center; margin-top: 12px; }
+.qr-wrap { background: #fff; border-radius: 12px; padding: 12px; width: max-content; max-width: 100%; margin: 12px 0; }
+.qr-wrap svg { display: block; width: 240px; max-width: 60vw; height: auto; }
 .qr-code pre { background: #06040f; border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; font-size: .78rem; margin: 8px 0; }
 .qr-code code { word-break: break-all; white-space: pre-wrap; }
