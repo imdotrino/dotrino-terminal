@@ -17,6 +17,8 @@
  * cacheada + el TTL del cert acota el riesgo. I/O cifrado E2E (../shared/e2e.js).
  */
 import os from 'node:os'
+import fs from 'node:fs'
+import path from 'node:path'
 import { createRequire } from 'node:module'
 import { verifyChain, signWithDevice, pubkeyId } from '@dotrino/identity/capabilities'
 import { installNodeGlobals } from './node-globals.js'
@@ -68,6 +70,13 @@ export async function startAgent (opts = {}) {
   await identify()
   client.on('token', () => { identify().catch(() => {}) })
 
+  // Bitácora persistente de sesiones (sessions.log, JSONL): qué dispositivo abrió
+  // consola y cuándo — auditoría local si un dispositivo tuyo cae en malas manos.
+  const sessionsLog = path.join(dir, 'sessions.log')
+  const audit = (op, info = {}) => {
+    try { fs.appendFileSync(sessionsLog, JSON.stringify({ ts: Date.now(), op, ...info }) + '\n') } catch (_) {}
+  }
+
   const send = (to, obj) => { try { client.send(to, obj) } catch (e) { if (!opts.quiet) console.error('[terminal] send:', e.message) } }
 
   // --- Revocación: refrescar la lista del vault por el proxy (best-effort) ---
@@ -96,7 +105,7 @@ export async function startAgent (opts = {}) {
   const sessions = new Map()
   const sweeper = setInterval(() => {
     const now = Date.now()
-    for (const [sid, s] of sessions) if (now > s.exp) { try { s.term?.kill() } catch {}; sessions.delete(sid) }
+    for (const [sid, s] of sessions) if (now > s.exp) { try { s.term?.kill() } catch {}; sessions.delete(sid); audit('session-expire', { sid: sid.slice(0, 8) }) }
   }, 60 * 1000); sweeper.unref?.()
 
   async function pushOut (s, data) {
@@ -108,6 +117,11 @@ export async function startAgent (opts = {}) {
   async function handleHandshake (from, p) {
     const { data, signature, cert } = p
     if (!data || !signature || !cert) return send(from, { type: T.ERROR, error: 'handshake incompleto' })
+    // FRESCURA anti-replay: el HS debe ser reciente (±5 min); sin esto un relay
+    // malicioso podía reproducir handshakes viejos (sesiones huérfanas / DoS).
+    if (typeof data.ts !== 'number' || Math.abs(Date.now() - data.ts) > 5 * 60 * 1000) {
+      return send(from, { type: T.ERROR, error: 'handshake vencido (posible replay, o el reloj del dispositivo está desfasado)' })
+    }
     const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, trustedIssuer: master, revoked: revokedSet })
     if (!chk.ok) return send(from, { type: T.ERROR, error: 'no autorizado: ' + chk.reason })
     if (data.op !== 'terminal.hs' || typeof data.eph !== 'string') return send(from, { type: T.ERROR, error: 'handshake inválido' })
@@ -123,6 +137,7 @@ export async function startAgent (opts = {}) {
     const { signature: ackSig } = await signWithDevice({ privateJwk: link.device.privateJwk, data: ack })
 
     sessions.set(sid, { sid, key, term: null, from, exp: Date.now() + SESSION_TTL_MS })
+    audit('session-open', { sid: sid.slice(0, 8), device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
     send(from, { type: T.ACK, sid, ack, signature: ackSig, cert: link.cert })
     if (!opts.quiet) console.log(`[terminal] sesión ${sid.slice(0, 8)} autorizada (device ${chk.device?.slice?.(0, 8) || '?'})`)
   }
@@ -148,7 +163,7 @@ export async function startAgent (opts = {}) {
     }
     if (msg.type === 'input') return void s.term?.write(msg.data)
     if (msg.type === 'resize') { try { s.term?.resize(msg.cols, msg.rows) } catch {}; return }
-    if (msg.type === 'close') { try { s.term?.kill() } catch {}; sessions.delete(p.sid); return }
+    if (msg.type === 'close') { try { s.term?.kill() } catch {}; sessions.delete(p.sid); audit('session-close', { sid: String(p.sid).slice(0, 8) }); return }
   }
 
   client.on('message', (from, payload) => {
