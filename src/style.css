@@ -96,8 +96,6 @@ textarea { width: 100%; min-height: 92px; margin: 12px 0; background: #0b0820; c
 .choice-card { position: relative; flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 18px; }
 .choice-card b { font-size: 1.05rem; }
 .choice-card:hover { background: #1b1830; border-color: var(--brand); }
-.choice-card.primary-card { border-color: var(--brand); background: #1b1830; }
-.badge { position: absolute; top: 10px; right: 12px; font-size: .72rem; background: var(--brand); color: #fff; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
 .link { background: transparent; border: none; color: var(--brand); text-decoration: underline; padding: 2px; cursor: pointer; font-size: .9rem; }
 
 /* Emparejamiento en modo dispositivo */

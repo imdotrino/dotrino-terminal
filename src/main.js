@@ -58,7 +58,6 @@ const M = {
     self_choice_vault_d: 'Tienes un vault (PC/servidor). Centraliza tu identidad en él.',
     self_choice_self: 'Usar este dispositivo como bóveda',
     self_choice_self_d: 'Sin vault: la identidad de este navegador certifica tus máquinas directamente.',
-    self_recommended: 'Recomendado',
     self_active: (dev) => `La identidad de este navegador (<code>${dev}</code>) es tu bóveda. Enlaza tus máquinas abajo y abre consolas en ellas.`,
     self_pair_title: 'Enlaza una máquina',
     self_pair_body: 'En la máquina destino (servidor, otra PC…), con Node 20+:',
@@ -121,7 +120,6 @@ const M = {
     self_choice_vault_d: 'You have a vault (PC/server). It centralizes your identity.',
     self_choice_self: 'Use this device as its own vault',
     self_choice_self_d: 'No vault: this browser\'s identity certifies your machines directly.',
-    self_recommended: 'Recommended',
     self_active: (dev) => `This browser's identity (<code>${dev}</code>) is your vault. Link your machines below and open consoles on them.`,
     self_pair_title: 'Link a machine',
     self_pair_body: 'On the target machine (a server, another PC…), with Node 20+:',
@@ -235,10 +233,9 @@ function choiceScreen () {
       <h1>${t('self_choice_title')}</h1>
       <p>${t('self_choice_intro')}</p>
       <div class="choice">
-        <button class="choice-card primary-card" id="goSelf">
+        <button class="choice-card" id="goSelf">
           <b>📱 ${t('self_choice_self')}</b>
           <span class="status">${t('self_choice_self_d')}</span>
-          <span class="badge">${t('self_recommended')}</span>
         </button>
         <button class="choice-card" id="goVault">
           <b>🗄 ${t('self_choice_vault')}</b>
