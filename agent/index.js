@@ -37,7 +37,7 @@ export async function startAgent (opts = {}) {
   const dir = opts.dir || dataDir()
   const link = opts.link || loadLink(dir)
   if (!link?.device?.privateJwk || !link?.cert || !link?.iss) {
-    throw new Error('esta máquina no está enlazada. Ejecuta primero: `dotrino-terminal-agent enroll`.')
+    throw new Error('esta máquina no está enlazada. Ejecuta primero: `npx @dotrino/terminal-agent enroll`.')
   }
   const master = link.iss
   const myPub = link.device.publickey

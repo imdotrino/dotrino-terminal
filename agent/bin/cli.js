@@ -52,12 +52,12 @@ try {
     })
     console.log('\n  ✓ Máquina enlazada. Dirección de máquina (aparecerá sola en la app; también puedes pegarla):\n')
     console.log('   ', link.device.publickey, '\n')
-    console.log('  Ahora ejecuta:  dotrino-terminal-agent\n')
+    console.log('  Ahora ejecuta:  npx @dotrino/terminal-agent\n')
     process.exit(0)
   }
 
   if (!loadLink(opt('--dir'))) {
-    console.error('esta máquina no está enlazada. Ejecuta primero: dotrino-terminal-agent enroll')
+    console.error('esta máquina no está enlazada. Ejecuta primero: npx @dotrino/terminal-agent enroll')
     process.exit(1)
   }
   const agent = await startAgent({
