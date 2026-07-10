@@ -20,7 +20,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { verifyChain, signWithDevice, pubkeyId } from '@dotrino/identity/capabilities'
+import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId } from '@dotrino/identity/capabilities'
 import { installNodeGlobals } from './node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from './e2e.js'
 import { loadLink, dataDir } from './link.js'
@@ -31,7 +31,7 @@ const T = {
   HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT: 'terminal.out', ERROR: 'terminal.error',
   PING: 'terminal.ping', PONG: 'terminal.pong'
 }
-const VMSG = { DEVICES: 'vault.devices', DEVICES_RESULT: 'vault.devices.result' }
+const VMSG = { DEVICES: 'vault.devices', DEVICES_RESULT: 'vault.devices.result', REVOKED: 'vault.revoked' }
 const SIGN_SCOPE = 'vault:sign'
 const SESSION_TTL_MS = 30 * 60 * 1000
 const REVOKE_REFRESH_MS = 5 * 60 * 1000
@@ -167,6 +167,29 @@ export async function startAgent (opts = {}) {
     if (msg.type === 'close') { try { s.term?.kill() } catch {}; sessions.delete(p.sid); audit('session-close', { sid: String(p.sid).slice(0, 8) }); return }
   }
 
+  const stop = () => {
+    clearInterval(revTimer); clearInterval(sweeper)
+    for (const s of sessions.values()) { try { s.term?.kill() } catch {} }
+    try { client.close() } catch {}
+  }
+
+  // AUTO-BORRADO al ser REVOCADA: la bóveda envía un REVOKED FIRMADO por la maestra
+  // dirigido a ESTA máquina (al revocar, o cuando reaparece: ver @dotrino/vault). Solo
+  // nos borramos si la firma valida y el body es para nuestra pubkey → un proxy/peer
+  // malicioso NO puede borrarnos con un mensaje falso (cierra el wipe-DoS). Borra el
+  // enlace (link.json) y detiene el agente.
+  async function handleRevoked (p) {
+    const b = p?.body
+    if (!b || b.op !== 'revoke' || b.sub !== myPub) return
+    if (typeof b.exp === 'number' && Date.now() > b.exp) return
+    if (!await verifyDeviceSig({ publickey: master, data: b, signature: p.signature })) return
+    audit('revoked', { nonce: b.nonce })
+    if (!opts.quiet) console.log('\n[terminal] tu bóveda REVOCÓ esta máquina → borro el enlace y salgo.')
+    try { fs.rmSync(path.join(dir, 'link.json'), { force: true }) } catch (_) {}
+    stop()
+    if (opts.onRevoked) { try { opts.onRevoked() } catch (_) {} }
+  }
+
   client.on('message', (from, payload) => {
     if (!payload || typeof payload !== 'object') return
     if (payload.type === T.HS) handleHandshake(from, payload).catch((e) => send(from, { type: T.ERROR, error: e.message }))
@@ -174,16 +197,14 @@ export async function startAgent (opts = {}) {
     // Sonda de presencia (liveness): el cliente hace ping y respondemos pong con el
     // mismo nonce → así la app sabe que esta máquina está online (sin abrir sesión).
     else if (payload.type === T.PING) send(from, { type: T.PONG, n: payload.n })
+    else if (payload.type === VMSG.REVOKED) handleRevoked(payload).catch(() => {})
   })
 
   if (!opts.quiet) {
     console.log(`[terminal] agente activo · máquina ${myId} · vault ${(await pubkeyId(master)).slice(0, 16)} · proxy ${proxyUrl}`)
   }
 
-  return {
-    machine: myPub, machineId: myId, master,
-    close () { clearInterval(revTimer); clearInterval(sweeper); for (const s of sessions.values()) { try { s.term?.kill() } catch {} } try { client.close() } catch {} }
-  }
+  return { machine: myPub, machineId: myId, master, close: stop }
 }
 
 export default { startAgent }

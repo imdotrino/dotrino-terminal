@@ -1,7 +1,7 @@
 // Service worker estándar del ecosistema (§3): navegación network-first (los
 // deploys se ven al instante; offline cae a caché), resto cache-first con refresco
 // en segundo plano. Subir N de CACHE en cada cambio de assets cacheados.
-const CACHE = 'terminal-v11';
+const CACHE = 'terminal-v12';
 const ASSETS = [
   './',
   './index.html',

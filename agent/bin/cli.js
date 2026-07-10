@@ -65,7 +65,8 @@ try {
     process.exit(1)
   }
   const agent = await startAgent({
-    dir: opt('--dir'), proxyUrl: opt('--proxy'), shell: opt('--shell')
+    dir: opt('--dir'), proxyUrl: opt('--proxy'), shell: opt('--shell'),
+    onRevoked: () => { console.log('  Esta máquina fue revocada desde tu bóveda. Para reconectarla, enrólala de nuevo.\n'); process.exit(0) }
   })
   console.log('\n  Dotrino Terminal — agente activo')
   console.log('  máquina:', agent.machineId)
