@@ -13,7 +13,7 @@ import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil
 import { avatarDataUri } from '@dotrino/identity/capabilities'
 import { createVaultProfileProvider } from '@dotrino/profile'
 import { createVaultReputation } from '@dotrino/reputation'
-import { getLink, unpair, identity } from './vault.js'
+import { getLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
 
 // ---------- i18n (bilingüe es/en, §9) ----------
@@ -28,9 +28,6 @@ const M = {
     checking: 'Comprobando…',
     still_not: 'Este dispositivo aún no está conectado a una bóveda.',
     expired: (d) => `Tu conexión con la bóveda <b>venció</b> (${d}). Vuelve a conectar este dispositivo (paso 2).`,
-    unlink: 'Desconectar',
-    unlink_q: '¿Desconectar este dispositivo de tu bóveda? Tendrás que emparejarlo de nuevo (y afecta a todas las apps Dotrino de este navegador).',
-    unlink_yes: 'Sí, desconectar',
     cancel: 'Cancelar',
     install: 'Instalar',
     saved_machine: '— máquina guardada —',
@@ -65,9 +62,6 @@ const M = {
     checking: 'Checking…',
     still_not: 'This device is not connected to a vault yet.',
     expired: (d) => `Your vault connection <b>expired</b> (${d}). Connect this device again (step 2).`,
-    unlink: 'Disconnect',
-    unlink_q: 'Disconnect this device from your vault? You will have to pair it again (this affects every Dotrino app in this browser).',
-    unlink_yes: 'Yes, disconnect',
     cancel: 'Cancel',
     install: 'Install',
     saved_machine: '— saved machine —',
@@ -102,7 +96,6 @@ const t = (k, ...a) => { const v = M[lang][k]; return typeof v === 'function' ? 
 topbar.addEventListener('dotrino-lang', (e) => { lang = e.detail.lang; render() })
 
 const app = document.getElementById('app')
-const unlinkBtn = document.getElementById('unlinkBtn')
 
 // --- Instalar (PWA): botón propio en el slot "end" del topbar ---
 let deferredPrompt = null
@@ -148,30 +141,14 @@ topbar.addEventListener('dotrino-profile', openMyProfile)
   } catch {}
 })()
 
-// ---------- Desconectar (modal propio, sin confirm() — §5) ----------
-unlinkBtn.addEventListener('click', () => {
-  document.querySelector('.modal-back')?.remove()
-  const m = el(`<div class="modal-back"><div class="modal card">
-    <p>${t('unlink_q')}</p>
-    <div class="modal-row">
-      <button class="ghost" data-act="no">${t('cancel')}</button>
-      <button class="primary" data-act="yes">${t('unlink_yes')}</button>
-    </div></div></div>`)
-  m.addEventListener('click', (e) => { if (e.target === m || e.target.dataset.act === 'no') m.remove() })
-  m.querySelector('[data-act=yes]').addEventListener('click', async () => {
-    try { await unpair() } catch {}
-    m.remove(); render()
-  })
-  document.body.appendChild(m)
-})
+// Desconectar/revocar este dispositivo se hace desde profile.dotrino.com (el
+// gestor de dispositivos del vault), no desde cada app — por eso no hay botón aquí.
 
 // ---------- Render de estados ----------
 let link = null // { paired, id, cert, iss, proxy, deviceId }
 
 async function render () {
   link = await getLink().catch(() => ({ paired: false }))
-  unlinkBtn.hidden = !link.paired
-  unlinkBtn.textContent = t('unlink')
   installBtn.textContent = t('install')
   app.innerHTML = ''
   app.appendChild(link.paired ? terminalScreen(link) : linkScreen())
