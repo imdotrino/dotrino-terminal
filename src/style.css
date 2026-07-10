@@ -24,6 +24,28 @@ dotrino-topbar {
   --dotrino-topbar-muted: var(--muted);
   --dotrino-topbar-accent: var(--brand);
 }
+/* Tarjeta de perfil (@dotrino/profile) — el modal se abre desde el botón de perfil
+   del topbar. Se tematiza con --ccp-* al tema oscuro de la terminal (si no, cae a la
+   paleta crema clara por defecto del componente y desentona). */
+dotrino-profile {
+  --ccp-bg: var(--panel);      /* #171331 — superficie del modal */
+  --ccp-bg-2: #1e1940;         /* elevado: footer, chips */
+  --ccp-bg-3: #251f4e;         /* paneles, chip de pubkey, hovers, perfil activo */
+  --ccp-bg-4: #322a63;         /* estrellas vacías, hover de refrescar */
+  --ccp-border: var(--line);   /* #2a2350 */
+  --ccp-text: var(--text);     /* #e7e3ff */
+  --ccp-muted: var(--muted);   /* #9a92c4 */
+  --ccp-accent: var(--brand);  /* #7c3aed */
+  --ccp-accent-2: #6d28d9;
+  --ccp-accent-text: #fff;
+  --ccp-input-bg: var(--bg);   /* #0e0b1a — inputs como pozos oscuros */
+  --ccp-gold: #facc15;         /* estrellas (más brillante para fondo oscuro) */
+  --ccp-derived: #cbb98a;
+  --ccp-affinity: #2dd4bf;
+  --ccp-online: #4ade80;
+  --ccp-radius: 14px;
+}
+
 /* Botones propios de la app en el slot "end" (Desconectar / Instalar). */
 .tb-action { padding: 6px 12px; font-size: 14px; background: transparent; }
 
