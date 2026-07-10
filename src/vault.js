@@ -48,3 +48,32 @@ export async function unpair () {
   const id = await identity()
   return id.unpairDevice()
 }
+
+/**
+ * Enlace STANDALONE: este dispositivo (su identidad de navegador P) ES su propio
+ * vault. No hay vault externo ni cert de dispositivo `P ← M`; en su lugar se usa un
+ * self-cert `P ← P` (refrescado bajo demanda por el agente). La maestra pineada que
+ * verifica el agente es la propia P. Ver selfMaster.js.
+ * @returns {Promise<{mode:'self', id:object, iss:string, proxy:string, getSelfCert:()=>Promise<object>}>}
+ */
+export async function getSelfLink () {
+  const id = await identity()
+  const iss = id.me?.publickey
+  if (!iss) return { mode: 'self', id, paired: false }
+  return {
+    mode: 'self',
+    id,
+    iss,
+    proxy: 'wss://proxy.dotrino.com',
+    // Self-cert perezoso (lo provee selfMaster.startSelfMaster). Si todavía no se
+    // levantó el daemon, se genera uno fresco aquí vía signDelegation.
+    async getSelfCert () {
+      if (this._selfCert && this._selfCert.exp > Date.now() + 60_000) return this._selfCert
+      const { cert } = await id.signDelegation(iss, 'vault:sign', { ttlMs: 24 * 60 * 60 * 1000 })
+      this._selfCert = cert
+      return cert
+    },
+    // `cert` se resuelve bajo demanda (lo usa AgentClient como fallback).
+    get cert () { return this._selfCert || null }
+  }
+}

@@ -20,9 +20,15 @@ import { makeEphemeral, deriveKey, seal, open } from '../shared/e2e.js'
 const T = { HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT: 'terminal.out', ERROR: 'terminal.error' }
 
 export class AgentClient {
-  /** @param {{ id:object, cert:object, iss:string, proxy?:string }} link enlace de vault.js */
+  /**
+   * @param {{ id:object, cert:object, iss:string, proxy?:string, mode?:string }} link
+   *   enlace de vault.js (modo vault) o de selfMaster.js (modo self: el dispositivo
+   *   es su propio vault; `cert` es el self-cert `P ← P` e `iss` es la propia P).
+   * @param {object} opts
+   * @param {string} opts.agentPubkey dirección (pubkey) de la máquina destino.
+   */
   constructor (link, { agentPubkey, proxyUrl } = {}) {
-    this.link = link                                  // { id, cert, iss, proxy }
+    this.link = link                                  // { id, cert, iss, proxy, mode? }
     this.agentPubkey = agentPubkey                    // pubkey de la máquina destino
     this.proxyUrl = proxyUrl || link.proxy || 'wss://proxy.dotrino.com'
     this.client = null
@@ -33,6 +39,11 @@ export class AgentClient {
   }
 
   async _identify () {
+    // En modo self NO identificamos esta conexión como P: el proxy enruta por
+    // token las respuestas del agente (no por pubkey), y así no recibimos el
+    // fan-out de mensajes dirigidos a P (que atiende el listener de enrolamiento).
+    // La autorización la da el vault/self-cert que va firmado en el handshake.
+    if (this.link.mode === 'self') return
     if (!this.client.token) return
     // Patrón estándar del ecosistema (messenger): identify firmado por id.signData
     // + cert del vault → el proxy enruta también lo dirigido a la maestra.
@@ -50,7 +61,9 @@ export class AgentClient {
     this.client = new WebSocketProxyClient({ url: this.proxyUrl, enableWebRTC: false, autoReconnect: true })
     await this.client.connect()
     await this._identify()
-    this.client.on('token', () => { this._identify().catch(() => {}) })
+    if (this.link.mode !== 'self') {
+      this.client.on('token', () => { this._identify().catch(() => {}) })
+    }
 
     this.client.on('message', async (_from, p) => {
       if (!p || typeof p !== 'object') return
@@ -60,20 +73,28 @@ export class AgentClient {
     })
 
     const eph = await makeEphemeral()
+    // El self-cert P←P del modo self puede vencerse (24 h): refrescarlo si hace falta.
+    let cert = this.link.cert
+    if (this.link.mode === 'self' && this.link.getSelfCert) {
+      cert = await this.link.getSelfCert()
+    }
     // `publickey` va DENTRO del dato firmado: verifyChain verifica la firma
     // contra data.publickey y exige cert.sub === data.publickey.
     const data = { op: 'terminal.hs', eph: eph.pub, publickey: this.link.id.me?.publickey, ts: Date.now() }
     const { signature } = await this.link.id.signData(data)
 
+    // El ACK se correlaciona por la clave efímera PROPIA (ceph === eph.pub): así
+    // varias consolas simultáneas (varios AgentClient sobre la misma pubkey) no se
+    // roban el ACK de la otra.
     const acked = new Promise((resolve, reject) => {
       const off = this.client.on('message', (_from, p) => {
         if (!p || typeof p !== 'object') return
-        if (p.type === T.ACK) { off(); resolve(p) }
+        if (p.type === T.ACK && p.ack && p.ack.ceph === eph.pub) { off(); resolve(p) }
         else if (p.type === T.ERROR) { off(); reject(new Error(p.error)) }
       })
       setTimeout(() => { off(); reject(new Error('la máquina no respondió (¿está corriendo el agente allí?)')) }, 20000)
     })
-    this.client.sendByPubkey(this.agentPubkey, { type: T.HS, data, signature, cert: this.link.cert })
+    this.client.sendByPubkey(this.agentPubkey, { type: T.HS, data, signature, cert })
     const res = await acked
 
     // El ack debe: (1) encadenar a NUESTRA maestra, (2) estar firmado por la

@@ -8,9 +8,19 @@ de tus máquinas**, desde el navegador de otro dispositivo. **Solo dispositivos 
 enlaces con tu vault** pueden entrar; todo el I/O viaja **cifrado punto a punto**.
 No hay cuentas, ni puertos abiertos, ni servidor que vea tus comandos.
 
+Hay **dos modos** de usarlo, ambos sin cuentas ni claves en la nube:
+
+- **Con vault externo** — centralizas tu identidad en un PC (`dotrino-vault`); el
+  navegador y cada máquina se enrolan como dispositivos de ese vault.
+- **Dispositivo como vault** — sin vault externo: la identidad del **propio
+  navegador** certifica tus máquinas directamente. Útil si no quieres mantener un
+  vault encendido; el costo es que el navegador debe estar abierto para enrolar y
+  para que las máquinas refresquen revocaciones (el cert de 30 días acota el riesgo).
+
 El agente **no necesita correr en la máquina del vault**: se enlaza con el vault
-como un dispositivo más (igual que el navegador), así que puede vivir en un
-servidor, un contenedor u otra PC. La maestra nunca sale del vault.
+(o con el dispositivo) como un dispositivo más (igual que el navegador), así que
+puede vivir en un servidor, un contenedor u otra PC. La maestra nunca sale del
+certificador.
 
 ```
  navegador (dispositivo enlazado)         máquina destino (agente enrolado)
@@ -74,17 +84,24 @@ su propia dirección. Datos en `~/.local/share/dotrino-terminal-agent`
 ### 2) En el dispositivo enlazado (navegador)
 
 1. Abre **https://terminal.dotrino.com**.
-2. La primera vez, **enlaza** el dispositivo: en el vault corre
-   `dotrino-vault pair`, copia el QR/JSON y pégalo en la app; compara el **código de
-   6 dígitos** y apruébalo en el vault (`dotrino-vault approve <código>`).
+2. La primera vez, **elige el modo**:
+   - **Conectar tu bóveda** — en el vault corre `dotrino-vault pair`, copia el
+     QR/JSON y pégalo en la app (desde profile.dotrino.com/#vault); compara el
+     **código de 6 dígitos** y apruébalo en el vault (`dotrino-vault approve <código>`).
+   - **Usar este dispositivo como bóveda** — no necesitas vault: pulsa «Enlazar
+     otra máquina», copia el código que se genera y pégalo en el agente (paso 1).
+     Cuando la máquina pida acceso, compara el código de 6 dígitos y apruébalo aquí.
 3. Pega la **dirección de la máquina** (la que imprime el agente) y pulsa
    **Conectar** → tienes una shell en esa máquina.
 
 ## Estructura
 
 - **`src/` + `index.html`** — la PWA (Vite). `terminal.dotrino.com`.
+- **`src/selfMaster.js`** — modo «dispositivo como vault»: el navegador actúa de
+  certificador (atiende el enrolamiento del agente y firma certificados `D ← P`
+  con la propia identidad). Es el mismo protocolo que el vault externo.
 - **`agent/`** — el paquete `@dotrino/terminal-agent` (Node + `node-pty`) que corre
-  en la máquina del vault.
+  en la máquina destino (se enrola contra el vault **o** contra el dispositivo).
 - **`shared/e2e.js`** — el canal cifrado E2E (isomórfico), fuente única compartida
   por la PWA y el agente.
 
