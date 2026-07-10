@@ -2,12 +2,12 @@
 /**
  * dotrino-terminal-agent — agente de Dotrino Terminal.
  *
- *   dotrino-terminal-agent enroll     # enlaza ESTA máquina con tu vault (una vez)
- *   dotrino-terminal-agent            # corre el agente (abre shells para tus dispositivos)
+ *   dotrino-terminal-agent            # enlaza (si falta) y CORRE el agente
+ *   dotrino-terminal-agent enroll     # re-enlaza (sobrescribe) y corre el agente
  *
- * El agente es un dispositivo enrolado del vault: puede vivir en cualquier
- * máquina. Imprime la "dirección de máquina" (su pubkey) que pegas en el cliente
- * terminal.dotrino.com para conectarte a ESTA máquina.
+ * El agente es un dispositivo enrolado del vault: puede vivir en cualquier máquina.
+ * Con un solo comando queda enlazado y sirviendo shells a tus dispositivos. Imprime
+ * su "dirección de máquina" (pubkey), aunque aparece sola en terminal.dotrino.com.
  */
 import readline from 'node:readline'
 import { startAgent } from '../index.js'
@@ -24,55 +24,62 @@ function ask (q) {
 
 if (args.includes('-h') || args.includes('--help')) {
   console.log(`uso:
-  dotrino-terminal-agent enroll [--label <nombre>]   enlaza esta máquina con el vault
-  dotrino-terminal-agent [--proxy <wss://…>] [--shell <bin>] [--dir <ruta>]   corre el agente
+  dotrino-terminal-agent            enlaza esta máquina (si falta) y corre el agente
+  dotrino-terminal-agent enroll     re-enlaza (sobrescribe el enlace) y corre el agente
+  opciones: [--label <nombre>] [--proxy <wss://…>] [--shell <bin>] [--dir <ruta>]
 
 datos en ${dataDir()} (override DOTRINO_TERMINAL_DIR)`)
   process.exit(0)
 }
 
+async function doEnroll (dir) {
+  console.log('Enlazar esta máquina con tu vault.')
+  console.log('El código lo generas en el CERTIFICADOR (tu vault). Hay dos formas:')
+  console.log('  · Sin vault externo → abre https://terminal.dotrino.com, elige')
+  console.log('    "Usar este dispositivo como bóveda" → "Enlazar otra máquina" y copia el código.')
+  console.log('  · Con vault en un PC → ahí corre `dotrino-vault pair` y copia el QR/JSON.\n')
+  const text = await ask('Pega el código y Enter:\n> ')
+  const qr = parseQr(text)
+  console.log('\nConectando…')
+  await enroll({
+    qr,
+    dir,
+    label: opt('--label') || 'terminal-agent',
+    onChallenge: ({ deviceId, code }) => {
+      console.log('\n  Escribe ESTE código en tu bóveda para aprobar esta máquina:')
+      console.log(`    código: ${code}`)
+      console.log(`    máquina: ${deviceId}`)
+      console.log('    (en terminal.dotrino.com escríbelo en el campo y pulsa "Aprobar";')
+      console.log(`     en el PC del vault:  dotrino-vault approve ${code})\n`)
+      console.log('  Esperando aprobación…')
+    }
+  })
+  console.log('\n  ✓ Máquina enlazada — levantando el agente…\n')
+}
+
 try {
-  if (cmd === 'enroll') {
-    console.log('Enlazar esta máquina con tu vault.')
-    console.log('El código lo generas en el CERTIFICADOR (tu vault). Hay dos formas:')
-    console.log('  · Sin vault externo → abre https://terminal.dotrino.com, elige')
-    console.log('    "Usar este dispositivo como bóveda" → "Enlazar otra máquina" y copia el código.')
-    console.log('  · Con vault en un PC → ahí corre `dotrino-vault pair` y copia el QR/JSON.\n')
-    const text = await ask('Pega el código y Enter:\n> ')
-    const qr = parseQr(text)
-    console.log('\nConectando…')
-    const link = await enroll({
-      qr,
-      dir: opt('--dir'),
-      label: opt('--label') || 'terminal-agent',
-      onChallenge: ({ deviceId, code }) => {
-        console.log('\n  Escribe ESTE código en tu bóveda para aprobar esta máquina:')
-        console.log(`    código: ${code}`)
-        console.log(`    máquina: ${deviceId}`)
-        console.log('    (en terminal.dotrino.com escríbelo en el campo y pulsa "Aprobar";')
-        console.log(`     en el PC del vault:  dotrino-vault approve ${code})\n`)
-        console.log('  Esperando aprobación…')
-      }
-    })
-    console.log('\n  ✓ Máquina enlazada. Dirección de máquina (aparecerá sola en la app; también puedes pegarla):\n')
-    console.log('   ', link.device.publickey, '\n')
-    console.log('  Ahora ejecuta:  npx @dotrino/terminal-agent\n')
-    process.exit(0)
+  const dir = opt('--dir')
+  // El comando por defecto enrola SOLO si aún no está enlazada; `enroll` fuerza
+  // re-enrolar (sobrescribe) aunque ya lo esté. En ambos casos, al terminar sigue
+  // y LEVANTA el servicio (antes moría tras enrolar y había que relanzarlo).
+  if (cmd === 'enroll' || !loadLink(dir)) {
+    if (cmd === 'enroll' && loadLink(dir)) console.log('Re-enlazando esta máquina (sobrescribe el enlace actual).\n')
+    await doEnroll(dir)
   }
 
-  if (!loadLink(opt('--dir'))) {
-    console.error('esta máquina no está enlazada. Ejecuta primero: npx @dotrino/terminal-agent enroll')
-    process.exit(1)
-  }
   const agent = await startAgent({
-    dir: opt('--dir'), proxyUrl: opt('--proxy'), shell: opt('--shell'),
-    onRevoked: () => { console.log('  Esta máquina fue revocada desde tu bóveda. Para reconectarla, enrólala de nuevo.\n'); process.exit(0) }
+    dir, proxyUrl: opt('--proxy'), shell: opt('--shell'),
+    onRevoked: () => { console.log('  Esta máquina fue revocada desde tu bóveda. Para reconectarla, vuelve a enrolarla.\n'); process.exit(0) }
   })
   console.log('\n  Dotrino Terminal — agente activo')
   console.log('  máquina:', agent.machineId)
   console.log('  dirección (pegar en la app):')
   console.log('   ', agent.machine, '\n')
-  const bye = () => { agent.close(); process.exit(0) }
+  // Mantener vivo el servicio aunque stdin no sea una TTY (systemd/pm2/`nohup </dev/null`):
+  // el socket del proxy está `unref`'d, así que sin este keep-alive el proceso saldría
+  // justo después de arrancar. Vive hasta SIGINT/SIGTERM (o auto-borrado por revocación).
+  const keepAlive = setInterval(() => {}, 1 << 30)
+  const bye = () => { clearInterval(keepAlive); agent.close(); process.exit(0) }
   process.on('SIGINT', bye); process.on('SIGTERM', bye)
 } catch (e) {
   console.error('error:', e.message)

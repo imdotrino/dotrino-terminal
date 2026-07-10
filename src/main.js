@@ -440,7 +440,7 @@ function terminalScreen (link) {
           <div class="setup">
             <b>${t('setup_title')}</b>
             <p class="status">${t('setup_body')}</p>
-            ${installCmds('enroll')}
+            ${installCmds()}
             <p class="status">1 · ${t('setup_s1')}</p>
             <p class="status">2 · ${t('setup_s2')}</p>
           </div>`
@@ -503,7 +503,7 @@ async function selfTerminalScreen () {
     pairBox.innerHTML = `<div class="setup">
       <b>${t('self_pair_title')}</b>
       <p class="status">${t('self_pair_body')}</p>
-      ${installCmds('enroll')}
+      ${installCmds()}
       <button id="startPair" class="primary">${t('self_pair_new')}</button>
     </div>`
     pairBox.querySelector('#startPair').addEventListener('click', startPairing)
@@ -514,7 +514,7 @@ async function selfTerminalScreen () {
     pairBox.innerHTML = `<div class="setup">
       <b>${t('self_pair_title')}</b>
       <p class="status">${t('self_pair_body')}</p>
-      ${installCmds('enroll')}
+      ${installCmds()}
       <p class="status">${t('self_pair_step1')}</p>
       <div class="qr-wrap" title="${esc(t('self_qr_alt'))}">${qrSvg(payload)}</div>
       <div class="qr-code"><pre><code>${esc(payload)}</code></pre></div>

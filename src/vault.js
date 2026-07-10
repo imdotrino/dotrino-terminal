@@ -19,14 +19,17 @@ export async function identity () {
   return _id
 }
 
-// --- Preferencia de modo de la terminal (estado de UI, no del pilar) ---
+// --- Modo de la terminal (selección de vista, no una preferencia persistente) ---
 // 'self' = este dispositivo es su propia bóveda (@dotrino/vault); ausente = vault externo.
+// Va en sessionStorage (CONVENCIONES §4: la vista activa sobrevive a un refresco pero al
+// ABRIR la app de cero vuelve al inicio) → así al entrar sin nada elegido se muestran de
+// nuevo las tarjetas de elección (bóveda local vs externa), no se queda pegado en 'self'.
 const LS_MODE = 'dotrino-terminal:mode'
 export function selfModeEnabled () {
-  try { return localStorage.getItem(LS_MODE) === 'self' } catch { return false }
+  try { return sessionStorage.getItem(LS_MODE) === 'self' } catch { return false }
 }
 export function setSelfMode (on) {
-  try { on ? localStorage.setItem(LS_MODE, 'self') : localStorage.removeItem(LS_MODE) } catch {}
+  try { on ? sessionStorage.setItem(LS_MODE, 'self') : sessionStorage.removeItem(LS_MODE) } catch {}
 }
 
 /**
