@@ -28,7 +28,8 @@ import { loadLink, dataDir } from './link.js'
 const require = createRequire(import.meta.url)
 
 const T = {
-  HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT: 'terminal.out', ERROR: 'terminal.error'
+  HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT: 'terminal.out', ERROR: 'terminal.error',
+  PING: 'terminal.ping', PONG: 'terminal.pong'
 }
 const VMSG = { DEVICES: 'vault.devices', DEVICES_RESULT: 'vault.devices.result' }
 const SIGN_SCOPE = 'vault:sign'
@@ -170,6 +171,9 @@ export async function startAgent (opts = {}) {
     if (!payload || typeof payload !== 'object') return
     if (payload.type === T.HS) handleHandshake(from, payload).catch((e) => send(from, { type: T.ERROR, error: e.message }))
     else if (payload.type === T.CMD) handleCmd(from, payload).catch((e) => send(from, { type: T.ERROR, error: e.message }))
+    // Sonda de presencia (liveness): el cliente hace ping y respondemos pong con el
+    // mismo nonce → así la app sabe que esta máquina está online (sin abrir sesión).
+    else if (payload.type === T.PING) send(from, { type: T.PONG, n: payload.n })
   })
 
   if (!opts.quiet) {

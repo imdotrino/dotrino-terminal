@@ -32,21 +32,20 @@ const M = {
     expired: (d) => `Tu conexión con la bóveda <b>venció</b> (${d}). Vuelve a conectar este dispositivo (paso 2).`,
     cancel: 'Cancelar',
     install: 'Instalar',
-    saved_machine: '— máquina guardada —',
-    addr_ph: 'Dirección de la máquina (la que imprime el agente)',
-    alias_ph: 'Alias (opcional)',
-    open_console: 'Abrir consola',
     machines_title: 'Tus máquinas',
     machines_loading: 'Buscando tus máquinas…',
     machines_none: 'Aún no tienes ninguna máquina con el agente instalado.',
     machines_err: 'No se pudo consultar tu bóveda (¿está encendida?).',
-    manual_addr: 'Conectar por dirección (avanzado)',
+    machine_online: 'En línea',
+    machine_offline: 'Desconectada',
+    machine_checking: 'Comprobando…',
+    machine_remove: 'Quitar',
+    remove_confirm: (dev) => `¿Quitar la máquina <code>${dev}</code>? Se revoca su acceso; para reconectarla tendrás que enrolarla de nuevo.`,
     setup_title: 'Instala el agente en la máquina que quieres controlar',
     setup_body: 'En esa máquina (servidor, otra PC…), con Node 20+ y git:',
     setup_s1: 'Enlázala a tu bóveda: te pedirá el código de <code>dotrino-vault pair</code> (en el PC de tu bóveda) y su aprobación.',
     setup_s2: 'Déjalo corriendo. La máquina aparecerá aquí sola, en "Tus máquinas".',
     linked_to: (dev) => `Dispositivo <code>${dev}</code> conectado a tu bóveda · abre una o varias consolas en tus máquinas.`,
-    need_addr: 'Pega la dirección de la máquina (la imprime `dotrino-terminal-agent`).',
     connecting: (a) => `Conectando a ${a}…`,
     connected: (a) => `Conectado a ${a}`,
     conn_fail: 'No se pudo conectar: ',
@@ -94,21 +93,20 @@ const M = {
     expired: (d) => `Your vault connection <b>expired</b> (${d}). Connect this device again (step 2).`,
     cancel: 'Cancel',
     install: 'Install',
-    saved_machine: '— saved machine —',
-    addr_ph: 'Machine address (the one the agent prints)',
-    alias_ph: 'Alias (optional)',
-    open_console: 'Open console',
     machines_title: 'Your machines',
     machines_loading: 'Looking for your machines…',
     machines_none: 'You have no machine with the agent installed yet.',
     machines_err: 'Could not reach your vault (is it on?).',
-    manual_addr: 'Connect by address (advanced)',
+    machine_online: 'Online',
+    machine_offline: 'Offline',
+    machine_checking: 'Checking…',
+    machine_remove: 'Remove',
+    remove_confirm: (dev) => `Remove machine <code>${dev}</code>? Its access is revoked; to reconnect it you'll need to enroll it again.`,
     setup_title: 'Install the agent on the machine you want to control',
     setup_body: 'On that machine (a server, another PC…), with Node 20+ and git:',
     setup_s1: 'Link it to your vault: it will ask for the code from <code>dotrino-vault pair</code> (on your vault PC) and its approval.',
     setup_s2: 'Leave it running. The machine will show up here by itself, under "Your machines".',
     linked_to: (dev) => `Device <code>${dev}</code> connected to your vault · open one or more consoles on your machines.`,
-    need_addr: 'Paste the machine address (printed by `dotrino-terminal-agent`).',
     connecting: (a) => `Connecting to ${a}…`,
     connected: (a) => `Connected to ${a}`,
     conn_fail: 'Could not connect: ',
@@ -165,6 +163,44 @@ installBtn.addEventListener('click', async () => { if (deferredPrompt) { deferre
 function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return tpl.content.firstElementChild }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
+// Confirmación con modal propio (nunca confirm() del navegador — §5). Devuelve bool.
+function confirmModal (html, { okText, danger = false } = {}) {
+  return new Promise((resolve) => {
+    const back = el(`<div class="modal-back"><div class="card modal">
+      <p>${html}</p>
+      <div class="modal-row">
+        <button class="ghost" data-cancel>${esc(t('cancel'))}</button>
+        <button class="primary${danger ? ' danger' : ''}" data-ok>${esc(okText || t('machine_remove'))}</button>
+      </div></div></div>`)
+    const done = (v) => { back.remove(); resolve(v) }
+    back.querySelector('[data-ok]').addEventListener('click', () => done(true))
+    back.querySelector('[data-cancel]').addEventListener('click', () => done(false))
+    back.addEventListener('click', (e) => { if (e.target === back) done(false) })
+    document.body.appendChild(back)
+  })
+}
+
+// Sonda de presencia (liveness) por ping/pong: manda un ping a cada pubkey por el
+// cliente del proxy y marca online las que responden `terminal.pong` dentro del
+// timeout. Definitivo (round-trip real), sin abrir sesión. Devuelve Set de pubkeys online.
+const PROBE = { PING: 'terminal.ping', PONG: 'terminal.pong' }
+function probeOnline (client, subs, { timeoutMs = 3000 } = {}) {
+  return new Promise((resolve) => {
+    if (!client || !subs || !subs.length) return resolve(new Set())
+    const nonceToSub = new Map()
+    const online = new Set()
+    const off = client.on('message', (_from, p) => {
+      if (p && p.type === PROBE.PONG && nonceToSub.has(p.n)) online.add(nonceToSub.get(p.n))
+    })
+    for (const sub of subs) {
+      const n = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
+      nonceToSub.set(n, sub)
+      try { client.sendByPubkey(sub, { type: PROBE.PING, n }) } catch (_) {}
+    }
+    setTimeout(() => { try { off() } catch (_) {} resolve(online) }, timeoutMs)
+  })
+}
+
 // ---------- Mi perfil (§6.1): el botón lo pone el topbar; abrimos <dotrino-profile> ----------
 let _provider = null
 async function ensureProvider (id) {
@@ -205,8 +241,10 @@ topbar.addEventListener('dotrino-profile', openMyProfile)
 // ---------- Render de estados ----------
 let link = null // { paired, id, cert, iss, proxy, deviceId } (modo vault)
 let deviceVault = null // handle de @dotrino/vault (este dispositivo como bóveda)
+let _probeTimer = null // re-sondeo de presencia; se limpia al re-renderizar
 
 async function render () {
+  if (_probeTimer) { clearInterval(_probeTimer); _probeTimer = null }
   link = await getLink().catch(() => ({ paired: false }))
   installBtn.textContent = t('install')
   app.innerHTML = ''
@@ -269,15 +307,6 @@ function choiceScreen () {
   return node
 }
 
-// --- Máquinas recordadas (dirección = pubkey del agente) ---
-const LS_MACHINES = 'dotrino-terminal:machines'
-function loadMachines () { try { return JSON.parse(localStorage.getItem(LS_MACHINES)) || [] } catch { return [] } }
-function rememberMachine (pub, alias) {
-  const list = loadMachines().filter((m) => m.pub !== pub)
-  list.unshift({ pub, alias: alias || (pub.slice(0, 10) + '…'), at: Date.now() })
-  localStorage.setItem(LS_MACHINES, JSON.stringify(list.slice(0, 8)))
-}
-
 // --- Gestor de sesiones multi-consola (compartido por modo vault y modo self) ---
 // Mantiene las pestañas, los terminales xterm.js y la conexión AgentClient de cada
 // shell abierta. Recibe el `link` (vault o self) y los contenedores del DOM.
@@ -285,14 +314,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   const sessions = [] // { id, alias, pub, agent, term, fit, box, tab, status, onResize }
   let active = null
   let counter = 0
-
-  function refreshMachineSelect (selEl) {
-    if (!selEl) return
-    const machines = loadMachines()
-    selEl.hidden = !machines.length
-    selEl.innerHTML = `<option value="">${t('saved_machine')}</option>` +
-      machines.map((m) => `<option value="${esc(m.pub)}">${esc(m.alias)}</option>`).join('')
-  }
 
   function setActive (s) {
     active = s
@@ -345,7 +366,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       await s.agent.openShell(s.term.cols, s.term.rows)
       s.onResize = () => { if (active === s) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows) } catch {} } }
       window.addEventListener('resize', s.onResize)
-      rememberMachine(pub, alias)
       s.status = 'conectado'; setTabState(s, 'ok')
       if (active === s) hint.textContent = t('connected', s.alias)
       setActive(s)
@@ -356,7 +376,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     }
   }
 
-  return { openConsole, refreshMachineSelect, sessions }
+  return { openConsole, sessions }
 }
 
 // --- Pantalla: gestor multi-consola (modo vault externo) ---
@@ -366,15 +386,6 @@ function terminalScreen (link) {
       <div id="machines" class="machines">
         <span class="status">${t('machines_loading')}</span>
       </div>
-      <details class="manual">
-        <summary>${t('manual_addr')}</summary>
-        <div class="machine-bar">
-          <select id="machineSel" data-testid="machine-select"><option value="">${t('saved_machine')}</option></select>
-          <input id="machineAddr" data-testid="machine-addr" type="text" placeholder="${esc(t('addr_ph'))}" />
-          <input id="machineAlias" data-testid="machine-alias" type="text" class="alias" placeholder="${esc(t('alias_ph'))}" />
-          <button id="openBtn" data-testid="open-console" class="primary">${t('open_console')}</button>
-        </div>
-      </details>
       <div id="tabs" class="tabs"></div>
       <div id="terms" class="terms"></div>
       <span id="hint" class="status">${t('linked_to', esc(link.deviceId || ''))}</span>
@@ -427,22 +438,6 @@ npx @dotrino/terminal-agent          # 2 · ${lang === 'en' ? 'keep it running' 
     }
   })()
 
-  host.refreshMachineSelect(qs('#machineSel'))
-  qs('#machineSel').addEventListener('change', (e) => {
-    if (!e.target.value) return
-    qs('#machineAddr').value = e.target.value
-    const m = loadMachines().find((x) => x.pub === e.target.value)
-    if (m && !qs('#machineAlias').value) qs('#machineAlias').value = m.alias
-  })
-
-  qs('#openBtn').addEventListener('click', () => {
-    const pub = qs('#machineAddr').value.trim()
-    const alias = qs('#machineAlias').value.trim()
-    if (!pub) { hint.textContent = t('need_addr'); return }
-    qs('#machineAddr').value = ''; qs('#machineAlias').value = ''
-    host.openConsole(pub, alias)
-  })
-
   return node
 }
 
@@ -470,15 +465,6 @@ async function selfTerminalScreen () {
     <section class="card term-card">
       <div id="selfPair" class="machines"></div>
       <div id="machines" class="machines"><span class="status">${t('machines_loading')}</span></div>
-      <details class="manual">
-        <summary>${t('manual_addr')}</summary>
-        <div class="machine-bar">
-          <select id="machineSel" data-testid="machine-select"><option value="">${t('saved_machine')}</option></select>
-          <input id="machineAddr" data-testid="machine-addr" type="text" placeholder="${esc(t('addr_ph'))}" />
-          <input id="machineAlias" data-testid="machine-alias" type="text" class="alias" placeholder="${esc(t('alias_ph'))}" />
-          <button id="openBtn" data-testid="open-console" class="primary">${t('open_console')}</button>
-        </div>
-      </details>
       <div id="tabs" class="tabs"></div>
       <div id="terms" class="terms"></div>
       <span id="hint" class="status">${t('self_active', esc(devShort))}</span>
@@ -564,7 +550,23 @@ async function selfTerminalScreen () {
   sm.onPendingChange(() => renderPending(sm.listPending()))
   renderPairIdle()
 
-  // --- Máquinas: las enroladas bajo esta identidad (P) ---
+  // --- Máquinas: las enroladas bajo esta identidad (P), con su estado online ---
+  // Sondea presencia (ping/pong) y pinta el punto verde/gris de cada fila.
+  async function updatePresence (subs) {
+    const online = await probeOnline(sm.client, subs)
+    for (const row of node.querySelectorAll('.machine-row')) {
+      const dot = row.querySelector('.mdot'); if (!dot) continue
+      const on = online.has(row.dataset.sub)
+      dot.className = 'mdot ' + (on ? 'on' : 'off')
+      dot.title = on ? t('machine_online') : t('machine_offline')
+    }
+  }
+  // Quitar (revocar) una máquina: confirma, revoca el cert y refresca la lista.
+  async function removeMachine (d) {
+    if (!await confirmModal(t('remove_confirm', esc(d.deviceId)), { danger: true })) return
+    try { await sm.revoke(d.nonce); refreshMachines() }
+    catch (e) { hint.textContent = t('error') + e.message }
+  }
   async function refreshMachines () {
     const box = qs('#machines')
     try {
@@ -580,33 +582,29 @@ async function selfTerminalScreen () {
       const holder = box.querySelector('.machine-list')
       for (const d of list) {
         const name = d.label ? `${d.label} · ${d.deviceId}` : d.deviceId
-        const b = el(`<button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}">🖥 ${esc(name)}</button>`)
-        b.addEventListener('click', () => host.openConsole(d.sub, name))
-        holder.appendChild(b)
+        const row = el(`<div class="machine-row" data-sub="${esc(d.sub)}">
+          <button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}"><span class="mdot conn" title="${esc(t('machine_checking'))}"></span>🖥 ${esc(name)}</button>
+          <button class="machine-x" data-testid="machine-remove" title="${esc(t('machine_remove'))}" aria-label="${esc(t('machine_remove'))}">✕</button>
+        </div>`)
+        row.querySelector('.machine').addEventListener('click', () => host.openConsole(d.sub, name))
+        row.querySelector('.machine-x').addEventListener('click', () => removeMachine(d))
+        holder.appendChild(row)
       }
+      updatePresence(list.map((d) => d.sub))
     } catch {
       box.innerHTML = `<span class="status">${t('machines_err')}</span>`
     }
   }
   refreshMachines()
+  // Re-sondeo periódico: cubre "el agente se cerró mientras la app seguía abierta".
+  // Se limpia en render() al re-renderizar la pantalla.
+  _probeTimer = setInterval(() => {
+    const subs = [...node.querySelectorAll('.machine-row')].map((r) => r.dataset.sub)
+    if (subs.length) updatePresence(subs)
+  }, 30000)
   // Refresca la lista tras aprobar una máquina (aparece de inmediato).
   const _origApprove = sm.approve.bind(sm)
   sm.approve = async (...a) => { const r = await _origApprove(...a); refreshMachines(); return r }
-
-  host.refreshMachineSelect(qs('#machineSel'))
-  qs('#machineSel').addEventListener('change', (e) => {
-    if (!e.target.value) return
-    qs('#machineAddr').value = e.target.value
-    const m = loadMachines().find((x) => x.pub === e.target.value)
-    if (m && !qs('#machineAlias').value) qs('#machineAlias').value = m.alias
-  })
-  qs('#openBtn').addEventListener('click', () => {
-    const pub = qs('#machineAddr').value.trim()
-    const alias = qs('#machineAlias').value.trim()
-    if (!pub) { hint.textContent = t('need_addr'); return }
-    qs('#machineAddr').value = ''; qs('#machineAlias').value = ''
-    host.openConsole(pub, alias)
-  })
 
   return node
 }

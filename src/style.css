@@ -60,18 +60,20 @@ textarea { width: 100%; min-height: 92px; margin: 12px 0; background: #0b0820; c
 /* Tus máquinas (autodescubiertas del vault) */
 .machines { margin-bottom: 12px; }
 .machine-list { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.machine-row { display: inline-flex; align-items: stretch; }
 .machine { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-color: var(--brand); font-weight: 600; }
+.machine-row .machine { border-radius: 10px 0 0 10px; }
 .machine:hover { background: #1b1830; }
+/* Punto de estado (presencia por ping/pong): comprobando / en línea / desconectada */
+.mdot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.mdot.conn { background: #d9a441; animation: pulse 1s infinite; }
+.mdot.on { background: #3fbf6f; box-shadow: 0 0 0 3px rgba(63, 191, 111, .18); }
+.mdot.off { background: #6b6685; }
+.machine-x { border: 1px solid var(--brand); border-left: none; border-radius: 0 10px 10px 0; background: var(--panel); color: var(--muted); padding: 0 12px; font-size: 1rem; line-height: 1; }
+.machine-x:hover { background: #3a2a2a; color: #fff; border-color: #e5484d; }
+button.primary.danger { background: #e5484d; border-color: #e5484d; }
 .setup { background: #0b0820; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-top: 10px; }
 .setup pre { background: #06040f; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; font-size: .85rem; }
-.manual { margin-bottom: 10px; }
-.manual summary { color: var(--muted); font-size: .9rem; cursor: pointer; }
-.manual .machine-bar { margin-top: 10px; }
-
-.machine-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
-.machine-bar input { flex: 1; min-width: 200px; background: #0b0820; color: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; }
-.machine-bar input.alias { flex: 0 0 150px; min-width: 120px; }
-.machine-bar select { background: #0b0820; color: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; }
 
 .term-card { display: flex; flex-direction: column; }
 
