@@ -264,9 +264,11 @@ topbar.addEventListener('dotrino-profile', openMyProfile)
 let link = null // { paired, id, cert, iss, proxy, deviceId } (modo vault)
 let deviceVault = null // handle de @dotrino/vault (este dispositivo como bóveda)
 let _probeTimer = null // re-sondeo de presencia; se limpia al re-renderizar
+let _probeClient = null // cliente del proxy solo para la sonda de presencia (modo vault externo)
 
 async function render () {
   if (_probeTimer) { clearInterval(_probeTimer); _probeTimer = null }
+  if (_probeClient) { try { _probeClient.close() } catch (_) {} _probeClient = null }
   link = await getLink().catch(() => ({ paired: false }))
   installBtn.textContent = t('install')
   app.innerHTML = ''
@@ -450,10 +452,33 @@ function terminalScreen (link) {
       const holder = box.querySelector('.machine-list')
       for (const d of list) {
         const name = d.label && d.label !== 'cli' ? `${d.label} · ${d.deviceId}` : d.deviceId
-        const b = el(`<button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}">🖥 ${esc(name)}</button>`)
-        b.addEventListener('click', () => host.openConsole(d.sub, name))
-        holder.appendChild(b)
+        const row = el(`<div class="machine-row" data-sub="${esc(d.sub)}">
+          <button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}"><span class="mdot conn" title="${esc(t('machine_checking'))}"></span>🖥 ${esc(name)}</button>
+        </div>`)
+        row.querySelector('.machine').addEventListener('click', () => host.openConsole(d.sub, name))
+        holder.appendChild(row)
       }
+      // Presencia (ping/pong) igual que en modo dispositivo: un cliente del proxy
+      // manda un ping a cada máquina y pinta el punto verde/gris según responda.
+      const subs = list.map((d) => d.sub)
+      const updatePresence = async () => {
+        if (!_probeClient) return
+        const online = await probeOnline(_probeClient, subs)
+        for (const row of box.querySelectorAll('.machine-row')) {
+          const dot = row.querySelector('.mdot'); if (!dot) continue
+          const on = online.has(row.dataset.sub)
+          dot.className = 'mdot ' + (on ? 'on' : 'off')
+          dot.title = on ? t('machine_online') : t('machine_offline')
+        }
+      }
+      try {
+        const { WebSocketProxyClient } = await import('@dotrino/proxy-client')
+        _probeClient = new WebSocketProxyClient({ url: link.proxy || 'wss://proxy.dotrino.com', enableWebRTC: false, autoReconnect: true })
+        await _probeClient.connect()
+        await updatePresence()
+        // Re-sondeo periódico: cubre "el agente se cerró con la app abierta".
+        _probeTimer = setInterval(updatePresence, 30000)
+      } catch (_) { /* sin presencia si el proxy no conecta; la lista sigue usable */ }
     } catch {
       box.innerHTML = `<span class="status">${t('machines_err')}</span>`
     }
