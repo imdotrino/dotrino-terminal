@@ -22,7 +22,7 @@ const T = { HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT:
 export class AgentClient {
   /**
    * @param {{ id:object, cert:object, iss:string, proxy?:string, mode?:string }} link
-   *   enlace de vault.js (modo vault) o de selfMaster.js (modo self: el dispositivo
+   *   enlace de vault.js (modo vault) o de @dotrino/vault (modo self: el dispositivo
    *   es su propio vault; `cert` es el self-cert `P ← P` e `iss` es la propia P).
    * @param {object} opts
    * @param {string} opts.agentPubkey dirección (pubkey) de la máquina destino.

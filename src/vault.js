@@ -19,6 +19,16 @@ export async function identity () {
   return _id
 }
 
+// --- Preferencia de modo de la terminal (estado de UI, no del pilar) ---
+// 'self' = este dispositivo es su propia bóveda (@dotrino/vault); ausente = vault externo.
+const LS_MODE = 'dotrino-terminal:mode'
+export function selfModeEnabled () {
+  try { return localStorage.getItem(LS_MODE) === 'self' } catch { return false }
+}
+export function setSelfMode (on) {
+  try { on ? localStorage.setItem(LS_MODE, 'self') : localStorage.removeItem(LS_MODE) } catch {}
+}
+
 /**
  * Estado del enlace de ESTE dispositivo:
  * { paired:false } o { paired:true, id, cert, iss, proxy, deviceId, scope }.
@@ -53,7 +63,7 @@ export async function unpair () {
  * Enlace STANDALONE: este dispositivo (su identidad de navegador P) ES su propio
  * vault. No hay vault externo ni cert de dispositivo `P ← M`; en su lugar se usa un
  * self-cert `P ← P` (refrescado bajo demanda por el agente). La maestra pineada que
- * verifica el agente es la propia P. Ver selfMaster.js.
+ * verifica el agente es la propia P. Ver @dotrino/vault (startDeviceVault).
  * @returns {Promise<{mode:'self', id:object, iss:string, proxy:string, getSelfCert:()=>Promise<object>}>}
  */
 export async function getSelfLink () {
@@ -65,7 +75,7 @@ export async function getSelfLink () {
     id,
     iss,
     proxy: 'wss://proxy.dotrino.com',
-    // Self-cert perezoso (lo provee selfMaster.startSelfMaster). Si todavía no se
+    // Self-cert perezoso (lo provee @dotrino/vault#startDeviceVault). Si todavía no se
     // levantó el daemon, se genera uno fresco aquí vía signDelegation.
     async getSelfCert () {
       if (this._selfCert && this._selfCert.exp > Date.now() + 60_000) return this._selfCert

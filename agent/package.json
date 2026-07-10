@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/terminal-agent",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Agente de Dotrino Terminal: abre una shell (PTY) en la máquina del vault solo para el dispositivo enlazado, vía @dotrino/tunnel y cifrado E2E.",
   "type": "module",
   "bin": {

@@ -19,5 +19,9 @@ function commitMeta () {
 export default defineConfig({
   base: './',
   plugins: [commitMeta()],
+  // @dotrino/vault declara @dotrino/identity y @dotrino/proxy-client como peerDeps:
+  // deduplicar para que use LA copia de esta app (una sola instancia; y no arrastre
+  // otra versión por el symlink `file:` en desarrollo).
+  resolve: { dedupe: ['@dotrino/identity', '@dotrino/proxy-client'] },
   server: { port: 3400, host: true }
 })

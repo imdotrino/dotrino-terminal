@@ -45,11 +45,12 @@ try {
       qr,
       dir: opt('--dir'),
       label: opt('--label') || 'terminal-agent',
-      onChallenge: ({ deviceId, sas }) => {
-        console.log('\n  Compara este código con el del certificador y apruébalo allí:')
-        console.log(`    código: ${sas}`)
+      onChallenge: ({ deviceId, code }) => {
+        console.log('\n  Escribe ESTE código en tu bóveda para aprobar esta máquina:')
+        console.log(`    código: ${code}`)
         console.log(`    máquina: ${deviceId}`)
-        console.log('    (en terminal.dotrino.com pulsa "Aprobar", o en el PC del vault: dotrino-vault approve)\n')
+        console.log('    (en terminal.dotrino.com escríbelo en el campo y pulsa "Aprobar";')
+        console.log(`     en el PC del vault:  dotrino-vault approve ${code})\n`)
         console.log('  Esperando aprobación…')
       }
     })

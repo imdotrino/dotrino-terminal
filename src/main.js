@@ -13,8 +13,8 @@ import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil
 import { avatarDataUri, pubkeyId } from '@dotrino/identity/capabilities'
 import { createVaultProfileProvider } from '@dotrino/profile'
 import { createVaultReputation } from '@dotrino/reputation'
-import { getLink, getSelfLink, identity } from './vault.js'
-import { selfModeEnabled, setSelfMode, startSelfMaster } from './selfMaster.js'
+import { startDeviceVault } from '@dotrino/vault'
+import { getLink, getSelfLink, identity, selfModeEnabled, setSelfMode } from './vault.js'
 import { AgentClient } from './agentClient.js'
 import { qrSvg } from './qr.js'
 
@@ -63,13 +63,13 @@ const M = {
     self_pair_title: 'Enlaza una máquina',
     self_pair_body: 'En la máquina destino (servidor, otra PC…), con Node 20+:',
     self_pair_step1: '1 · Pega este código al enrolar el agente (o pégalo después):',
-    self_pair_step2: '2 · Compara el código de 6 dígitos que muestra el agente con el de aquí y apruébalo.',
+    self_pair_step2: '2 · Cuando la máquina se conecte, escribe aquí el código de 6 dígitos que <b>ella</b> muestra y apruébala.',
     self_pair_wait: 'Esperando a que la máquina se conecte…',
     self_pair_again: 'Generar otro código',
     self_pair_new: 'Enlazar otra máquina',
     self_empty: 'Aún no tienes máquinas enlazadas. Genera un código arriba y enrólalo en la máquina destino.',
-    self_pending: (dev, sas) => `La máquina <code>${dev}</code> pide acceso. Compara el código con el que muestra el agente y aprueba:`,
-    self_sas: 'Código a comparar',
+    self_pending: (dev) => `La máquina <code>${dev}</code> pide acceso. Escribe el código que <b>muestra la máquina</b> para aprobarla:`,
+    self_code_ph: 'Código de 6 dígitos',
     self_approve: 'Aprobar',
     self_reject: 'Rechazar',
     self_approved: (dev) => `Máquina <code>${dev}</code> enlazada.`,
@@ -125,13 +125,13 @@ const M = {
     self_pair_title: 'Link a machine',
     self_pair_body: 'On the target machine (a server, another PC…), with Node 20+:',
     self_pair_step1: '1 · Paste this code when enrolling the agent (or paste it later):',
-    self_pair_step2: '2 · Compare the 6-digit code the agent shows with the one here and approve it.',
+    self_pair_step2: '2 · When the machine connects, type here the 6-digit code <b>it</b> shows and approve it.',
     self_pair_wait: 'Waiting for the machine to connect…',
     self_pair_again: 'Generate another code',
     self_pair_new: 'Link another machine',
     self_empty: 'You have no machines linked yet. Generate a code above and enroll it on the target machine.',
-    self_pending: (dev, sas) => `Machine <code>${dev}</code> is requesting access. Compare this code with the one the agent shows and approve:`,
-    self_sas: 'Code to compare',
+    self_pending: (dev) => `Machine <code>${dev}</code> is requesting access. Type the code <b>shown on the machine</b> to approve it:`,
+    self_code_ph: '6-digit code',
     self_approve: 'Approve',
     self_reject: 'Reject',
     self_approved: (dev) => `Machine <code>${dev}</code> linked.`,
@@ -204,7 +204,7 @@ topbar.addEventListener('dotrino-profile', openMyProfile)
 
 // ---------- Render de estados ----------
 let link = null // { paired, id, cert, iss, proxy, deviceId } (modo vault)
-let selfMaster = null // instancia del daemon del modo dispositivo (selfMaster.js)
+let deviceVault = null // handle de @dotrino/vault (este dispositivo como bóveda)
 
 async function render () {
   link = await getLink().catch(() => ({ paired: false }))
@@ -222,8 +222,8 @@ async function render () {
 /** Sale del modo standalone (cierra el daemon) y vuelve a la pantalla de elección. */
 async function exitSelfMode () {
   setSelfMode(false)
-  try { selfMaster?.close() } catch (_) {}
-  selfMaster = null
+  try { deviceVault?.close() } catch (_) {}
+  deviceVault = null
   render()
 }
 
@@ -455,8 +455,8 @@ async function selfTerminalScreen () {
   // Levanta el demonio (listener de enrolamiento + consulta de máquinas/revocación).
   let sm
   try {
-    sm = await startSelfMaster(id)
-    selfMaster = sm
+    sm = await startDeviceVault(id)
+    deviceVault = sm
   } catch (_) {
     return el(`<section class="card"><p class="cta">${t('self_proxy_err')}</p>
       <p><button id="retrySelf" class="primary">${t('recheck')}</button>
@@ -528,20 +528,35 @@ async function selfTerminalScreen () {
       if (pairBox.querySelector('[data-pending]')) renderPairIdle()
       return
     }
+    // NO mostramos el código: el humano lo LEE de la máquina y lo TIPEA aquí. La
+    // máquina solo acepta el cert si el código coincide con el que ella generó →
+    // aprobar a ciegas (sin ir a la máquina) no enrola a un impostor.
     const rows = list.map((x) => `
       <div class="pending" data-pending data-device="${esc(x.deviceId)}">
-        <p class="status">${t('self_pending', esc(x.deviceId), esc(x.sas || ''))}</p>
-        <div class="sas">${esc(x.sas || '------')}</div>
-        <span class="status">${t('self_sas')}</span>
+        <p class="status">${t('self_pending', esc(x.deviceId))}</p>
         <div class="pair-actions">
-          <button class="primary" data-approve="${esc(x.deviceId)}">${t('self_approve')}</button>
+          <input class="code-input" data-code="${esc(x.deviceId)}" type="text" inputmode="numeric"
+                 autocomplete="off" maxlength="8" placeholder="${esc(t('self_code_ph'))}"
+                 aria-label="${esc(t('self_code_ph'))}" data-testid="pair-code" />
+          <button class="primary" data-approve="${esc(x.deviceId)}" data-testid="pair-approve">${t('self_approve')}</button>
           <button class="link" data-reject="${esc(x.deviceId)}">${t('self_reject')}</button>
         </div>
       </div>`).join('')
     pairBox.innerHTML = `<div class="setup">${rows}</div>`
-    pairBox.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
-      try { await sm.approve(b.dataset.approve); hint.textContent = t('self_approved', esc(b.dataset.approve)) } catch (e) { hint.textContent = t('error') + e.message }
-    }))
+    const approveWith = async (b) => {
+      const dev = b.dataset.approve
+      const input = pairBox.querySelector(`input[data-code="${CSS.escape(dev)}"]`)
+      const code = (input?.value || '').trim()
+      if (!code) { input?.focus(); return }
+      b.disabled = true
+      try { await sm.approve(dev, code); hint.textContent = t('self_approved', esc(dev)) }
+      catch (e) { hint.textContent = t('error') + e.message; b.disabled = false }
+    }
+    pairBox.querySelectorAll('[data-approve]').forEach((b) => {
+      b.addEventListener('click', () => approveWith(b))
+      const input = pairBox.querySelector(`input[data-code="${CSS.escape(b.dataset.approve)}"]`)
+      input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') approveWith(b) })
+    })
     pairBox.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', () => {
       sm.reject(b.dataset.reject); hint.textContent = t('self_rejected')
     }))
