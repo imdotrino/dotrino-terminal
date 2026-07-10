@@ -267,11 +267,8 @@ function terminalScreen (link) {
           <div class="setup">
             <b>${t('setup_title')}</b>
             <p class="status">${t('setup_body')}</p>
-            <pre><code>git clone https://github.com/imdotrino/dotrino-terminal
-cd dotrino-terminal/agent
-npm install
-npx dotrino-terminal-agent enroll   # 1 · ${lang === 'en' ? 'once' : 'una vez'}
-npx dotrino-terminal-agent          # 2 · ${lang === 'en' ? 'keep it running' : 'déjalo corriendo'}</code></pre>
+            <pre><code>npx @dotrino/terminal-agent enroll   # 1 · ${lang === 'en' ? 'once' : 'una vez'}
+npx @dotrino/terminal-agent          # 2 · ${lang === 'en' ? 'keep it running' : 'déjalo corriendo'}</code></pre>
             <p class="status">1 · ${t('setup_s1')}</p>
             <p class="status">2 · ${t('setup_s2')}</p>
           </div>`

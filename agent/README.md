@@ -26,9 +26,8 @@ solo su propia sub-clave `D` + `cert` y la pública maestra pineada.
 ## Uso
 
 ```sh
-npm install
-dotrino-terminal-agent enroll          # enlazar esta máquina (una vez)
-dotrino-terminal-agent                 # correr; imprime su "dirección de máquina"
+npx @dotrino/terminal-agent enroll     # enlazar esta máquina (una vez)
+npx @dotrino/terminal-agent            # correr (la máquina aparece sola en la app)
 #   [--proxy wss://…] [--shell /bin/zsh] [--dir /ruta]
 ```
 
