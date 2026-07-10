@@ -177,9 +177,12 @@ function installCmds (sub) {
   const sh = `curl -fsSL https://dotrino.com/install.sh | sh -s -- ${AGENT_PKG}${arg}`
   const ps = `& ([scriptblock]::Create((irm https://dotrino.com/install.ps1))) ${AGENT_PKG}${arg}`
   const npx = `npx ${AGENT_PKG}${arg}`
+  // Cada comando en su propio bloque copiable (mismo formato para los tres).
   return `<pre><code>${esc(sh)}</code></pre>
-      <p class="status">${t('install_win')} <code>${esc(ps)}</code></p>
-      <p class="status">${t('install_alt')} <code>${esc(npx)}</code></p>`
+      <p class="status">${t('install_win')}</p>
+      <pre><code>${esc(ps)}</code></pre>
+      <p class="status">${t('install_alt')}</p>
+      <pre><code>${esc(npx)}</code></pre>`
 }
 
 // Confirmación con modal propio (nunca confirm() del navegador — §5). Devuelve bool.
