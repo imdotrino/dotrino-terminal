@@ -10,8 +10,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
 import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil+support)
-import { avatarDataUri, pubkeyId } from '@dotrino/identity/capabilities'
-import { createVaultProfileProvider } from '@dotrino/profile'
+import { pubkeyId } from '@dotrino/identity/capabilities'
 import { createVaultReputation } from '@dotrino/reputation'
 import { startDeviceVault } from '@dotrino/vault'
 import { getLink, getSelfLink, identity, selfModeEnabled, setSelfMode } from './vault.js'
@@ -223,37 +222,18 @@ function probeOnline (client, subs, { timeoutMs = 3000 } = {}) {
   })
 }
 
-// ---------- Mi perfil (§6.1): el botón lo pone el topbar; abrimos <dotrino-profile> ----------
-let _provider = null
-async function ensureProvider (id) {
-  if (_provider) return _provider
-  let reputation = null
-  try { reputation = createVaultReputation(id) } catch {}
-  try { _provider = createVaultProfileProvider({ identity: id, reputation }) } catch { _provider = null }
-  return _provider
-}
-async function openMyProfile () {
-  const id = await identity().catch(() => null)
-  const pk = id?.me?.publickey
-  if (!pk) return
-  document.querySelector('dotrino-profile')?.remove()
-  const p = document.createElement('dotrino-profile')
-  p.setAttribute('modal', '')
-  p.setAttribute('mode', 'self')
-  p.setAttribute('pubkey', pk)
-  if (id.me?.nickname) p.setAttribute('name', id.me.nickname)
-  p.setAttribute('lang', lang)
-  ensureProvider(id).then((prov) => { if (prov) p.provider = prov })
-  p.addEventListener('cc-profile-close', () => p.remove())
-  document.body.appendChild(p)
-}
-topbar.addEventListener('dotrino-profile', openMyProfile)
-;(async () => { // avatar del perfil ACTIVO → se lo pasamos al topbar por atributo
+// ---------- Mi perfil (§6.1): el topbar es DUEÑO del modal ----------
+// Le pasamos identity + reputation del vault; el topbar deriva el avatar del perfil
+// activo y abre <dotrino-profile mode="self"> él mismo (read-only, tematizado por el
+// bloque `dotrino-profile { --ccp-* }` de style.css). Esta app ya no renderiza el modal
+// ni fija @dotrino/profile: viaja dentro de @dotrino/topbar.
+;(async () => {
   try {
     const id = await identity()
-    const prof = id.currentProfile ? await id.currentProfile() : null
-    const pk = prof?.pubkey || id?.me?.publickey
-    if (pk) topbar.setAttribute('avatar', avatarDataUri(pk, { size: 64 }))
+    let reputation = null
+    try { reputation = createVaultReputation(id) } catch {}
+    topbar.identity = id
+    topbar.reputation = reputation
   } catch {}
 })()
 
