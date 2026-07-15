@@ -14,7 +14,7 @@
     "@dotrino/install": "0.3.0",
     "@dotrino/nav": "0.2.1",
     "@dotrino/proxy-client": "0.6.4",
-    "@dotrino/reputation": "0.5.0",
+    "@dotrino/reputation": "0.6.0",
     "@dotrino/store": "0.4.0",
     "@dotrino/topbar": "0.2.1",
     "@dotrino/vault": "0.1.2",
