@@ -255,7 +255,10 @@ async function render () {
   if (link.paired) {
     app.appendChild(terminalScreen(link))
   } else if (selfModeEnabled()) {
-    app.appendChild(await selfTerminalScreen())
+    // Sesión vieja con self-mode: derivar al emparejador independiente.
+    const back = encodeURIComponent(location.origin + location.pathname)
+    location.href = `https://vault.dotrino.com/pair?back=${back}`
+    return
   } else {
     app.appendChild(choiceScreen())
   }
@@ -304,9 +307,9 @@ function choiceScreen () {
     node.querySelector('#chkmsg').textContent = t('still_not')
     e.target.disabled = false
   })
-  node.querySelector('#goSelf').addEventListener('click', async () => {
-    setSelfMode(true)
-    render()
+  node.querySelector('#goSelf').addEventListener('click', () => {
+    const back = encodeURIComponent(location.origin + location.pathname)
+    location.href = `https://vault.dotrino.com/pair?back=${back}`
   })
   return node
 }
