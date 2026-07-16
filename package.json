@@ -10,13 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@dotrino/identity": "0.17.0",
+    "@dotrino/identity": "0.21.0",
     "@dotrino/install": "0.3.0",
     "@dotrino/nav": "0.2.1",
     "@dotrino/proxy-client": "0.6.4",
     "@dotrino/reputation": "0.6.0",
     "@dotrino/store": "0.4.0",
-    "@dotrino/topbar": "0.2.3",
+    "@dotrino/topbar": "0.4.0",
     "@dotrino/vault": "0.1.2",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
