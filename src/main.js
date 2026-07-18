@@ -11,7 +11,7 @@ import '@xterm/xterm/css/xterm.css'
 import './style.css'
 import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil+support)
 import { createVaultReputation } from '@dotrino/reputation'
-import { getLink, identity, selfModeEnabled } from './vault.js'
+import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
 
 // ---------- i18n (bilingüe es/en, §9) ----------
@@ -38,6 +38,7 @@ const M = {
     setup_s1: 'Enlázala a tu bóveda: te pedirá el código de <code>dotrino-vault pair</code> (en el PC de tu bóveda) y su aprobación.',
     setup_s2: 'Déjalo corriendo. La máquina aparecerá aquí sola, en "Tus máquinas".',
     linked_to: (dev) => `Dispositivo <code>${dev}</code> conectado a tu bóveda · abre una o varias consolas en tus máquinas.`,
+    self_hint: 'Este navegador es tu bóveda · abre una o varias consolas en tus máquinas.',
     connecting: (a) => `Conectando a ${a}…`,
     connected: (a) => `Conectado a ${a}`,
     conn_fail: 'No se pudo conectar: ',
@@ -73,6 +74,7 @@ const M = {
     setup_s1: 'Link it to your vault: it will ask for the code from <code>dotrino-vault pair</code> (on your vault PC) and its approval.',
     setup_s2: 'Leave it running. The machine will show up here by itself, under "Your machines".',
     linked_to: (dev) => `Device <code>${dev}</code> connected to your vault · open one or more consoles on your machines.`,
+    self_hint: 'This browser is your vault · open one or more consoles on your machines.',
     connecting: (a) => `Connecting to ${a}…`,
     connected: (a) => `Connected to ${a}`,
     conn_fail: 'Could not connect: ',
@@ -169,6 +171,16 @@ let link = null // { paired, id, cert, iss, proxy, deviceId } (modo vault)
 let _probeTimer = null // re-sondeo de presencia; se limpia al re-renderizar
 let _probeClient = null // cliente del proxy solo para la sonda de presencia (modo vault externo)
 
+// ¿Este navegador (su propia identidad) tiene máquinas enroladas bajo su self-vault
+// (activado en profile.dotrino.com/#myvault)? Mismo filtro que usa terminalScreen para
+// autodescubrir: dispositivos con label real (no 'cli'), que no sean uno mismo, vigentes.
+async function selfMachines (id) {
+  const { devices } = await id.listVaultDevices()
+  const mine = id.me?.publickey
+  const now = Date.now()
+  return (devices || []).filter((d) => d.sub && d.sub !== mine && d.label && d.label !== 'cli' && (!d.exp || d.exp > now))
+}
+
 async function render () {
   if (_probeTimer) { clearInterval(_probeTimer); _probeTimer = null }
   if (_probeClient) { try { _probeClient.close() } catch (_) {} _probeClient = null }
@@ -177,14 +189,20 @@ async function render () {
   app.innerHTML = ''
   if (link.paired) {
     app.appendChild(terminalScreen(link))
-  } else if (selfModeEnabled()) {
-    // Sesión vieja con self-mode: derivar al emparejador independiente.
-    const back = encodeURIComponent(location.origin + location.pathname)
-    location.href = `https://profile.dotrino.com/?back=${back}#myvault`
     return
-  } else {
-    app.appendChild(choiceScreen())
   }
+  // Sin vault externo: ¿este navegador es su PROPIA bóveda (self)? Si su identidad
+  // ya tiene máquinas enroladas (self-vault activado y agentes enlazados desde
+  // profile.dotrino.com/#myvault), operamos en modo self reusando el gestor de
+  // consolas — el emparejamiento en sí se hace en profile, no aquí.
+  try {
+    const selfLink = await getSelfLink()
+    if (selfLink.id?.me?.publickey && (await selfMachines(selfLink.id)).length) {
+      app.appendChild(terminalScreen(selfLink))
+      return
+    }
+  } catch (_) { /* sin self-vault o sin máquinas: cae a la elección de modo */ }
+  app.appendChild(choiceScreen())
 }
 
 // --- Pantalla: elegir modo (vault externo vs dispositivo como vault) ---
@@ -310,7 +328,7 @@ function terminalScreen (link) {
       </div>
       <div id="tabs" class="tabs"></div>
       <div id="terms" class="terms"></div>
-      <span id="hint" class="status">${t('linked_to', esc(link.deviceId || ''))}</span>
+      <span id="hint" class="status">${link.mode === 'self' ? t('self_hint') : t('linked_to', esc(link.deviceId || ''))}</span>
     </section>`)
   const qs = (s) => node.querySelector(s)
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
