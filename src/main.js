@@ -223,7 +223,7 @@ function choiceScreen () {
       </div>
       <div id="vaultSteps" hidden>
         <p class="cta">${t('step1')} <a href="https://vault.dotrino.com" target="_blank" rel="noopener">vault.dotrino.com</a></p>
-        <p class="cta">${t('step2')} <a href="https://profile.dotrino.com/#vault" target="_blank" rel="noopener">profile.dotrino.com</a></p>
+        <p class="cta">${t('step2')} <a href="https://profile.dotrino.com/vault" target="_blank" rel="noopener">profile.dotrino.com</a></p>
         <p>${t('step3')} <button id="recheck" class="primary">${t('recheck')}</button> <span id="chkmsg" class="status"></span></p>
       </div>
       <p class="status"><button id="backFromVault" hidden class="link">${t('self_back_vault')}</button></p>
@@ -242,7 +242,7 @@ function choiceScreen () {
   })
   node.querySelector('#goSelf').addEventListener('click', () => {
     const back = encodeURIComponent(location.origin + location.pathname)
-    location.href = `https://profile.dotrino.com/?back=${back}#myvault`
+    location.href = `https://profile.dotrino.com/myvault?back=${back}`
   })
   return node
 }
