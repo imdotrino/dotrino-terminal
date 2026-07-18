@@ -257,7 +257,7 @@ async function render () {
   } else if (selfModeEnabled()) {
     // Sesión vieja con self-mode: derivar al emparejador independiente.
     const back = encodeURIComponent(location.origin + location.pathname)
-    location.href = `https://vault.dotrino.com/pair?back=${back}`
+    location.href = `https://profile.dotrino.com/?back=${back}#myvault`
     return
   } else {
     app.appendChild(choiceScreen())
@@ -309,7 +309,7 @@ function choiceScreen () {
   })
   node.querySelector('#goSelf').addEventListener('click', () => {
     const back = encodeURIComponent(location.origin + location.pathname)
-    location.href = `https://vault.dotrino.com/pair?back=${back}`
+    location.href = `https://profile.dotrino.com/?back=${back}#myvault`
   })
   return node
 }
