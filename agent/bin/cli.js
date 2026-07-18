@@ -34,9 +34,9 @@ datos en ${dataDir()} (override DOTRINO_TERMINAL_DIR)`)
 
 async function doEnroll (dir) {
   console.log('Enlazar esta máquina con tu vault.')
-  console.log('El código lo generas en el CERTIFICADOR (tu vault). Hay dos formas:')
-  console.log('  · Sin vault externo → abre https://terminal.dotrino.com, elige')
-  console.log('    "Usar este dispositivo como bóveda" → "Enlazar otra máquina" y copia el código.')
+  console.log('El código lo generas en tu bóveda. Hay dos formas:')
+  console.log('  · Sin vault externo → abre https://profile.dotrino.com/#myvault,')
+  console.log('    activa la bóveda y pulsa "Generar código de emparejamiento"; copia el código.')
   console.log('  · Con vault en un PC → ahí corre `dotrino-vault pair` y copia el QR/JSON.\n')
   const text = await ask('Pega el código y Enter:\n> ')
   const qr = parseQr(text)
@@ -49,7 +49,7 @@ async function doEnroll (dir) {
       console.log('\n  Escribe ESTE código en tu bóveda para aprobar esta máquina:')
       console.log(`    código: ${code}`)
       console.log(`    máquina: ${deviceId}`)
-      console.log('    (en terminal.dotrino.com escríbelo en el campo y pulsa "Aprobar";')
+      console.log('    (en profile.dotrino.com/#myvault escríbelo en el campo y pulsa "Aprobar";')
       console.log(`     en el PC del vault:  dotrino-vault approve ${code})\n`)
       console.log('  Esperando aprobación…')
     }
