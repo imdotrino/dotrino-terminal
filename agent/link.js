@@ -41,8 +41,24 @@ function saveLink (dir, link) {
   fs.writeFileSync(linkPath(dir), JSON.stringify(link, null, 2), { mode: 0o600 })
 }
 
+// Decodifica base64url a string UTF-8 (Node). El código copiable de la web
+// (profile.dotrino.com/#myvault) viaja en base64url para no exponer iss/token/sn.
+function b64urlDecode (s) {
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/')
+  while (s.length % 4) s += '='
+  return Buffer.from(s, 'base64').toString('utf8')
+}
+
 export function parseQr (text) {
-  const qr = JSON.parse(String(text).trim())
+  let s = String(text ?? '').trim()
+  const i = s.indexOf('#vault=')
+  if (i >= 0) s = s.slice(i + 7).trim()        // profile.dotrino.com/#vault=…
+  if (!s.startsWith('{')) {                     // no es JSON crudo → probar base64url
+    const json = b64urlDecode(s)
+    if (json && json.trim().startsWith('{')) s = json
+    else throw new Error('código de emparejamiento inválido (se espera JSON o base64url)')
+  }
+  const qr = JSON.parse(s)
   if (!qr?.iss || !qr?.proxy || !qr?.token || !qr?.sn) throw new Error('QR inválido (v2): faltan iss/proxy/token/sn')
   return qr
 }
