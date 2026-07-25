@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import {
-  makeDeviceKey, signWithDevice, verifyDelegation, makePairingCode, pubkeyId
+  makeDeviceKey, signWithDevice, verifyDelegation, makePairingCode, commitCode, pubkeyId
 } from '@dotrino/identity/capabilities'
 import { installNodeGlobals } from './node-globals.js'
 
@@ -85,7 +85,10 @@ export async function enroll ({ qr, label = 'terminal-agent', dir = dataDir(), o
     // lo mostramos y NO lo enviamos. La bóveda lo aprende solo cuando un humano lo tipea
     // y nos lo ECHA de vuelta → así aprobar exige TENER esta máquina (de aquí sale el código).
     const code = makePairingCode()
-    const data = { op: 'enroll', dpub: device.publickey, token: qr.token, sn: qr.sn, label, ts: Date.now() }
+    // El COMPROMISO del código (nunca el código): la bóveda lo recompone con lo que
+    // tipeas y solo entonces firma el cert → aprobar exige haber leído esta pantalla.
+    const commit = await commitCode({ code, dpub: device.publickey, sn: qr.sn })
+    const data = { op: 'enroll', dpub: device.publickey, token: qr.token, sn: qr.sn, commit, label, ts: Date.now() }
     const { signature } = await signWithDevice({ privateJwk: device.privateJwk, data })
 
     const done = new Promise((resolve, reject) => {
