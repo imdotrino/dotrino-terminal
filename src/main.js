@@ -116,8 +116,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const AGENT_PKG = '@dotrino/terminal-agent'
 function installCmds (sub) {
   const arg = sub ? ' ' + sub : ''
-  const sh = `curl -fsSL https://dotrino.com/install.sh | sh -s -- ${AGENT_PKG}${arg}`
-  const ps = `& ([scriptblock]::Create((irm https://dotrino.com/install.ps1))) ${AGENT_PKG}${arg}`
+  const sh = `curl -fsSL https://install.dotrino.com/install.sh | sh -s -- ${AGENT_PKG}${arg}`
+  const ps = `& ([scriptblock]::Create((irm https://install.dotrino.com/install.ps1))) ${AGENT_PKG}${arg}`
   const npx = `npx ${AGENT_PKG}${arg}`
   // Cada comando en su propio bloque copiable (mismo formato para los tres).
   return `<pre><code>${esc(sh)}</code></pre>
