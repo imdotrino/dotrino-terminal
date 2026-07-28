@@ -110,7 +110,7 @@ function el (html) { const tpl = document.createElement('template'); tpl.innerHT
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
 // Comandos para instalar/correr el agente en la máquina destino. El one-liner
-// curl/irm (instalador universal hosteado en dotrino.com) baja Node si falta →
+// curl/irm (instalador universal del ecosistema, en install.dotrino.com) baja Node si falta →
 // "pega y ya"; npx queda como alternativa si ya tienes Node. Mismo instalador
 // reutilizable por cualquier app del ecosistema (solo cambia el paquete).
 const AGENT_PKG = '@dotrino/terminal-agent'
