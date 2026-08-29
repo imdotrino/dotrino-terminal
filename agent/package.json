@@ -14,8 +14,8 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@dotrino/identity": "0.53.0",
-    "@dotrino/proxy-client": "0.10.1",
+    "@dotrino/identity": "0.61.0",
+    "@dotrino/proxy-client": "0.13.1",
     "@homebridge/node-pty-prebuilt-multiarch": "0.14.1-beta.2",
     "ws": "8.21.0"
   },
