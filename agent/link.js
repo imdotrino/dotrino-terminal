@@ -36,7 +36,7 @@ export function loadLink (dir = dataDir()) {
   try { return JSON.parse(fs.readFileSync(linkPath(dir), 'utf8')) } catch { return null }
 }
 
-function saveLink (dir, link) {
+export function saveLink (dir, link) {
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(linkPath(dir), JSON.stringify(link, null, 2), { mode: 0o600 })
 }

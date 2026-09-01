@@ -15,6 +15,7 @@
  * relay) → levantamos el canal cifrado (ECDH → AES-GCM).
  */
 import { verifyChain } from '@dotrino/identity/capabilities'
+import { sealersOf } from '@dotrino/identity/acta'
 import { makeEphemeral, deriveKey, seal, open } from '../shared/e2e.js'
 
 const T = { HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT: 'terminal.out', ERROR: 'terminal.error' }
@@ -97,9 +98,18 @@ export class AgentClient {
     this.client.sendByPubkey(this.agentPubkey, { type: T.HS, data, signature, cert })
     const res = await acked
 
-    // El ack debe: (1) encadenar a NUESTRA maestra, (2) estar firmado por la
+    // El ack debe: (1) venir de una llave que TU ACTA avala, (2) estar firmado por la
     // máquina que apuntamos, (3) atar nuestra pub efímera y el sid.
-    const chk = await verifyChain({ data: res.ack, signature: res.signature, cert: res.cert, trustedIssuer: this.link.iss })
+    //
+    // Lo (1) se comprobaba contra una llave fija (tu maestra). Con varias selladoras el
+    // papel de tu máquina puede venir firmado por otra bóveda tuya, así que lo que se
+    // consulta es el acta. Sin acta no se abre sesión: no hay con qué decidir.
+    const acta = this.link.acta || (await this.link.id?.profileActa?.().catch(() => null))?.acta
+    if (!acta) throw new Error('no tienes el acta de tu perfil: no puedo comprobar quién firmó el papel de esa máquina')
+    const chk = await verifyChain({
+      data: res.ack, signature: res.signature, cert: res.cert,
+      actaSeq: acta.seq, sealers: sealersOf(acta)
+    })
     if (!chk.ok) throw new Error('la máquina no está certificada por tu vault: ' + chk.reason)
     if (res.ack.machine !== this.agentPubkey) throw new Error('el ack vino de otra máquina')
     if (res.ack.ceph !== eph.pub || res.ack.sid !== res.sid) throw new Error('ack no corresponde a este handshake')
