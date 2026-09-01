@@ -21,9 +21,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId } from '@dotrino/identity/capabilities'
+import { sealersOf } from '@dotrino/identity/acta'
 import { installNodeGlobals } from './node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from './e2e.js'
-import { loadLink, dataDir } from './link.js'
+import { loadLink, saveLink, dataDir } from './link.js'
 
 const require = createRequire(import.meta.url)
 
@@ -100,6 +101,14 @@ export async function startAgent (opts = {}) {
         client.sendByPubkey(master, { type: VMSG.DEVICES, data, signature, cert: link.cert })
       })
       revokedSet = new Set((res.revoked || []).map((r) => r.nonce || r))
+      // EL ACTA VIENE CON LA LISTA, y es con lo que se juzga a quien nos habla: el papel de
+      // un peer puede venir firmado por otra selladora del mismo perfil, así que compararlo
+      // contra UNA llave fija (la maestra) dejaba fuera al multivault. Se guarda en disco
+      // porque si no, al reiniciar el agente no podría atender a nadie hasta el primer tic.
+      if (typeof res.acta?.seq === 'number' && link.acta?.seq !== res.acta.seq) {
+        link.acta = res.acta
+        try { saveLink(dir, link) } catch (_) {}
+      }
     } catch (e) {
       if (!opts.quiet) console.error('[terminal] no pude refrescar revocaciones (uso la cache):', e.message)
     }
@@ -128,7 +137,10 @@ export async function startAgent (opts = {}) {
     if (typeof data.ts !== 'number' || Math.abs(Date.now() - data.ts) > 5 * 60 * 1000) {
       return send(from, { type: T.ERROR, error: 'handshake vencido (posible replay, o el reloj del dispositivo está desfasado)' })
     }
-    const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, trustedIssuer: master, revoked: revokedSet })
+    // Manda el acta, no una llave fija. Sin acta no se atiende: no hay con qué decidir, así
+    // que no se decide que sí.
+    const ctx = link.acta ? { actaSeq: link.acta.seq, sealers: sealersOf(link.acta) } : { actaSeq: null, sealers: null }
+    const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...ctx, revoked: revokedSet })
     if (!chk.ok) return send(from, { type: T.ERROR, error: 'no autorizado: ' + chk.reason })
     if (data.op !== 'terminal.hs' || typeof data.eph !== 'string') return send(from, { type: T.ERROR, error: 'handshake inválido' })
 
