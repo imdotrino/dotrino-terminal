@@ -51,9 +51,8 @@ export class AgentClient {
     const { id, cert } = this.link
     const publickey = id.me?.publickey
     if (!publickey) return
-    const data = { op: 'identify', publickey, token: this.client.token, ts: Date.now() }
-    const { signature } = await id.signData(data)
-    await this.client.identify({ data, signature, cert })
+    // El sobre lo arma el pilar (`identifyAs`), que le pone el destinatario.
+    await this.client.identifyAs({ publickey, sign: (d) => id.signData(d), cert })
   }
 
   async connect () {
