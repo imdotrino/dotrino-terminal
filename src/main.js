@@ -13,12 +13,12 @@ import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil
 import { createVaultReputation } from '@dotrino/reputation'
 import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
-import { PING, PONG } from '@dotrino/remote-agent'
-import { listAgentsByLabel } from '@dotrino/remote-agent/discover'
+import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
 
-// El label con el que se enrola el agente (agent/link.js): así se encuentran las máquinas.
-const AGENT_LABEL = 'terminal-agent'
+// Lo que contesta el agente de terminal cuando se le pregunta qué es (agent/link.js).
+// NO es el nombre del acta: ese lo pone el dueño al emparejar («TerminalLocal»).
+const AGENT_KIND = 'terminal-agent'
 
 // ---------- i18n (bilingüe es/en, §9) ----------
 const M = {
@@ -32,7 +32,7 @@ const M = {
     install: 'Instalar',
     machines_title: 'Tus máquinas',
     machines_loading: 'Buscando tus máquinas…',
-    machines_none: 'Aún no tienes ninguna máquina con el agente instalado.',
+    machines_none: 'No hay ninguna máquina con el agente encendido. Si ya lo instalaste, comprueba que esté corriendo: aparecerá aquí sola.',
     machines_err: 'No se pudo consultar tu bóveda (¿está encendida?).',
     machine_online: 'En línea',
     machine_offline: 'Desconectada',
@@ -69,7 +69,7 @@ const M = {
     install: 'Install',
     machines_title: 'Your machines',
     machines_loading: 'Looking for your machines…',
-    machines_none: 'You have no machine with the agent installed yet.',
+    machines_none: 'No machine has the agent running. If you already installed it, check that it is running: it will show up here by itself.',
     machines_err: 'Could not reach your vault (is it on?).',
     machine_online: 'Online',
     machine_offline: 'Offline',
@@ -135,27 +135,6 @@ function installCmds (sub) {
       <pre><code>${esc(npx)}</code></pre>`
 }
 
-// Sonda de presencia (liveness) por ping/pong: manda un ping a cada pubkey por el
-// cliente del proxy y marca online las que responden `terminal.pong` dentro del
-// timeout. Definitivo (round-trip real), sin abrir sesión. Devuelve Set de pubkeys online.
-// Es la sonda del pilar (`ra.ping`/`ra.pong`), que contesta cualquier agente de remote-agent.
-function probeOnline (client, subs, { timeoutMs = 3000 } = {}) {
-  return new Promise((resolve) => {
-    if (!client || !subs || !subs.length) return resolve(new Set())
-    const nonceToSub = new Map()
-    const online = new Set()
-    const off = client.on('message', (_from, p) => {
-      if (p && p.type === PONG && nonceToSub.has(p.n)) online.add(nonceToSub.get(p.n))
-    })
-    for (const sub of subs) {
-      const n = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
-      nonceToSub.set(n, sub)
-      try { client.sendByPubkey(sub, { type: PING, n }) } catch (_) {}
-    }
-    setTimeout(() => { try { off() } catch (_) {} resolve(online) }, timeoutMs)
-  })
-}
-
 // ---------- Mi perfil (§6.1) ----------
 // Le pasamos identity + reputation al topbar: con eso pinta el avatar del perfil activo y
 // el menú de perfiles, que navega a profile.dotrino.com (ahí se edita el perfil).
@@ -177,11 +156,10 @@ let link = null // { paired, id, cert, iss, proxy, deviceId } (modo vault)
 let _probeTimer = null // re-sondeo de presencia; se limpia al re-renderizar
 let _probeClient = null // cliente del proxy solo para la sonda de presencia (modo vault externo)
 
-// ¿Este navegador (su propia identidad) tiene máquinas enroladas bajo su self-vault
-// (activado en profile.dotrino.com/#myvault)? Mismo filtro que usa terminalScreen para
-// autodescubrir: dispositivos con label real (no 'cli'), que no sean uno mismo, vigentes.
+// ¿Este navegador (su propia identidad) tiene aparatos enrolados bajo su self-vault
+// (activado en profile.dotrino.com/#myvault)? Cuáles son terminales lo dice la sonda.
 async function selfMachines (id) {
-  return listAgentsByLabel(id, AGENT_LABEL)
+  return listAgentsByLabel(id)
 }
 
 async function render () {
@@ -338,61 +316,63 @@ function terminalScreen (link) {
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
   const host = makeSessionHost({ tabsEl, termsEl, hint, link })
 
-  // --- AUTODESCUBRIMIENTO: tus máquinas = los miembros del acta con el label del agente
-  // (su pubkey `sub` es su dirección en el proxio). Sin pegar nada: eliges y abres.
+  // --- AUTODESCUBRIMIENTO: se pregunta a los miembros del acta qué son (`probeAgents`) y
+  // se listan los que contestan como terminal, con el nombre que les puso el dueño. Una
+  // máquina apagada no contesta y no sale; el re-sondeo la añade en cuanto se enciende.
   ;(async () => {
     const box = qs('#machines')
+    let members
     try {
-      // Quién es de tu cuenta lo dice el ACTA: sus miembros con el label del agente.
-      const list = await Promise.all((await listAgentsByLabel(link.id, AGENT_LABEL)).map(async (m) => ({
-        ...m, deviceId: (await pubkeyId(m.sub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
-      })))
-      if (!list.length) {
-        box.innerHTML = `
-          <p class="status">${t('machines_none')}</p>
-          <div class="setup">
-            <b>${t('setup_title')}</b>
-            <p class="status">${t('setup_body')}</p>
-            ${installCmds()}
-            <p class="status">1 · ${t('setup_s1')}</p>
-            <p class="status">2 · ${t('setup_s2')}</p>
-          </div>`
-        return
-      }
-      box.innerHTML = `<b>${t('machines_title')}</b><div class="machine-list"></div>`
-      const holder = box.querySelector('.machine-list')
-      for (const d of list) {
-        const name = d.deviceId
-        const row = el(`<div class="machine-row" data-sub="${esc(d.sub)}">
-          <button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}"><span class="mdot conn" title="${esc(t('machine_checking'))}"></span>🖥 ${esc(name)}</button>
-        </div>`)
-        row.querySelector('.machine').addEventListener('click', () => host.openConsole(d.sub, name))
-        holder.appendChild(row)
-      }
-      // Presencia (ping/pong) igual que en modo dispositivo: un cliente del proxy
-      // manda un ping a cada máquina y pinta el punto verde/gris según responda.
-      const subs = list.map((d) => d.sub)
-      const updatePresence = async () => {
-        if (!_probeClient) return
-        const online = await probeOnline(_probeClient, subs)
-        for (const row of box.querySelectorAll('.machine-row')) {
-          const dot = row.querySelector('.mdot'); if (!dot) continue
-          const on = online.has(row.dataset.sub)
-          dot.className = 'mdot ' + (on ? 'on' : 'off')
-          dot.title = on ? t('machine_online') : t('machine_offline')
-        }
-      }
-      try {
-        const { WebSocketProxyClient } = await import('@dotrino/proxy-client')
-        _probeClient = new WebSocketProxyClient({ url: link.proxy || 'wss://proxy.dotrino.com', enableWebRTC: false, autoReconnect: true })
-        await _probeClient.connect()
-        await updatePresence()
-        // Re-sondeo periódico: cubre "el agente se cerró con la app abierta".
-        _probeTimer = setInterval(updatePresence, 30000)
-      } catch (_) { /* sin presencia si el proxy no conecta; la lista sigue usable */ }
+      const { WebSocketProxyClient } = await import('@dotrino/proxy-client')
+      members = await listAgentsByLabel(link.id)
+      _probeClient = new WebSocketProxyClient({ url: link.proxy || 'wss://proxy.dotrino.com', enableWebRTC: false, autoReconnect: true })
+      await _probeClient.connect()
     } catch {
       box.innerHTML = `<span class="status">${t('machines_err')}</span>`
+      return
     }
+    const seen = new Map() // sub → fila: las que alguna vez contestaron como terminal
+    const holderOf = () => {
+      let holder = box.querySelector('.machine-list')
+      if (!holder) { box.innerHTML = `<b>${t('machines_title')}</b><div class="machine-list"></div>`; holder = box.querySelector('.machine-list') }
+      return holder
+    }
+    const showNone = () => {
+      box.innerHTML = `
+        <p class="status">${t('machines_none')}</p>
+        <div class="setup">
+          <b>${t('setup_title')}</b>
+          <p class="status">${t('setup_body')}</p>
+          ${installCmds()}
+          <p class="status">1 · ${t('setup_s1')}</p>
+          <p class="status">2 · ${t('setup_s2')}</p>
+        </div>`
+    }
+    const update = async () => {
+      if (!_probeClient) return
+      const found = await probeAgents(_probeClient, members.map((m) => m.sub))
+      for (const m of members) {
+        if (found.get(m.sub)?.kind !== AGENT_KIND || seen.has(m.sub)) continue
+        const deviceId = (await pubkeyId(m.sub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
+        const name = m.label ? `${m.label} · ${deviceId}` : deviceId
+        const row = el(`<div class="machine-row" data-sub="${esc(m.sub)}">
+          <button class="machine" data-testid="machine-item" title="${esc(deviceId)}"><span class="mdot"></span>🖥 ${esc(name)}</button>
+        </div>`)
+        row.querySelector('.machine').addEventListener('click', () => host.openConsole(m.sub, name))
+        holderOf().appendChild(row)
+        seen.set(m.sub, row)
+      }
+      for (const [sub, row] of seen) {
+        const on = found.has(sub)
+        const dot = row.querySelector('.mdot')
+        dot.className = 'mdot ' + (on ? 'on' : 'off')
+        dot.title = on ? t('machine_online') : t('machine_offline')
+      }
+      if (!seen.size) showNone()
+    }
+    await update()
+    // Re-sondeo: añade la máquina que se enciende y apaga el punto de la que se cierra.
+    _probeTimer = setInterval(update, 30000)
   })()
 
   return node
