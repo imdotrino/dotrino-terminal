@@ -13,6 +13,12 @@ import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil
 import { createVaultReputation } from '@dotrino/reputation'
 import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
+import { PING, PONG } from '@dotrino/remote-agent'
+import { listAgentsByLabel } from '@dotrino/remote-agent/discover'
+import { pubkeyId } from '@dotrino/identity/capabilities'
+
+// El label con el que se enrola el agente (agent/link.js): así se encuentran las máquinas.
+const AGENT_LABEL = 'terminal-agent'
 
 // ---------- i18n (bilingüe es/en, §9) ----------
 const M = {
@@ -44,6 +50,7 @@ const M = {
     conn_fail: 'No se pudo conectar: ',
     error: 'Error: ',
     close: 'Cerrar',
+    exited: (c) => `[la consola terminó (${c})]`,
     self_choice_title: '¿Cómo quieres entrar?',
     self_choice_intro: 'Para abrir una consola en tus máquinas necesitas certificarlas con una identidad. Elige dónde vive esa identidad:',
     self_choice_vault: 'Conectar tu bóveda',
@@ -80,6 +87,7 @@ const M = {
     conn_fail: 'Could not connect: ',
     error: 'Error: ',
     close: 'Close',
+    exited: (c) => `[console ended (${c})]`,
     self_choice_title: 'How do you want to sign in?',
     self_choice_intro: 'To open a console on your machines you need to certify them with an identity. Choose where that identity lives:',
     self_choice_vault: 'Connect your vault',
@@ -130,29 +138,27 @@ function installCmds (sub) {
 // Sonda de presencia (liveness) por ping/pong: manda un ping a cada pubkey por el
 // cliente del proxy y marca online las que responden `terminal.pong` dentro del
 // timeout. Definitivo (round-trip real), sin abrir sesión. Devuelve Set de pubkeys online.
-const PROBE = { PING: 'terminal.ping', PONG: 'terminal.pong' }
+// Es la sonda del pilar (`ra.ping`/`ra.pong`), que contesta cualquier agente de remote-agent.
 function probeOnline (client, subs, { timeoutMs = 3000 } = {}) {
   return new Promise((resolve) => {
     if (!client || !subs || !subs.length) return resolve(new Set())
     const nonceToSub = new Map()
     const online = new Set()
     const off = client.on('message', (_from, p) => {
-      if (p && p.type === PROBE.PONG && nonceToSub.has(p.n)) online.add(nonceToSub.get(p.n))
+      if (p && p.type === PONG && nonceToSub.has(p.n)) online.add(nonceToSub.get(p.n))
     })
     for (const sub of subs) {
       const n = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
       nonceToSub.set(n, sub)
-      try { client.sendByPubkey(sub, { type: PROBE.PING, n }) } catch (_) {}
+      try { client.sendByPubkey(sub, { type: PING, n }) } catch (_) {}
     }
     setTimeout(() => { try { off() } catch (_) {} resolve(online) }, timeoutMs)
   })
 }
 
-// ---------- Mi perfil (§6.1): el topbar es DUEÑO del modal ----------
-// Le pasamos identity + reputation del vault; el topbar deriva el avatar del perfil
-// activo y abre <dotrino-profile mode="self"> él mismo (read-only, tematizado por el
-// bloque `dotrino-profile { --ccp-* }` de style.css). Esta app ya no renderiza el modal
-// ni fija @dotrino/profile: viaja dentro de @dotrino/topbar.
+// ---------- Mi perfil (§6.1) ----------
+// Le pasamos identity + reputation al topbar: con eso pinta el avatar del perfil activo y
+// el menú de perfiles, que navega a profile.dotrino.com (ahí se edita el perfil).
 ;(async () => {
   try {
     const id = await identity()
@@ -175,10 +181,7 @@ let _probeClient = null // cliente del proxy solo para la sonda de presencia (mo
 // (activado en profile.dotrino.com/#myvault)? Mismo filtro que usa terminalScreen para
 // autodescubrir: dispositivos con label real (no 'cli'), que no sean uno mismo, vigentes.
 async function selfMachines (id) {
-  const { devices } = await id.listVaultDevices()
-  const mine = id.me?.publickey
-  const now = Date.now()
-  return (devices || []).filter((d) => d.sub && d.sub !== mine && d.label && d.label !== 'cli' && (!d.exp || d.exp > now))
+  return listAgentsByLabel(id, AGENT_LABEL)
 }
 
 async function render () {
@@ -302,6 +305,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       s.fit = new FitAddon(); s.term.loadAddon(s.fit)
       s.term.open(s.box); s.fit.fit()
       s.agent.onData = (d) => s.term.write(d)
+      s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`) }
       s.term.onData((d) => s.agent.input(d))
       await s.agent.openShell(s.term.cols, s.term.rows)
       s.onResize = () => { if (active === s) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows) } catch {} } }
@@ -334,24 +338,15 @@ function terminalScreen (link) {
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
   const host = makeSessionHost({ tabsEl, termsEl, hint, link })
 
-  // --- AUTODESCUBRIMIENTO: tus máquinas = los dispositivos enrolados en TU vault
-  // (vault.devices trae la pubkey `sub` de cada uno = su dirección en el proxy).
-  // Sin pegar nada: eliges y abres. El manual queda como camino avanzado.
+  // --- AUTODESCUBRIMIENTO: tus máquinas = los miembros del acta con el label del agente
+  // (su pubkey `sub` es su dirección en el proxio). Sin pegar nada: eliges y abres.
   ;(async () => {
     const box = qs('#machines')
     try {
-      const { devices } = await link.id.listVaultDevices()
-      const mine = link.id.me?.publickey
-      const now = Date.now()
-      const bySub = new Map() // dedupe por pubkey (renovaciones/re-emparejes) → el cert más nuevo
-      for (const d of devices || []) {
-        if (!d.sub || d.sub === mine || (d.exp && d.exp <= now)) continue
-        // Solo MÁQUINAS con agente (label propio, p. ej. 'terminal-agent'); los
-        // navegadores enrolados quedan con label 'cli' y no atienden consolas.
-        if (!d.label || d.label === 'cli') continue
-        if (!bySub.has(d.sub) || (d.exp || 0) > (bySub.get(d.sub).exp || 0)) bySub.set(d.sub, d)
-      }
-      const list = [...bySub.values()]
+      // Quién es de tu cuenta lo dice el ACTA: sus miembros con el label del agente.
+      const list = await Promise.all((await listAgentsByLabel(link.id, AGENT_LABEL)).map(async (m) => ({
+        ...m, deviceId: (await pubkeyId(m.sub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
+      })))
       if (!list.length) {
         box.innerHTML = `
           <p class="status">${t('machines_none')}</p>
@@ -367,7 +362,7 @@ function terminalScreen (link) {
       box.innerHTML = `<b>${t('machines_title')}</b><div class="machine-list"></div>`
       const holder = box.querySelector('.machine-list')
       for (const d of list) {
-        const name = d.label && d.label !== 'cli' ? `${d.label} · ${d.deviceId}` : d.deviceId
+        const name = d.deviceId
         const row = el(`<div class="machine-row" data-sub="${esc(d.sub)}">
           <button class="machine" data-testid="machine-item" title="${esc(d.deviceId)}"><span class="mdot conn" title="${esc(t('machine_checking'))}"></span>🖥 ${esc(name)}</button>
         </div>`)

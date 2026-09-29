@@ -1,7 +1,7 @@
 {
   "name": "@dotrino/terminal-agent",
-  "version": "0.2.15",
-  "description": "Agente de Dotrino Terminal: abre una shell (PTY) en la máquina del vault solo para el dispositivo enlazado, vía @dotrino/tunnel y cifrado E2E.",
+  "version": "0.3.0",
+  "description": "Agente de Dotrino Terminal: abre una shell (PTY) en esta máquina solo para los aparatos de tu cuenta, cifrada punto a punto, vía @dotrino/remote-agent.",
   "type": "module",
   "bin": {
     "dotrino-terminal-agent": "bin/cli.js"
@@ -9,19 +9,36 @@
   "exports": {
     ".": "./index.js"
   },
+  "files": [
+    "index.js",
+    "link.js",
+    "bin"
+  ],
   "scripts": {
     "start": "node bin/cli.js",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@dotrino/identity": "0.62.0",
-    "@dotrino/proxy-client": "0.13.1",
-    "@homebridge/node-pty-prebuilt-multiarch": "0.14.1-beta.2",
-    "ws": "8.21.0"
+    "@dotrino/identity": "0.105.0",
+    "@dotrino/proxy-client": "0.25.0",
+    "@dotrino/remote-agent": "0.10.0",
+    "@dotrino/update": "0.1.1",
+    "@dotrino/vault": "0.74.0",
+    "@homebridge/node-pty-prebuilt-multiarch": "0.14.1-beta.2"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imdotrino/dotrino-terminal.git",
+    "directory": "agent"
+  },
+  "homepage": "https://terminal.dotrino.com/",
   "devDependencies": {
-    "typescript": "5.9.3",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "typescript": "5.9.3"
   }
 }

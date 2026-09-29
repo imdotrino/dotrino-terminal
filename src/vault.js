@@ -67,12 +67,13 @@ export async function unpair () {
  * vault. No hay vault externo ni cert de dispositivo `P ← M`; en su lugar se usa un
  * self-cert `P ← P` (refrescado bajo demanda por el agente). La maestra pineada que
  * verifica el agente es la propia P. Ver @dotrino/vault (startDeviceVault).
- * @returns {Promise<{mode:'self', id:object, iss:string, proxy:string, getSelfCert:()=>Promise<object>}>}
+ * @returns {Promise<{mode:'self', id:any, iss?:string, proxy?:string, paired?:boolean, cert?:object, getSelfCert?:()=>Promise<any>}>}
  */
 export async function getSelfLink () {
   const id = await identity()
   const iss = id.me?.publickey
   if (!iss) return { mode: 'self', id, paired: false }
+  let selfCert = null
   return {
     mode: 'self',
     id,
@@ -81,12 +82,11 @@ export async function getSelfLink () {
     // Self-cert perezoso (lo provee @dotrino/vault#startDeviceVault). Si todavía no se
     // levantó el daemon, se genera uno fresco aquí vía signDelegation.
     async getSelfCert () {
-      if (this._selfCert && this._selfCert.exp > Date.now() + 60_000) return this._selfCert
-      const { cert } = await id.signDelegation(iss, 'vault:sign', { ttlMs: 24 * 60 * 60 * 1000 })
-      this._selfCert = cert
-      return cert
+      if (selfCert && selfCert.exp > Date.now() + 60_000) return selfCert
+      selfCert = (await id.signDelegation(iss, 'vault:sign', { ttlMs: 24 * 60 * 60 * 1000 })).cert
+      return selfCert
     },
-    // `cert` se resuelve bajo demanda (lo usa AgentClient como fallback).
-    get cert () { return this._selfCert || null }
+    // `cert` se resuelve bajo demanda (lo usa el cliente como repliegue).
+    get cert () { return selfCert }
   }
 }

@@ -1,0 +1,67 @@
+# Publica @dotrino/terminal-agent (la carpeta agent/) DESDE CI, no desde el portátil de nadie.
+#
+# Sin token: npm cambia un credencial efímero por la identidad OIDC de esta ejecución
+# (publicación de confianza) y firma la procedencia él solo. La confianza se declara en
+# npm, por paquete, con:
+#   npm trust github @dotrino/terminal-agent --file release.yml --repo imdotrino/dotrino-terminal
+# **El nombre de este archivo tiene que coincidir exacto.**
+#
+# Se dispara con un tag `agent-vX.Y.Z` (este repo también tiene la PWA, que se despliega
+# por deploy.yml con cada push a main). Y un SBOM por release (CUMPLIMIENTO.md §2).
+name: Release agent
+
+on:
+  push:
+    tags: ['agent-v*']
+
+permissions:
+  contents: write      # crear la release y subirle el SBOM
+  id-token: write      # OIDC: la publicación de confianza y la atestación
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # La publicación de confianza pide npm ≥11.5.1; Node 22 trae npm 10, por eso se sube.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+          registry-url: https://registry.npmjs.org
+
+      - run: npm i -g npm@latest
+      - run: npm ci
+
+      # El tag tiene que decir la misma versión que el package.json: si no, se publicaría
+      # una versión con los artefactos colgados de otra release.
+      - name: El tag coincide con la versión
+        run: test "agent-v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+
+      # LAS PRUEBAS ANTES DE PUBLICAR. Una versión que no pasa su suite no llega a npm.
+      - run: npm test
+
+      - name: SBOM (CycloneDX)
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm@latest \
+            --omit dev --output-format JSON \
+            --output-file "sbom-terminal-agent-$(node -p "require('./package.json').version").cdx.json"
+
+      - name: Atestiguar el SBOM
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: 'agent/sbom-*.cdx.json'
+
+      - name: Publicar en npm
+        run: npm publish --access public
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: 'agent/sbom-*.cdx.json'
+          generate_release_notes: true

@@ -1,227 +1,79 @@
 /**
- * @dotrino/terminal-agent — abre una shell real (PTY) SOLO para dispositivos
- * enlazados al mismo vault. Puede correr en CUALQUIER máquina: se enrola con el
- * vault como un dispositivo más (ver link.js), así que NO necesita la maestra —
- * solo su propia sub-clave `D` + `cert` y la pública maestra pineada (`iss`).
+ * @dotrino/terminal-agent — abre una shell real (PTY) SOLO para aparatos de tu cuenta.
  *
- * Autorización = el vault. Cada `terminal.hs` llega firmado por la `D` del cliente
- * con su `cert`; el agente verifica la cadena `D_cliente ← maestra` (misma maestra
- * que la suya) con `verifyChain`. Ambas puntas son peers certificados por el mismo
- * vault; ninguna tiene la clave maestra. El ack lo firma el agente con SU `D` y
- * adjunta su `cert`, para que el cliente compruebe que habla con una máquina que
- * el vault certificó (anti-MITM del relay).
+ * Lo común (enrolarse con la bóveda, handshake contra el ACTA, canal cifrado por sesión,
+ * revocación, renovación del papel, auditoría) lo hace `@dotrino/remote-agent`: este
+ * paquete solo sabe de PTY. Antes lo hacía todo a mano (su propio enrolamiento, su propio
+ * cifrado) y por eso se quedó atrás: con la bóveda actual no podía ni emparejarse.
  *
- * Transporte = el proxy (`@dotrino/proxy-client`): el agente se identifica bajo
- * SU pubkey y el cliente lo direcciona por ella. Revocación: refresca la lista del
- * vault (`vault.devices`) por el proxy; si el vault está offline, usa la última
- * cacheada + el TTL del cert acota el riesgo. I/O cifrado E2E (../shared/e2e.js).
+ * Payloads de dominio (van cifrados dentro de la sesión, el proxio no los ve):
+ *   cliente → agente: { type:'open', cols, rows } · { type:'input', data } ·
+ *                     { type:'resize', cols, rows } · { type:'close' }
+ *   agente → cliente: { type:'out', data } · { type:'exit', code }
  */
 import os from 'node:os'
-import fs from 'node:fs'
-import path from 'node:path'
 import { createRequire } from 'node:module'
-import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId } from '@dotrino/identity/capabilities'
-import { sealersOf } from '@dotrino/identity/acta'
-import { installNodeGlobals } from './node-globals.js'
-import { makeEphemeral, deriveKey, seal, open } from './e2e.js'
-import { loadLink, saveLink, dataDir } from './link.js'
+import { startRemoteAgent } from '@dotrino/remote-agent/agent'
+import { dataDir, LABEL } from './link.js'
 
 const require = createRequire(import.meta.url)
 
-const T = {
-  HS: 'terminal.hs', ACK: 'terminal.hs.ack', CMD: 'terminal.cmd', OUT: 'terminal.out', ERROR: 'terminal.error',
-  PING: 'terminal.ping', PONG: 'terminal.pong'
+export { LABEL }
+
+export function loadPty () {
+  // Binarios PREBUILT (Linux/macOS/Windows, sin toolchain), API idéntica a node-pty.
+  try { return require('@homebridge/node-pty-prebuilt-multiarch') } catch (e) {
+    throw new Error('PTY module missing. Reinstall the agent: `npx @dotrino/terminal-agent` (' + e.message + ')')
+  }
 }
-const VMSG = { DEVICES: 'vault.devices', DEVICES_RESULT: 'vault.devices.result', REVOKED: 'vault.revoked' }
-const SIGN_SCOPE = 'vault:sign'
-const SESSION_TTL_MS = 30 * 60 * 1000
-const REVOKE_REFRESH_MS = 5 * 60 * 1000
 
-export async function startAgent (opts = {}) {
-  const dir = opts.dir || dataDir()
-  const link = opts.link || loadLink(dir)
-  if (!link?.device?.privateJwk || !link?.cert || !link?.iss) {
-    throw new Error('esta máquina no está enlazada. Ejecuta primero: `npx @dotrino/terminal-agent enroll`.')
-  }
-  const master = link.iss
-  const myPub = link.device.publickey
-  const myId = (await pubkeyId(myPub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
+/** Atiende una sesión cifrada: una shell por sesión. Exportada para las pruebas. */
+export function servePty (session, pty, opts) {
+  let term = null
+  const kill = () => { try { term?.kill() } catch (_) {} term = null }
 
-  installNodeGlobals(dir)
-
-  // PTY nativo con binarios PREBUILT (Linux/macOS/Windows, sin toolchain): el fork
-  // `@homebridge/node-pty-prebuilt-multiarch` es API-idéntico a node-pty. Fallback a
-  // `node-pty` por si una instalación vieja lo trae.
-  let pty
-  try { pty = require('@homebridge/node-pty-prebuilt-multiarch') } catch {
-    try { pty = require('node-pty') } catch {
-      throw new Error('falta el módulo PTY. Reinstala el agente: `npx @dotrino/terminal-agent` (baja el binario prebuilt).')
-    }
-  }
-
-  const { getWebSocketProxyClient } = await import('@dotrino/proxy-client')
-  const proxyUrl = opts.proxyUrl || process.env.PROXY_URL || link.proxy || 'wss://proxy.dotrino.com'
-  const client = getWebSocketProxyClient({
-    url: proxyUrl, enableWebRTC: false, autoReconnect: true,
-    maxReconnectAttempts: 100000, reconnectDelay: 4000
-  })
-  await client.connect()
-
-  // Identificarse bajo la pubkey de ESTA máquina (firmado con su D).
-  const identify = async () => {
-    if (!client.token) return
-    const data = { op: 'identify', publickey: myPub, token: client.token, ts: Date.now() }
-    const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
-    await client.identify({ data, signature })
-  }
-  await identify()
-  client.on('token', () => { identify().catch(() => {}) })
-
-  // Bitácora persistente de sesiones (sessions.log, JSONL): qué dispositivo abrió
-  // consola y cuándo — auditoría local si un dispositivo tuyo cae en malas manos.
-  const sessionsLog = path.join(dir, 'sessions.log')
-  const audit = (op, info = {}) => {
-    try { fs.appendFileSync(sessionsLog, JSON.stringify({ ts: Date.now(), op, ...info }) + '\n') } catch (_) {}
-  }
-
-  const send = (to, obj) => { try { client.send(to, obj) } catch (e) { if (!opts.quiet) console.error('[terminal] send:', e.message) } }
-
-  // --- Revocación: refrescar la lista del vault por el proxy (best-effort) ---
-  let revokedSet = new Set()
-  async function refreshRevocations () {
-    try {
-      const data = { op: 'devices', publickey: myPub, ts: Date.now() }
-      const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
-      const res = await new Promise((resolve, reject) => {
-        const off = client.on('message', (_f, p) => {
-          if (p?.type === VMSG.DEVICES_RESULT) { off(); resolve(p) }
-          else if (p?.type === 'vault.error') { off(); reject(new Error(p.error)) }
-        })
-        setTimeout(() => { off(); reject(new Error('timeout')) }, 15000)
-        client.sendByPubkey(master, { type: VMSG.DEVICES, data, signature, cert: link.cert })
-      })
-      revokedSet = new Set((res.revoked || []).map((r) => r.nonce || r))
-      // EL ACTA VIENE CON LA LISTA, y es con lo que se juzga a quien nos habla: el papel de
-      // un peer puede venir firmado por otra selladora del mismo perfil, así que compararlo
-      // contra UNA llave fija (la maestra) dejaba fuera al multivault. Se guarda en disco
-      // porque si no, al reiniciar el agente no podría atender a nadie hasta el primer tic.
-      if (typeof res.acta?.seq === 'number' && link.acta?.seq !== res.acta.seq) {
-        link.acta = res.acta
-        try { saveLink(dir, link) } catch (_) {}
-      }
-    } catch (e) {
-      if (!opts.quiet) console.error('[terminal] no pude refrescar revocaciones (uso la cache):', e.message)
-    }
-  }
-  refreshRevocations()
-  const revTimer = setInterval(refreshRevocations, REVOKE_REFRESH_MS); revTimer.unref?.()
-
-  // sid -> { key, term, from, exp }
-  const sessions = new Map()
-  const sweeper = setInterval(() => {
-    const now = Date.now()
-    for (const [sid, s] of sessions) if (now > s.exp) { try { s.term?.kill() } catch {}; sessions.delete(sid); audit('session-expire', { sid: sid.slice(0, 8) }) }
-  }, 60 * 1000); sweeper.unref?.()
-
-  async function pushOut (s, data) {
-    if (!s.from) return
-    const env = await seal(s.key, { type: 'out', data }).catch(() => null)
-    if (env) send(s.from, { type: T.OUT, sid: s.sid, env })
-  }
-
-  async function handleHandshake (from, p) {
-    const { data, signature, cert } = p
-    if (!data || !signature || !cert) return send(from, { type: T.ERROR, error: 'handshake incompleto' })
-    // FRESCURA anti-replay: el HS debe ser reciente (±5 min); sin esto un relay
-    // malicioso podía reproducir handshakes viejos (sesiones huérfanas / DoS).
-    if (typeof data.ts !== 'number' || Math.abs(Date.now() - data.ts) > 5 * 60 * 1000) {
-      return send(from, { type: T.ERROR, error: 'handshake vencido (posible replay, o el reloj del dispositivo está desfasado)' })
-    }
-    // Manda el acta, no una llave fija. Sin acta no se atiende: no hay con qué decidir, así
-    // que no se decide que sí.
-    const ctx = link.acta ? { actaSeq: link.acta.seq, sealers: sealersOf(link.acta) } : { actaSeq: null, sealers: null }
-    const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...ctx, revoked: revokedSet })
-    if (!chk.ok) return send(from, { type: T.ERROR, error: 'no autorizado: ' + chk.reason })
-    if (data.op !== 'terminal.hs' || typeof data.eph !== 'string') return send(from, { type: T.ERROR, error: 'handshake inválido' })
-
-    const eph = await makeEphemeral()
-    const sid = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('')
-    const key = await deriveKey(eph.privateKey, data.eph, sid)
-    // Ack firmado con la D de ESTA máquina + su cert: el cliente verifica la
-    // cadena a la maestra y que la pub efímera viene de una máquina certificada.
-    // `publickey` va DENTRO del dato firmado (verifyChain lo exige: firma contra
-    // data.publickey y cert.sub === data.publickey).
-    const ack = { op: 'terminal.hs.ack', sid, seph: eph.pub, ceph: data.eph, machine: myPub, publickey: myPub, ts: Date.now() }
-    const { signature: ackSig } = await signWithDevice({ privateJwk: link.device.privateJwk, data: ack })
-
-    sessions.set(sid, { sid, key, term: null, from, exp: Date.now() + SESSION_TTL_MS })
-    audit('session-open', { sid: sid.slice(0, 8), device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
-    send(from, { type: T.ACK, sid, ack, signature: ackSig, cert: link.cert })
-    if (!opts.quiet) console.log(`[terminal] sesión ${sid.slice(0, 8)} autorizada (device ${chk.device?.slice?.(0, 8) || '?'})`)
-  }
-
-  async function handleCmd (from, p) {
-    const s = sessions.get(p.sid)
-    if (!s) return send(from, { type: T.ERROR, error: 'sesión desconocida o expirada' })
-    s.exp = Date.now() + SESSION_TTL_MS
-    s.from = from
-    let msg
-    try { msg = await open(s.key, p.env) } catch { return send(from, { type: T.ERROR, error: 'sobre inválido' }) }
-
+  session.on('message', (msg) => {
+    if (!msg || typeof msg !== 'object') return
     if (msg.type === 'open') {
-      if (s.term) return
+      if (term) return
       const shell = opts.shell || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
-      s.term = pty.spawn(shell, [], {
+      term = pty.spawn(shell, [], {
         name: 'xterm-256color', cols: msg.cols || 80, rows: msg.rows || 24,
         cwd: os.homedir(), env: { ...process.env, TERM: 'xterm-256color' }
       })
-      s.term.onData((d) => pushOut(s, d))
-      s.term.onExit(({ exitCode }) => { pushOut(s, `\r\n[proceso terminado (${exitCode})]\r\n`); s.term = null })
+      term.onData((data) => { session.send({ type: 'out', data }) })
+      term.onExit(({ exitCode }) => { session.send({ type: 'exit', code: exitCode }); term = null })
       return
     }
-    if (msg.type === 'input') return void s.term?.write(msg.data)
-    if (msg.type === 'resize') { try { s.term?.resize(msg.cols, msg.rows) } catch {}; return }
-    if (msg.type === 'close') { try { s.term?.kill() } catch {}; sessions.delete(p.sid); audit('session-close', { sid: String(p.sid).slice(0, 8) }); return }
-  }
-
-  const stop = () => {
-    clearInterval(revTimer); clearInterval(sweeper)
-    for (const s of sessions.values()) { try { s.term?.kill() } catch {} }
-    try { client.close() } catch {}
-  }
-
-  // AUTO-BORRADO al ser REVOCADA: la bóveda envía un REVOKED FIRMADO por la maestra
-  // dirigido a ESTA máquina (al revocar, o cuando reaparece: ver @dotrino/vault). Solo
-  // nos borramos si la firma valida y el body es para nuestra pubkey → un proxy/peer
-  // malicioso NO puede borrarnos con un mensaje falso (cierra el wipe-DoS). Borra el
-  // enlace (link.json) y detiene el agente.
-  async function handleRevoked (p) {
-    const b = p?.body
-    if (!b || b.op !== 'revoke' || b.sub !== myPub) return
-    if (typeof b.exp === 'number' && Date.now() > b.exp) return
-    if (!await verifyDeviceSig({ publickey: master, data: b, signature: p.signature })) return
-    audit('revoked', { nonce: b.nonce })
-    if (!opts.quiet) console.log('\n[terminal] tu bóveda REVOCÓ esta máquina → borro el enlace y salgo.')
-    try { fs.rmSync(path.join(dir, 'link.json'), { force: true }) } catch (_) {}
-    stop()
-    if (opts.onRevoked) { try { opts.onRevoked() } catch (_) {} }
-  }
-
-  client.on('message', (from, payload) => {
-    if (!payload || typeof payload !== 'object') return
-    if (payload.type === T.HS) handleHandshake(from, payload).catch((e) => send(from, { type: T.ERROR, error: e.message }))
-    else if (payload.type === T.CMD) handleCmd(from, payload).catch((e) => send(from, { type: T.ERROR, error: e.message }))
-    // Sonda de presencia (liveness): el cliente hace ping y respondemos pong con el
-    // mismo nonce → así la app sabe que esta máquina está online (sin abrir sesión).
-    else if (payload.type === T.PING) send(from, { type: T.PONG, n: payload.n })
-    else if (payload.type === VMSG.REVOKED) handleRevoked(payload).catch(() => {})
+    if (msg.type === 'input') { term?.write(String(msg.data ?? '')); return }
+    if (msg.type === 'resize') { try { term?.resize(msg.cols, msg.rows) } catch (_) {} return }
+    if (msg.type === 'close') { kill(); session.close() }
   })
-
-  if (!opts.quiet) {
-    console.log(`[terminal] agente activo · máquina ${myId} · vault ${(await pubkeyId(master)).slice(0, 16)} · proxy ${proxyUrl}`)
-  }
-
-  return { machine: myPub, machineId: myId, master, close: stop }
+  // La sesión se cierra por inactividad o al parar el agente: la shell muere con ella.
+  session.on('close', kill)
 }
 
-export default { startAgent }
+/**
+ * Arranca el agente. Devuelve lo mismo que `startRemoteAgent`:
+ * `{ machine, machineId, master, client, close }`.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.dir]       dónde vive el enlace (default dataDir()).
+ * @param {string} [opts.proxyUrl]  override del proxio del enlace.
+ * @param {string} [opts.shell]     shell a lanzar (default $SHELL).
+ * @param {boolean} [opts.quiet]
+ * @param {()=>void} [opts.onRevoked]
+ */
+export async function startAgent (opts = {}) {
+  const pty = loadPty()
+  return startRemoteAgent({
+    label: LABEL,
+    dir: opts.dir || dataDir(),
+    proxyUrl: opts.proxyUrl,
+    quiet: opts.quiet,
+    onRevoked: opts.onRevoked,
+    onSession: (session) => servePty(session, pty, opts)
+  })
+}
+
+export default { startAgent, LABEL }
