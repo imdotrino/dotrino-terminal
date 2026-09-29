@@ -9,8 +9,10 @@ añade el PTY.
 **Cómo se instala y se usa:** [wiki.dotrino.com/herramientas/terminal](https://wiki.dotrino.com/herramientas/terminal/).
 
 ```sh
-npx @dotrino/terminal-agent          # enlaza (si falta) y corre
-npx @dotrino/terminal-agent enroll   # re-enlaza y corre
+npx @dotrino/terminal-agent                  # enlaza (si falta) y corre
+npx @dotrino/terminal-agent enroll           # re-enlaza y corre
+npx @dotrino/terminal-agent --name casa      # otro agente en la misma máquina, con su enlace
+npx @dotrino/terminal-agent list             # los enlazados aquí
 #   [--proxy wss://…] [--shell /bin/zsh] [--dir /ruta]
 ```
 
@@ -26,7 +28,9 @@ const agent = await startAgent({ /* dir, proxyUrl, shell, quiet, onRevoked */ })
 // agent.machine · agent.machineId · agent.close()
 ```
 
-Datos en `~/.local/share/dotrino-terminal-agent` (override `DOTRINO_TERMINAL_DIR`). El
-`link.json` guarda la llave privada de la máquina: trátalo como una llave SSH.
+Cada agente guarda su enlace en `~/.dotrino/agent/terminal-agent/<nombre>/`, el estándar de
+`@dotrino/remote-agent/instances` (como `dotrino-env` en `~/.dotrino/service/`). Sin
+`--name` se usa el único que haya, o `default`. `DOTRINO_TERMINAL_DIR` o `--dir` fuerzan una
+carpeta concreta. El `link.json` guarda la llave privada: trátalo como una llave SSH.
 
 MIT.

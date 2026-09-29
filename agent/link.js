@@ -1,22 +1,24 @@
 /**
  * link.js — el enlace de esta máquina con la bóveda. Todo lo hace
  * `@dotrino/remote-agent/link` (que a su vez usa `enrollWithVault`, el único
- * enrolamiento headless del ecosistema); aquí solo se decide DÓNDE vive el enlace.
+ * enrolamiento headless del ecosistema), y DÓNDE vive lo decide el estándar
+ * `@dotrino/remote-agent/instances`: `~/.dotrino/agent/terminal-agent/<nombre>/`.
  */
-import path from 'node:path'
-import os from 'node:os'
 import { enroll as raEnroll, loadLink as raLoad, parseQr } from '@dotrino/remote-agent/link'
+import { resolveInstance } from '@dotrino/remote-agent/instances'
 
 export { parseQr }
 
-/** Label con el que se enrola y con el que la app encuentra las máquinas. */
+/** El tipo de este agente: lo contesta al ping y da nombre a la carpeta de sus enlaces. */
 export const LABEL = 'terminal-agent'
 
-/** `~/.local/share/dotrino-terminal-agent` (override `DOTRINO_TERMINAL_DIR`). */
-export function dataDir () {
+/**
+ * La carpeta del enlace. `DOTRINO_TERMINAL_DIR` fuerza una concreta (un contenedor); si no,
+ * la de la instancia `name` (sin nombre se busca y solo se exige con empate).
+ */
+export function dataDir (name) {
   if (process.env.DOTRINO_TERMINAL_DIR) return process.env.DOTRINO_TERMINAL_DIR
-  const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share')
-  return path.join(base, 'dotrino-terminal-agent')
+  return resolveInstance(LABEL, name).dir
 }
 
 export const loadLink = (dir = dataDir()) => raLoad(dir)

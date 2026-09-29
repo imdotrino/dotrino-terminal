@@ -2,8 +2,11 @@
 /**
  * dotrino-terminal-agent — agente de Dotrino Terminal.
  *
- *   dotrino-terminal-agent            # enlaza (si falta) y CORRE el agente
- *   dotrino-terminal-agent enroll     # re-enlaza (sobrescribe) y corre el agente
+ *   dotrino-terminal-agent [--name <n>]          # enlaza (si falta) y CORRE el agente
+ *   dotrino-terminal-agent enroll [--name <n>]   # re-enlaza (sobrescribe) y corre el agente
+ *   dotrino-terminal-agent list                  # los agentes enlazados en esta máquina
+ *
+ * Cada agente tiene su NOMBRE y su enlace (`@dotrino/remote-agent/instances`), como `dotrino-env`.
  *
  * El agente es un aparato más de tu cuenta: puede vivir en cualquier máquina. Con un
  * solo comando queda enlazado y aparece solo en terminal.dotrino.com.
@@ -12,7 +15,8 @@ import readline from 'node:readline'
 import { createRequire } from 'node:module'
 import { watchForUpdate } from '@dotrino/update'
 import { startAgent } from '../index.js'
-import { enroll, parseQr, loadLink, dataDir } from '../link.js'
+import { enroll, parseQr, loadLink, dataDir, LABEL } from '../link.js'
+import { listInstances, lockInstance, instancesRoot } from '@dotrino/remote-agent/instances'
 
 const { version: VERSION } = createRequire(import.meta.url)('../package.json')
 const args = process.argv.slice(2)
@@ -26,11 +30,20 @@ function ask (q) {
 
 if (args.includes('-h') || args.includes('--help')) {
   console.log(`uso:
-  dotrino-terminal-agent            enlaza esta máquina (si falta) y corre el agente
-  dotrino-terminal-agent enroll     re-enlaza (sobrescribe el enlace) y corre el agente
-  opciones: [--proxy <wss://…>] [--shell <bin>] [--dir <ruta>]
+  dotrino-terminal-agent [--name <n>]          enlaza este agente (si falta) y lo corre
+  dotrino-terminal-agent enroll [--name <n>]   re-enlaza (sobrescribe el enlace) y lo corre
+  dotrino-terminal-agent list                  los agentes enlazados en esta máquina
+  opciones: [--name <n>] [--proxy <wss://…>] [--shell <bin>] [--dir <ruta>]
 
-datos en ${dataDir()} (override DOTRINO_TERMINAL_DIR)`)
+enlaces en ${instancesRoot(LABEL)}/<nombre> (override DOTRINO_AGENT_HOME;
+--dir o DOTRINO_TERMINAL_DIR fuerzan una carpeta concreta)`)
+  process.exit(0)
+}
+
+if (cmd === 'list') {
+  const names = listInstances(LABEL)
+  if (!names.length) console.log('No hay ningún agente de terminal enlazado en esta máquina.')
+  for (const n of names) console.log(`  ${n}   ${instancesRoot(LABEL)}/${n}`)
   process.exit(0)
 }
 
@@ -57,7 +70,9 @@ async function doEnroll (dir) {
 }
 
 try {
-  const dir = opt('--dir')
+  const dir = opt('--dir') || dataDir(opt('--name'))
+  // Antes de nada, también de enlazar: dos procesos con el mismo enlace son la misma llave.
+  process.on('exit', lockInstance(dir))
   // Sin `enroll`, enlaza solo si aún no lo está; `enroll` re-enlaza aunque ya lo esté.
   // En los dos casos sigue y LEVANTA el servicio.
   if (cmd === 'enroll' || !loadLink(dir)) {
