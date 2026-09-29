@@ -23,7 +23,7 @@
     "@dotrino/identity": "0.105.0",
     "@dotrino/proxy-client": "0.25.0",
     "@dotrino/remote-agent": "0.10.0",
-    "@dotrino/update": "0.1.1",
+    "@dotrino/update": "0.2.2",
     "@dotrino/vault": "0.74.0",
     "@homebridge/node-pty-prebuilt-multiarch": "0.14.1-beta.2"
   },
