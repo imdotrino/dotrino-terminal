@@ -13,6 +13,7 @@ npx @dotrino/terminal-agent                  # enlaza (si falta) y corre
 npx @dotrino/terminal-agent enroll           # re-enlaza y corre
 npx @dotrino/terminal-agent --name casa      # otro agente en la misma máquina, con su enlace
 npx @dotrino/terminal-agent list             # los enlazados aquí
+npx @dotrino/terminal-agent info             # qué aparato es: su ID, su bóveda, sus permisos
 #   [--proxy wss://…] [--shell /bin/zsh] [--dir /ruta]
 ```
 

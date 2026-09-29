@@ -5,6 +5,7 @@
  *   dotrino-terminal-agent [--name <n>]          # enlaza (si falta) y CORRE el agente
  *   dotrino-terminal-agent enroll [--name <n>]   # re-enlaza (sobrescribe) y corre el agente
  *   dotrino-terminal-agent list                  # los agentes enlazados en esta máquina
+ *   dotrino-terminal-agent info [--name <n>]     # qué aparato es: su ID, su bóveda, sus permisos
  *
  * Cada agente tiene su NOMBRE y su enlace (`@dotrino/remote-agent/instances`), como `dotrino-env`.
  *
@@ -17,6 +18,7 @@ import { watchForUpdate } from '@dotrino/update'
 import { startAgent } from '../index.js'
 import { enroll, parseQr, loadLink, dataDir, LABEL } from '../link.js'
 import { listInstances, lockInstance, instancesRoot } from '@dotrino/remote-agent/instances'
+import { deviceInfo, formatDeviceInfo } from '@dotrino/vault/device-info'
 
 const { version: VERSION } = createRequire(import.meta.url)('../package.json')
 const args = process.argv.slice(2)
@@ -33,6 +35,8 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal-agent [--name <n>]          enlaza este agente (si falta) y lo corre
   dotrino-terminal-agent enroll [--name <n>]   re-enlaza (sobrescribe el enlace) y lo corre
   dotrino-terminal-agent list                  los agentes enlazados en esta máquina
+  dotrino-terminal-agent info [--name <n>]     qué aparato es: su ID (el de «dotrino-vault members»),
+                                               su bóveda y sus permisos. Sin red. [--json]
   opciones: [--name <n>] [--proxy <wss://…>] [--shell <bin>] [--dir <ruta>]
 
 enlaces en ${instancesRoot(LABEL)}/<nombre> (override DOTRINO_AGENT_HOME;
@@ -44,6 +48,19 @@ if (cmd === 'list') {
   const names = listInstances(LABEL)
   if (!names.length) console.log('No hay ningún agente de terminal enlazado en esta máquina.')
   for (const n of names) console.log(`  ${n}   ${instancesRoot(LABEL)}/${n}`)
+  process.exit(0)
+}
+
+// `info`: la pieza común del ecosistema (`@dotrino/vault/device-info`). Lo que se viene a
+// mirar es el ID, para buscarlo en el acta.
+if (cmd === 'info') {
+  try {
+    const dir = opt('--dir') || dataDir(opt('--name'))
+    const link = loadLink(dir)
+    if (!link) { console.error(`Este agente no está enlazado (${dir}). Enlázalo con: dotrino-terminal-agent`); process.exit(1) }
+    const info = await deviceInfo(link, { kind: LABEL, name: opt('--dir') ? null : dir.split(/[\\/]/).pop(), version: VERSION, dir })
+    console.log(args.includes('--json') ? JSON.stringify(info, null, 2) : formatDeviceInfo(info))
+  } catch (e) { console.error('error:', e.message); process.exit(1) }
   process.exit(0)
 }
 
