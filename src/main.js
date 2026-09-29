@@ -51,6 +51,15 @@ const M = {
     error: 'Error: ',
     close: 'Cerrar',
     exited: (c) => `[la consola terminó (${c})]`,
+    resume_title: 'Esta máquina tiene consolas abiertas:',
+    resume: 'Retomar',
+    new_console: 'Nueva consola',
+    kill_console: 'Cerrar esta consola',
+    console_item: (n, ago) => `Consola ${n} · activa ${ago}`,
+    ago_now: 'ahora',
+    ago_min: (m) => `hace ${m} min`,
+    ago_h: (h) => `hace ${h} h`,
+    console_gone: 'Esta consola ya no existe en la máquina: se cerró, o el agente se reinició.',
     self_choice_title: '¿Cómo quieres entrar?',
     self_choice_intro: 'Para abrir una consola en tus máquinas necesitas certificarlas con una identidad. Elige dónde vive esa identidad:',
     self_choice_vault: 'Conectar tu bóveda',
@@ -88,6 +97,15 @@ const M = {
     error: 'Error: ',
     close: 'Close',
     exited: (c) => `[console ended (${c})]`,
+    resume_title: 'This machine has open consoles:',
+    resume: 'Resume',
+    new_console: 'New console',
+    kill_console: 'Close this console',
+    console_item: (n, ago) => `Console ${n} · active ${ago}`,
+    ago_now: 'now',
+    ago_min: (m) => `${m} min ago`,
+    ago_h: (h) => `${h} h ago`,
+    console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
     self_choice_title: 'How do you want to sign in?',
     self_choice_intro: 'To open a console on your machines you need to certify them with an identity. Choose where that identity lives:',
     self_choice_vault: 'Connect your vault',
@@ -228,13 +246,27 @@ function choiceScreen () {
   return node
 }
 
-// --- Gestor de sesiones multi-consola (compartido por modo vault y modo self) ---
-// Mantiene las pestañas, los terminales xterm.js y la conexión AgentClient de cada
-// shell abierta. Recibe el `link` (vault o self) y los contenedores del DOM.
+// --- Gestor de pestañas (compartido por modo vault y modo self) ---
+// Cada pestaña es una conexión con una máquina enganchada a UNA consola. Las consolas viven
+// en el agente: recargar o cerrar el navegador solo las suelta, y la × las mata. Las
+// pestañas abiertas se recuerdan en sessionStorage (CONVENCIONES §4: sobreviven a un
+// refresco, no a cerrar la pestaña) para volver a engancharlas al recargar.
+const SS_TABS = 'dotrino-terminal:tabs'
+function loadTabs () { try { return JSON.parse(sessionStorage.getItem(SS_TABS) || '[]') } catch { return [] } }
+function saveTabs (list) { try { sessionStorage.setItem(SS_TABS, JSON.stringify(list)) } catch {} }
+
+function agoText (ts) {
+  const m = Math.floor((Date.now() - ts) / 60000)
+  if (m < 1) return t('ago_now')
+  return m < 60 ? t('ago_min', m) : t('ago_h', Math.floor(m / 60))
+}
+
 function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   const sessions = [] // { id, alias, pub, agent, term, fit, box, tab, status, onResize }
   let active = null
   let counter = 0
+
+  const persist = () => saveTabs(sessions.filter((s) => s.agent?.consoleId).map((s) => ({ sub: s.pub, alias: s.alias, consoleId: s.agent.consoleId })))
 
   function setActive (s) {
     active = s
@@ -242,21 +274,22 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       x.box.style.display = x === s ? 'block' : 'none'
       x.tab.classList.toggle('on', x === s)
     }
-    if (s) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows); s.term.focus() } catch {} }
+    if (s?.term) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows); s.term.focus() } catch {} }
   }
 
-  function closeSession (s) {
-    window.removeEventListener('resize', s.onResize)
-    try { s.agent.close() } catch {}
-    try { s.term.dispose() } catch {}
+  function removeSession (s) {
+    if (s.onResize) window.removeEventListener('resize', s.onResize)
+    try { s.term?.dispose() } catch {}
     s.box.remove(); s.tab.remove()
     const i = sessions.indexOf(s); if (i >= 0) sessions.splice(i, 1)
+    persist()
     if (active === s) setActive(sessions[sessions.length - 1] || null)
   }
+  // La × MATA la consola en la máquina (si hay una enganchada) y quita la pestaña.
+  function closeSession (s) { try { s.agent?.close() } catch {} removeSession(s) }
 
   function renderTab (s) {
     s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel">${esc(s.alias)}</span><span class="x" title="${t('close')}">×</span></button>`)
-    s.tab.querySelector('.tlabel').addEventListener('click', () => setActive(s))
     s.tab.addEventListener('click', (e) => { if (!e.target.classList.contains('x')) setActive(s) })
     s.tab.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); closeSession(s) })
     tabsEl.appendChild(s.tab)
@@ -266,7 +299,56 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.tab.title = state === 'err' ? (s.status || 'error') : ''
   }
 
-  async function openConsole (pub, alias) {
+  function mountTerm (s) {
+    s.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0e0b1a' } })
+    s.fit = new FitAddon(); s.term.loadAddon(s.fit)
+    s.box.replaceChildren()
+    s.term.open(s.box); s.fit.fit()
+    s.agent.onData = (d) => s.term.write(d)
+    s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`); persist() }
+    s.term.onData((d) => s.agent.input(d))
+    s.onResize = () => { if (active === s) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows) } catch {} } }
+    window.addEventListener('resize', s.onResize)
+  }
+
+  /**
+   * Las consolas de la máquina que NO están ya en una pestaña de esta página. Si hay,
+   * se ofrece retomarlas; si no, se abre una nueva sin preguntar.
+   * @returns {Promise<{ resume?: string }>} qué eligió el usuario
+   */
+  async function choose (s) {
+    const mine = new Set(sessions.map((x) => x.agent?.consoleId).filter(Boolean))
+    const free = (await s.agent.list()).filter((c) => !mine.has(c.id))
+    if (!free.length) return {}
+    return new Promise((resolve) => {
+      const node = el(`<div class="resume" data-testid="resume">
+        <b>${t('resume_title')}</b>
+        <div class="resume-list"></div>
+        <button class="primary" data-testid="new-console">${t('new_console')}</button>
+      </div>`)
+      const holder = node.querySelector('.resume-list')
+      free.sort((a, b) => b.lastActive - a.lastActive).forEach((c, i) => {
+        const row = el(`<div class="machine-row">
+          <button class="machine" data-testid="resume-console">${esc(t('console_item', i + 1, agoText(c.lastActive)))} · ${t('resume')}</button>
+          <button class="machine-x" title="${esc(t('kill_console'))}" aria-label="${esc(t('kill_console'))}">×</button>
+        </div>`)
+        row.querySelector('.machine').addEventListener('click', () => resolve({ resume: c.id }))
+        row.querySelector('.machine-x').addEventListener('click', () => { s.agent.kill(c.id); row.remove() })
+        holder.appendChild(row)
+      })
+      node.querySelector('[data-testid=new-console]').addEventListener('click', () => resolve({}))
+      s.box.replaceChildren(node)
+    })
+  }
+
+  /**
+   * Abre una pestaña con la máquina `pub`. Con `consoleId` se engancha a esa consola (al
+   * recargar); sin él, ofrece las consolas sueltas o abre una nueva.
+   * @param {string} pub
+   * @param {string} [alias]
+   * @param {{ consoleId?: string }} [opts]
+   */
+  async function openConsole (pub, alias, { consoleId } = {}) {
     const id = ++counter
     const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando' }
     s.box = el('<div class="term"></div>'); s.box.style.display = 'none'
@@ -278,16 +360,21 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       s.agent = new AgentClient(link, { agentPubkey: pub })
       s.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
       await s.agent.connect()
-
-      s.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0e0b1a' } })
-      s.fit = new FitAddon(); s.term.loadAddon(s.fit)
-      s.term.open(s.box); s.fit.fit()
-      s.agent.onData = (d) => s.term.write(d)
-      s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`) }
-      s.term.onData((d) => s.agent.input(d))
-      await s.agent.openShell(s.term.cols, s.term.rows)
-      s.onResize = () => { if (active === s) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows) } catch {} } }
-      window.addEventListener('resize', s.onResize)
+      const pick = consoleId ? { resume: consoleId } : await choose(s)
+      mountTerm(s)
+      if (pick.resume) {
+        try { await s.agent.attach(pick.resume, s.term.cols, s.term.rows) } catch (e) {
+          if (e.code !== 'no-console') throw e
+          // Ya no existe: se dice en la pestaña y no se recuerda más.
+          s.status = t('console_gone'); setTabState(s, 'err'); persist()
+          s.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
+          if (active === s) hint.textContent = t('console_gone')
+          return
+        }
+      } else {
+        await s.agent.open(s.term.cols, s.term.rows)
+      }
+      persist()
       s.status = 'conectado'; setTabState(s, 'ok')
       if (active === s) hint.textContent = t('connected', s.alias)
       setActive(s)
@@ -298,7 +385,13 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     }
   }
 
-  return { openConsole, sessions }
+  /** Vuelve a abrir las pestañas que había antes de recargar. */
+  function restore () { for (const x of loadTabs()) openConsole(x.sub, x.alias, { consoleId: x.consoleId }) }
+
+  // Al irse (recargar, cerrar), se SUELTAN las consolas: siguen vivas en la máquina.
+  window.addEventListener('pagehide', () => { for (const x of sessions) { try { x.agent?.disconnect() } catch {} } })
+
+  return { openConsole, restore, sessions }
 }
 
 // --- Pantalla: gestor multi-consola (modo vault externo) ---
@@ -315,6 +408,7 @@ function terminalScreen (link) {
   const qs = (s) => node.querySelector(s)
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
   const host = makeSessionHost({ tabsEl, termsEl, hint, link })
+  host.restore()
 
   // --- AUTODESCUBRIMIENTO: se pregunta a los miembros del acta qué son (`probeAgents`) y
   // se listan los que contestan como terminal, con el nombre que les puso el dueño. Una

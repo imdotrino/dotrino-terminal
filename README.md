@@ -26,12 +26,20 @@ sesión, la revocación, la renovación del papel y la bitácora— es
 [`@dotrino/remote-agent`](https://github.com/imdotrino/dotrino-remote-agent). Este repo
 solo añade la shell:
 
+Las shells son **consolas** que viven en el agente, aparte de las conexiones
+(`agent/consoles.js`): cerrar o recargar el navegador solo las suelta, y cualquier aparato
+de la cuenta puede volver a ellas y ver la pantalla como estaba (una terminal sin pantalla,
+`@xterm/headless`, la reconstruye; todo en memoria). La × de la pestaña sí la mata. Si el
+agente se reinicia, se pierden.
+
 | Sentido | Payload (dentro de la sesión cifrada) |
 |---|---|
-| navegador → máquina | `{type:'open',cols,rows}` · `{type:'input',data}` · `{type:'resize',cols,rows}` · `{type:'close'}` |
-| máquina → navegador | `{type:'out',data}` · `{type:'exit',code}` |
+| navegador → máquina | `list` · `open {cols,rows}` · `attach {id,cols,rows}` · `detach` · `input {data}` · `resize {cols,rows}` · `close` (mata la enganchada) · `kill {id}` |
+| máquina → navegador | `consoles {list}` · `replay {id,data,last}` · `attached {id,fresh}` · `out {data}` · `exit {code}` · `fail {code,message}` |
 
-Las máquinas se encuentran por el acta: son los miembros con label `terminal-agent`.
+La PWA recuerda sus pestañas en `sessionStorage` y al recargar se vuelve a enganchar.
+
+Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las que contestan `kind: terminal-agent`, con el nombre que les puso el dueño en el acta.
 
 ## Estructura
 

@@ -131,3 +131,7 @@ button.primary.danger { background: #e5484d; border-color: #e5484d; }
 .qr-wrap svg { display: block; width: 240px; max-width: 60vw; height: auto; }
 .qr-code pre { background: #06040f; border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; font-size: .78rem; margin: 8px 0; }
 .qr-code code { word-break: break-all; white-space: pre-wrap; }
+
+/* Elegir entre las consolas que siguen abiertas en la máquina */
+.resume { padding: 16px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.resume-list { display: flex; flex-direction: column; gap: 8px; }

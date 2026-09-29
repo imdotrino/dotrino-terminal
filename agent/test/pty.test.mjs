@@ -1,10 +1,11 @@
 /**
- * Lo único que este paquete añade a `@dotrino/remote-agent` es la shell. Se prueba con una
- * sesión de mentira y un PTY de verdad: abrir, escribir, leer lo que sale y cerrar.
+ * Lo que este paquete añade a `@dotrino/remote-agent`: las consolas. Se prueba con sesiones
+ * de mentira y un PTY de verdad. Lo que se fija es la promesa de las sesiones persistentes:
+ * irse no mata la shell, y al volver se ve la pantalla como estaba.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { servePty, loadPty } from '../index.js'
+import { serveSession, makeHub, loadPty } from '../index.js'
 
 /** Una sesión como la que entrega `onSession`, sin transporte ni cifrado. */
 function fakeSession () {
@@ -13,9 +14,10 @@ function fakeSession () {
   return {
     sent,
     on (ev, cb) { h[ev].push(cb); return this },
-    send (p) { sent.push(p) },
-    close () { this.closed = true; for (const cb of h.close) cb() },
-    deliver (msg) { for (const cb of h.message) cb(msg) }
+    async send (p) { sent.push(p) },
+    close () { for (const cb of h.close) cb() },
+    deliver (msg) { for (const cb of h.message) cb(msg) },
+    out () { return this.sent.filter((p) => p.type === 'out' || p.type === 'replay').map((p) => p.data).join('') }
   }
 }
 
@@ -27,32 +29,84 @@ const until = async (cond, ms = 5000) => {
   }
 }
 
-test('abre una shell, ejecuta lo que se escribe y devuelve la salida', async () => {
-  const s = fakeSession()
-  servePty(s, loadPty(), { shell: '/bin/sh' })
+const hub = () => makeHub(loadPty(), { shell: '/bin/sh' })
+
+test('abre una consola, ejecuta lo que se escribe y devuelve la salida', async () => {
+  const h = hub()
+  const s = fakeSession(); serveSession(s, h)
   s.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => s.sent.some((p) => p.type === 'attached' && p.fresh))
   s.deliver({ type: 'input', data: 'echo dotrino-$((40+2))\r' })
-  await until(() => s.sent.some((p) => p.type === 'out' && p.data.includes('dotrino-42')))
-  s.deliver({ type: 'close' })
-  assert.equal(s.closed, true)
+  await until(() => s.out().includes('dotrino-42'))
+  h.killAll()
 })
 
-test('al salir la shell se avisa con su código', async () => {
-  const s = fakeSession()
-  servePty(s, loadPty(), { shell: '/bin/sh' })
+test('irse NO mata la consola, y al volver se ve lo que había en pantalla', async () => {
+  const h = hub()
+  const a = fakeSession(); serveSession(a, h)
+  a.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => a.sent.some((p) => p.type === 'attached'))
+  const id = a.sent.find((p) => p.type === 'attached').id
+  a.deliver({ type: 'input', data: 'echo antes-de-irme\r' })
+  await until(() => a.out().includes('antes-de-irme\r\n'))
+  a.close()                                             // el navegador se fue
+
+  assert.equal(h.list().length, 1, 'la consola sigue viva')
+  assert.equal(h.list()[0].viewers, 0, 'y sin nadie mirando')
+
+  const b = fakeSession(); serveSession(b, h)             // otro aparato, o el mismo tras recargar
+  b.deliver({ type: 'list' })
+  await until(() => b.sent.some((p) => p.type === 'consoles'))
+  assert.deepEqual(b.sent.find((p) => p.type === 'consoles').list.map((c) => c.id), [id])
+
+  b.deliver({ type: 'attach', id, cols: 80, rows: 24 })
+  await until(() => b.sent.some((p) => p.type === 'attached'))
+  const replay = b.sent.filter((p) => p.type === 'replay')
+  assert.ok(replay.length >= 1 && replay.at(-1).last, 'la repetición termina con last')
+  assert.ok(replay.map((p) => p.data).join('').includes('antes-de-irme'), 'la pantalla vuelve como estaba')
+
+  b.deliver({ type: 'input', data: 'echo ya-volvi\r' })
+  await until(() => b.out().includes('ya-volvi\r\n'))
+  h.killAll()
+})
+
+test('la × (close) sí mata la consola, y quien vuelva se entera de que no existe', async () => {
+  const h = hub()
+  const a = fakeSession(); serveSession(a, h)
+  a.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => a.sent.some((p) => p.type === 'attached'))
+  const id = a.sent.find((p) => p.type === 'attached').id
+  a.deliver({ type: 'close' })
+  await until(() => a.sent.some((p) => p.type === 'exit'))
+  assert.equal(h.list().length, 0)
+
+  const b = fakeSession(); serveSession(b, h)
+  b.deliver({ type: 'attach', id, cols: 80, rows: 24 })
+  await until(() => b.sent.some((p) => p.type === 'fail'))
+  assert.equal(b.sent.find((p) => p.type === 'fail').code, 'no-console')
+})
+
+test('dos aparatos mirando la misma consola ven lo mismo', async () => {
+  const h = hub()
+  const a = fakeSession(); serveSession(a, h)
+  a.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => a.sent.some((p) => p.type === 'attached'))
+  const id = a.sent.find((p) => p.type === 'attached').id
+  const b = fakeSession(); serveSession(b, h)
+  b.deliver({ type: 'attach', id, cols: 80, rows: 24 })
+  await until(() => b.sent.some((p) => p.type === 'attached'))
+  b.deliver({ type: 'input', data: 'echo los-dos\r' })
+  await until(() => a.out().includes('los-dos\r\n') && b.out().includes('los-dos\r\n'))
+  h.killAll()
+})
+
+test('si la shell termina sola, se avisa con su código y deja de listarse', async () => {
+  const h = hub()
+  const s = fakeSession(); serveSession(s, h)
   s.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => s.sent.some((p) => p.type === 'attached'))
   s.deliver({ type: 'input', data: 'exit 3\r' })
   await until(() => s.sent.some((p) => p.type === 'exit'))
   assert.equal(s.sent.find((p) => p.type === 'exit').code, 3)
-})
-
-test('cerrar la sesión mata la shell', async () => {
-  const s = fakeSession()
-  servePty(s, loadPty(), { shell: '/bin/sh' })
-  s.deliver({ type: 'open', cols: 80, rows: 24 })
-  s.close()
-  // Tras cerrar, lo que se escriba ya no llega a ninguna shell.
-  s.deliver({ type: 'input', data: 'echo tarde\r' })
-  await new Promise((r) => setTimeout(r, 300))
-  assert.equal(s.sent.some((p) => p.type === 'out' && p.data.includes('tarde')), false)
+  assert.equal(h.list().length, 0)
 })
