@@ -33,7 +33,7 @@ jobs:
           V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           D=dotrino-terminal-desktop-$V-linux-x64
           mkdir -p dist/$D
-          cp target/release/dotrino-terminal-desktop assets/dotrino-terminal.desktop assets/icon.svg dist/$D/
+          cp target/release/dotrino-terminal-desktop assets/dotrino-terminal.desktop assets/xfce-helper-dotrino-terminal.desktop assets/icon.svg dist/$D/
           tar -C dist -czf dist/$D.tar.gz $D
           cp target/debian/*.deb dist/
       - uses: actions/attest-build-provenance@v1

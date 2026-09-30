@@ -136,3 +136,18 @@ test('un segundo agente en la misma carpeta se para y lo dice', async () => {
   await assert.rejects(listenLocal({ dir, serve: () => {} }), (e) => e.code === 'EALREADY')
   done()
 })
+
+test('la consola abre en la carpeta que pide la ventana, y una que no existe se rechaza', async () => {
+  const { dir, done } = await setup()
+  const w = await win(dir)
+  w.c.send({ type: 'open', cols: 80, rows: 24, cwd: os.tmpdir() })
+  await until(() => w.got.some((m) => m.type === 'attached'))
+  w.c.send({ type: 'input', data: 'pwd\r' })
+  await until(() => w.out().includes(fs.realpathSync(os.tmpdir()) + '\r\n') || w.out().includes(os.tmpdir() + '\r\n'))
+
+  const x = await win(dir)
+  x.c.send({ type: 'open', cols: 80, rows: 24, cwd: '/no/existe/esto' })
+  await until(() => x.got.some((m) => m.type === 'fail'))
+  assert.equal(x.got.find((m) => m.type === 'fail').code, 'bad-cwd')
+  done()
+})

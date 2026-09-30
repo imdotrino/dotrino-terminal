@@ -1,6 +1,6 @@
 [package]
 name = "dotrino-terminal-desktop"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "Dotrino Terminal: terminal windows (Linux, macOS) whose consoles you can also open from your other devices."
 license = "MIT"
@@ -36,6 +36,9 @@ extended-description = "Each window runs dotrino-terminal (npm: @dotrino/termina
 assets = [
   ["target/release/dotrino-terminal-desktop", "usr/bin/", "755"],
   ["assets/dotrino-terminal.desktop", "usr/share/applications/", "644"],
+  # XFCE: para poder elegirla en «Aplicaciones preferidas → Emulador de terminal» (y que
+  # «Abrir terminal aquí» de Thunar la abra en la carpeta).
+  ["assets/xfce-helper-dotrino-terminal.desktop", "usr/share/xfce4/helpers/dotrino-terminal.desktop", "644"],
   ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/dotrino-terminal.svg", "644"],
   ["assets/icon-512.png", "usr/share/icons/hicolor/512x512/apps/dotrino-terminal.png", "644"],
 ]

@@ -104,7 +104,7 @@ class Console {
 /** Las consolas de este agente. */
 export class ConsoleHub {
   /**
-   * @param {{ spawn:(opts:{cols:number,rows:number})=>any }} opts
+   * @param {{ spawn:(opts:{cols:number,rows:number,cwd:string|null})=>any }} opts
    *   `spawn` lanza la shell (un PTY con `onData`, `onExit`, `write`, `resize`, `kill`).
    */
   constructor ({ spawn }) {
@@ -112,9 +112,9 @@ export class ConsoleHub {
     this.consoles = new Map()
   }
 
-  create ({ cols = 80, rows = 24, origin = 'remote' } = {}) {
+  create ({ cols = 80, rows = 24, origin = 'remote', cwd = null } = {}) {
     const id = randomId()
-    const pty = this._spawn({ cols, rows })
+    const pty = this._spawn({ cols, rows, cwd })
     const c = new Console({ id, pty, cols, rows, origin })
     pty.onData((d) => c._out(d))
     pty.onExit(({ exitCode }) => {

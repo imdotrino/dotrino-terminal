@@ -10,7 +10,7 @@
  * el navegador solo las suelta, y cualquier aparato de la cuenta puede volver a ellas.
  *
  * Payloads de dominio (van cifrados dentro de la sesión, el proxio no los ve):
- *   cliente → agente: { type:'list' } · { type:'open', cols, rows } ·
+ *   cliente → agente: { type:'list' } · { type:'open', cols, rows, cwd? } ·
  *                     { type:'attach', id, cols, rows } · { type:'detach' } ·
  *                     { type:'input', data } · { type:'resize', cols, rows } ·
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id }
@@ -18,7 +18,9 @@
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
  *                     { type:'exit', code } · { type:'fail', code, message }
  */
+import fs from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 import { createRequire } from 'node:module'
 import { startRemoteAgent } from '@dotrino/remote-agent/agent'
 import { dataDir, loadLink, LABEL } from './link.js'
@@ -39,13 +41,17 @@ export function loadPty () {
   }
 }
 
+const isDir = (p) => {
+  try { return typeof p === 'string' && path.isAbsolute(p) && fs.statSync(p).isDirectory() } catch (_) { return false }
+}
+
 /** Las consolas de este agente, sobre el PTY. Exportada para las pruebas. */
 export function makeHub (pty, opts = {}) {
   const shell = opts.shell || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
   return new ConsoleHub({
-    spawn: ({ cols, rows }) => pty.spawn(shell, [], {
+    spawn: ({ cols, rows, cwd }) => pty.spawn(shell, [], {
       name: 'xterm-256color', cols, rows,
-      cwd: os.homedir(), env: { ...process.env, TERM: 'xterm-256color' }
+      cwd: cwd || os.homedir(), env: { ...process.env, TERM: 'xterm-256color' }
     })
   })
 }
@@ -96,7 +102,10 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
     if (msg.type === 'list') { session.send({ type: 'consoles', list: hub.list() }); return }
     if (msg.type === 'open') {
       takeSize(msg)
-      const c = hub.create({ ...size, origin })
+      // `cwd`: dónde abre la shell (la carpeta de la ventana que la pide). Si no existe, se
+      // dice: abrir en otra carpeta sin avisar haría que un comando corra donde no toca.
+      if (msg.cwd != null && !isDir(msg.cwd)) return fail('bad-cwd', `not a directory: ${msg.cwd}`)
+      const c = hub.create({ ...size, origin, cwd: msg.cwd || null })
       if (origin === 'local') owned = c
       attachTo(c, { fresh: true })
       return

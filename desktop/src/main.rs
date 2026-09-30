@@ -76,14 +76,17 @@ enum Mode {
     Console,
     /// `dotrino-terminal link`: al terminar se mira qué perfil quedó enlazado.
     Linking { linked_before: Vec<String> },
-    /// `npm install -g @dotrino/terminal-agent`, a la vista en la ventana: al terminar se vuelve
-    /// a buscar el cliente y la ventana pasa a su perfil por defecto.
-    Installing,
 }
 
 struct Win {
     /// `None`: sin perfil, una terminal más.
     profile: Option<String>,
+    /// La carpeta donde abre la consola: la de quien lanzó la app (Thunar, «Abrir terminal
+    /// aquí») o `--working-directory`. Una ventana nueva hereda la de la que la abrió.
+    cwd: PathBuf,
+    /// `-x prog args…` / `-e "orden"`: la ventana corre eso (sin perfil) y se cierra al acabar,
+    /// como pide XFCE a un emulador de terminal.
+    command: Option<Vec<String>>,
     mode: Mode,
     term: Option<iced_term::Terminal>,
     title: String,
@@ -96,6 +99,8 @@ struct App {
     windows: BTreeMap<window::Id, Win>,
     by_term: HashMap<u64, window::Id>,
     next_term: u64,
+    /// Se pidió instalar el cliente y todavía no aparece.
+    awaiting_client: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -108,8 +113,10 @@ enum Message {
     /// `None`: sin perfil.
     SwitchProfile(window::Id, Option<String>),
     Enroll(window::Id),
-    /// Instalar (o actualizar) el cliente dentro de la ventana.
+    /// Escribe en la consola de la ventana la orden que instala (o actualiza) el cliente.
     InstallClient(window::Id),
+    /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
+    CheckClient,
     Copy(window::Id),
     Paste(window::Id),
     Pasted(window::Id, Option<String>),
@@ -176,7 +183,7 @@ fn is_executable(p: &Path) -> bool {
 fn resolve() -> Result<Launch, String> {
     let path = login_path()?;
     let program = match std::env::var_os("DOTRINO_TERMINAL_BIN") {
-        Some(p) => PathBuf::from(p),
+        Some(p) => Some(PathBuf::from(p)).filter(|p| is_executable(p)).ok_or_else(|| format!("DOTRINO_TERMINAL_BIN: {}", t("no es un ejecutable", "not an executable")))?,
         None => find_in(&path, CLIENT).ok_or_else(|| {
             t(
                 "Para usar perfiles, instala dotrino-terminal: npm install -g @dotrino/terminal-agent",
@@ -202,9 +209,45 @@ fn load_profiles(launch: &Launch) -> Result<Vec<Profile>, String> {
     Ok(all.into_iter().filter(|p| p.linked || Path::new(&p.dir).is_dir()).collect())
 }
 
-/// Un texto como UN argumento de `sh`, entre comillas simples (y las suyas escapadas).
-fn sh_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
+/// La línea de órdenes de la app. Lo que XFCE (exo) y los lanzadores esperan de un emulador de
+/// terminal, más el perfil:
+///   `--name <perfil>` · `--working-directory <dir>` (o `=dir`) · `-x prog args…` · `-e "orden"`
+#[derive(Default, Clone)]
+struct Cli {
+    name: Option<String>,
+    cwd: Option<PathBuf>,
+    command: Option<Vec<String>>,
+    error: Option<String>,
+}
+
+impl Cli {
+    fn parse(args: Vec<String>) -> Result<Cli, String> {
+        let mut cli = Cli::default();
+        let mut it = args.into_iter();
+        let need = |v: Option<String>, flag: &str| v.ok_or_else(|| format!("{flag}: {}", t("falta el valor", "missing value")));
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--name" => cli.name = Some(need(it.next(), "--name")?),
+                "--working-directory" | "--cwd" => cli.cwd = Some(PathBuf::from(need(it.next(), &a)?)),
+                // `-x`: todo lo que sigue es la orden y sus argumentos.
+                "-x" | "--execute" => {
+                    let rest: Vec<String> = it.by_ref().collect();
+                    if rest.is_empty() {
+                        return Err(format!("{a}: {}", t("falta la orden", "missing command")));
+                    }
+                    cli.command = Some(rest);
+                }
+                // `-e "orden"`: una sola cadena, que interpreta la shell.
+                "-e" | "--command" => {
+                    let cmd = need(it.next(), &a)?;
+                    cli.command = Some(vec![user_shell()?, "-c".to_string(), cmd]);
+                }
+                _ if a.starts_with("--working-directory=") => cli.cwd = Some(PathBuf::from(&a["--working-directory=".len()..])),
+                _ => return Err(format!("{}: {a}", t("opción desconocida", "unknown option"))),
+            }
+        }
+        Ok(cli)
+    }
 }
 
 /// Dónde se recuerda el último perfil elegido en la app (una preferencia, nada más).
@@ -235,12 +278,25 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0 };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false };
         let _ = app.reload_profiles();
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        let asked = args.iter().position(|a| a == "--name").and_then(|i| args.get(i + 1).cloned());
-        let profile = asked.or_else(|| app.default_profile());
-        let (_, task) = app.open_window(profile);
+        let cli = match Cli::parse(std::env::args().skip(1).collect()) {
+            Ok(cli) => cli,
+            Err(e) => Cli { error: Some(e), ..Cli::default() },
+        };
+        // La carpeta: la pedida, o aquella desde la que se lanzó la app (exo-open, el que usa
+        // Thunar, lanza la terminal DENTRO de la carpeta).
+        let cwd = cli.cwd.clone().map(Ok).unwrap_or_else(std::env::current_dir).map_err(|e| e.to_string());
+        // Una orden (-x/-e) corre sin perfil: es lo que XFCE espera, y no es una consola tuya.
+        let profile = if cli.command.is_some() { None } else { cli.name.clone().or_else(|| app.default_profile()) };
+        let (id, task) = app.open_window(profile, cwd.clone().unwrap_or_default(), cli.command.clone());
+        if let Some(win) = app.windows.get_mut(&id) {
+            if let Some(e) = cli.error {
+                win.error = Some(e);
+            } else if let Err(e) = cwd {
+                win.error = Some(format!("{}: {e}", t("no puedo abrir en esta carpeta", "can't open in this folder")));
+            }
+        }
         (app, task)
     }
 
@@ -263,7 +319,7 @@ impl App {
         Ok(())
     }
 
-    fn open_window(&mut self, profile: Option<String>) -> (window::Id, Task<Message>) {
+    fn open_window(&mut self, profile: Option<String>, cwd: PathBuf, command: Option<Vec<String>>) -> (window::Id, Task<Message>) {
         let (id, task) = window::open(window::Settings {
             size: Size::new(960.0, 600.0),
             // El cierre lo hace la app (`Message::Close`): así sabe cuándo se fue la última
@@ -274,7 +330,7 @@ impl App {
             platform_specific: window::settings::PlatformSpecific { application_id: "dotrino-terminal".into(), ..Default::default() },
             ..Default::default()
         });
-        self.windows.insert(id, Win { profile, mode: Mode::Console, term: None, title: String::new(), error: None });
+        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -291,26 +347,18 @@ impl App {
         }
         win.error = None;
         win.title = String::new();
+        // Una carpeta que no existe se dice: abrir en otra sin avisar haría que lo que escribas
+        // corra donde no toca (y el PTY, por su cuenta, caería en silencio en otra carpeta).
+        if !win.cwd.is_dir() {
+            win.error = Some(format!("{}: {}", t("esa carpeta no existe", "that folder doesn't exist"), win.cwd.display()));
+            return;
+        }
         let plain = matches!(mode, Mode::Console) && win.profile.is_none();
-        let spawn = if matches!(mode, Mode::Installing) {
-            // Con /bin/sh y el PATH de inicio de sesión (el npm de nvm o Homebrew). Si falla, la
-            // salida se queda a la vista hasta una tecla: la ventana cambia cuando esto termina.
-            login_path().map(|path| {
-                let fail = t(
-                    "No se pudo instalar. Si dice EACCES, tu npm instala en una carpeta del sistema: usa nvm, o instálalo con sudo desde otra terminal. Pulsa una tecla para volver.",
-                    "Could not install. If it says EACCES, your npm installs into a system folder: use nvm, or install it with sudo from another terminal. Press a key to go back.",
-                );
-                let no_npm = t(
-                    "No encuentro npm. Instala Node 20 o más reciente (https://nodejs.org) y vuelve a intentarlo. Pulsa una tecla para volver.",
-                    "Can't find npm. Install Node 20 or newer (https://nodejs.org) and try again. Press a key to go back.",
-                );
-                let script = format!(
-                    "command -v npm >/dev/null || {{ echo {}; read -r _; exit 1; }}; echo '$ npm install -g {CLIENT_PKG}@latest'; npm install -g {CLIENT_PKG}@latest || {{ s=$?; echo; echo {}; read -r _; exit $s; }}",
-                    sh_quote(&no_npm),
-                    sh_quote(&fail)
-                );
-                ("/bin/sh".to_string(), vec!["-c".to_string(), script], HashMap::from([("PATH".to_string(), path), ("TERM".to_string(), "xterm-256color".to_string())]))
-            })
+        let spawn = if let (true, Some(cmd)) = (plain, win.command.clone()) {
+            // Una orden de `-x`/`-e`: tal cual, sin perfil. La ventana se cierra cuando acaba.
+            let mut it = cmd.into_iter();
+            let program = it.next().unwrap_or_default();
+            Ok((program, it.collect(), HashMap::from([("TERM".to_string(), "xterm-256color".to_string())])))
         } else if plain {
             // Sin perfil: la shell del usuario, como cualquier terminal. En macOS las terminales
             // abren una shell de inicio de sesión; en Linux, una interactiva.
@@ -322,7 +370,12 @@ impl App {
             self.launch.clone().map(|launch| {
                 let args = match &mode {
                     Mode::Linking { .. } => vec!["link".to_string()],
-                    Mode::Console | Mode::Installing => vec!["--name".to_string(), win.profile.clone().unwrap_or_default()],
+                    Mode::Console => vec![
+                        "--name".to_string(),
+                        win.profile.clone().unwrap_or_default(),
+                        "--cwd".to_string(),
+                        win.cwd.to_string_lossy().into_owned(),
+                    ],
                 };
                 let env = HashMap::from([
                     ("PATH".to_string(), launch.path.clone()),
@@ -346,7 +399,7 @@ impl App {
                 program: program.clone(),
                 args,
                 env,
-                working_directory: std::env::var_os("HOME").map(PathBuf::from),
+                working_directory: Some(win.cwd.clone()),
             },
             ..Default::default()
         };
@@ -382,18 +435,6 @@ impl App {
         match &win.mode {
             // La shell salió, o se soltó la consola: la ventana se va, como cualquier terminal.
             Mode::Console => self.close(id),
-            // Terminó la instalación (bien o mal): se vuelve a buscar el cliente. Con él, la
-            // ventana pasa a su perfil por defecto; sin él, sigue sin perfil y el menú lo dice.
-            Mode::Installing => {
-                self.launch = resolve();
-                let _ = self.reload_profiles();
-                let profile = self.default_profile();
-                if let Some(win) = self.windows.get_mut(&id) {
-                    win.profile = profile;
-                }
-                self.start(id, Mode::Console);
-                self.focus(id)
-            }
             // Terminó el enlace: si quedó un perfil enlazado nuevo, la ventana pasa a él; si
             // no (se canceló, falló), vuelve al que tenía.
             Mode::Linking { linked_before } => {
@@ -418,9 +459,11 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::NewWindow(from) => {
-                let profile = from.and_then(|id| self.windows.get(&id)).and_then(|w| w.profile.clone());
+                let from = from.and_then(|id| self.windows.get(&id));
+                let profile = from.and_then(|w| w.profile.clone());
+                let cwd = from.map(|w| w.cwd.clone()).or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
                 let _ = self.reload_profiles();
-                self.open_window(profile).1
+                self.open_window(profile, cwd, None).1
             }
             Message::Opened(id) => self.focus(id),
             Message::Close(id) => self.close(id),
@@ -433,13 +476,32 @@ impl App {
                 if let Some(n) = &name {
                     save_last_profile(n);
                 }
+                // Cambiar de perfil deja la orden de `-x`: la ventana pasa a ser una consola.
+                win.command = None;
                 win.profile = name;
                 self.start(id, Mode::Console);
                 self.focus(id)
             }
             Message::InstallClient(id) => {
-                self.start(id, Mode::Installing);
+                // Se escribe en TU consola, sin Enter: la orden queda a la vista en el prompt, la
+                // lanza la persona (§15) y su salida se queda donde está. Si faltaba el cliente,
+                // la app lo busca cada poco y, al aparecer, el menú Perfil se activa.
+                let order = format!("npm install -g {CLIENT_PKG}@latest");
+                if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
+                    term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
+                    if self.launch.is_err() {
+                        self.awaiting_client = true;
+                    }
+                }
                 self.focus(id)
+            }
+            Message::CheckClient => {
+                if let Ok(launch) = resolve() {
+                    self.launch = Ok(launch);
+                    self.awaiting_client = false;
+                    let _ = self.reload_profiles();
+                }
+                Task::none()
             }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
@@ -482,7 +544,7 @@ impl App {
     /// La barra de menú de la ventana: Archivo, Editar, Perfil, Ayuda.
     fn menu(&self, id: window::Id, win: &Win) -> Element<'_, Message> {
         // Mientras la ventana enrola o instala, no se ofrece otra cosa que la cambie.
-        let linking = matches!(win.mode, Mode::Linking { .. } | Mode::Installing);
+        let linking = matches!(win.mode, Mode::Linking { .. });
         let (new_key, close_key, copy_key, paste_key) = if cfg!(target_os = "macos") {
             ("⌘N", "⌘W", "⌘C", "⌘V")
         } else {
@@ -513,7 +575,8 @@ impl App {
             profiles.push(Item::new(note(why.clone())));
         }
         let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
-        profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
+        // Escribe la orden en la consola de esta ventana: hace falta que haya una.
+        profiles.push(Item::new(entry(install_label, "", (!linking && win.term.is_some()).then_some(Message::InstallClient(id)))));
         let help = Menu::new(vec![
             Item::new(entry(t("Cómo se usa", "How to use it"), "", Some(Message::Help))),
             Item::new(entry(format!("Dotrino Terminal {VERSION}"), "", None)),
@@ -550,7 +613,6 @@ impl App {
         let Some(win) = self.windows.get(&id) else { return String::new() };
         let what = match win.mode {
             Mode::Linking { .. } => t("Enrolar", "Enroll"),
-            Mode::Installing => t("Instalando dotrino-terminal", "Installing dotrino-terminal"),
             Mode::Console if win.title.is_empty() => "Dotrino Terminal".to_string(),
             Mode::Console => win.title.clone(),
         };
@@ -562,7 +624,9 @@ impl App {
 
     fn subscription(&self) -> Subscription<Message> {
         let terms = self.windows.values().filter_map(|w| w.term.as_ref()).map(|term| term.subscription().map(Message::Terminal));
-        Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]))
+        // Tras «Instalar dotrino-terminal…», se mira cada poco si ya está.
+        let waiting = self.awaiting_client.then(|| iced::time::every(std::time::Duration::from_secs(3)).map(|_| Message::CheckClient));
+        Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting))
     }
 }
 

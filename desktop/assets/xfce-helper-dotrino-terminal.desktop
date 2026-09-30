@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Icon=dotrino-terminal
+Type=X-XFCE-Helper
+Name=Dotrino Terminal
+StartupNotify=true
+X-XFCE-Binaries=dotrino-terminal-desktop;
+X-XFCE-Category=TerminalEmulator
+X-XFCE-Commands=%B;
+X-XFCE-CommandsWithParameter=%B -x %s;

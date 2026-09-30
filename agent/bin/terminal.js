@@ -2,7 +2,7 @@
 /**
  * dotrino-terminal — una ventana de Dotrino Terminal en ESTA terminal (TTY).
  *
- *   dotrino-terminal [--name <n>]              abre una consola nueva aquí
+ *   dotrino-terminal [--name <n>] [--cwd <dir>] abre una consola nueva aquí (en la carpeta actual)
  *   dotrino-terminal attach <id> [--name <n>]  se engancha a una consola que ya existe
  *   dotrino-terminal ls [--name <n>] [--json]  las consolas abiertas en el agente
  *   dotrino-terminal kill <id> [--name <n>]    cierra una consola
@@ -44,7 +44,7 @@ const DETACH_PREFIX = '\x1d'   // Ctrl+]
 
 if (args.includes('-h') || args.includes('--help')) {
   console.log(t(`uso:
-  dotrino-terminal [--name <n>]              abre una consola nueva en esta ventana
+  dotrino-terminal [--name <n>] [--cwd <dir>] abre una consola nueva en esta ventana, en la carpeta actual
   dotrino-terminal attach <id> [--name <n>]  se engancha a una consola abierta
   dotrino-terminal ls [--name <n>] [--json]  las consolas abiertas
   dotrino-terminal kill <id> [--name <n>]    cierra una consola
@@ -53,7 +53,7 @@ if (args.includes('-h') || args.includes('--help')) {
 
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla.
 Cerrar la ventana cierra la consola que abrió.`, `usage:
-  dotrino-terminal [--name <n>]              open a new console in this window
+  dotrino-terminal [--name <n>] [--cwd <dir>] open a new console in this window, in the current folder
   dotrino-terminal attach <id> [--name <n>]  attach to an open console
   dotrino-terminal ls [--name <n>] [--json]  list open consoles
   dotrino-terminal kill <id> [--name <n>]    close a console
@@ -252,7 +252,8 @@ try {
     if (!args[1]) die(t('falta el id: dotrino-terminal attach <id>  (mira «dotrino-terminal ls»)', 'missing id: dotrino-terminal attach <id>  (see "dotrino-terminal ls")'))
     interactive(conn, { type: 'attach', id: args[1] })
   } else if (cmd === 'open') {
-    interactive(conn, { type: 'open' })
+    // Como cualquier terminal: la consola abre en la carpeta donde estás (o en `--cwd`).
+    interactive(conn, { type: 'open', cwd: path.resolve(opt('--cwd') || process.cwd()) })
   } else die(t(`orden desconocida: ${cmd} (mira --help)`, `unknown command: ${cmd} (see --help)`))
 } catch (e) {
   if (e !== HOLD) { try { die(`dotrino-terminal: ${e.message}`) } catch (_) {} }
