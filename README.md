@@ -65,9 +65,11 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
 - **`agent/`** — el paquete `@dotrino/terminal-agent` (Node + PTY prebuilt): el agente
   (`dotrino-terminal-agent`) y el cliente de las ventanas (`dotrino-terminal`).
 - **`desktop/`** — la app de escritorio (Rust: `iced` + `iced_term` sobre
-  `alacritty_terminal`). **Sin perfil** una ventana es una terminal más (la shell del usuario,
-  directa, sin agente; funciona sin `dotrino-terminal` instalado). **Con perfil** corre
-  `dotrino-terminal --name <perfil>`. El menú Perfil cambia de perfil (cierra la TTY y abre
+  `alacritty_terminal`). Por defecto una ventana **usa un perfil** y corre
+  `dotrino-terminal --name <perfil>` (el último elegido, `~/.config/dotrino-terminal/last-profile`;
+  si no, `default`; si no, el primero enlazado; si no, el primero que exista). **Sin perfil** es
+  el repliegue cuando no hay ninguno o falta el cliente, y el título lo dice: la shell del
+  usuario directa, sin agente. El menú Perfil cambia de perfil (cierra la TTY y abre
   otra) o enrola uno nuevo dentro de la ventana. `vendor/iced_term`
   es el crate con un método público más (ver su README).
 

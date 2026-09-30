@@ -2,8 +2,9 @@
 //!
 //! Cada ventana es una terminal nativa (`iced` + `iced_term`, sobre `alacritty_terminal`).
 //!
-//! - **Sin perfil** es una terminal más: corre tu shell directamente, sin agente y sin nada de
-//!   Dotrino. Funciona aunque `dotrino-terminal` no esté instalado.
+//! - **Por defecto, con perfil** (ver `default_profile`). **Sin perfil** es solo el repliegue
+//!   cuando no hay ninguno, y el título lo dice: una terminal más, la shell del usuario directa,
+//!   sin agente. Funciona aunque `dotrino-terminal` no esté instalado.
 //! - **Con perfil** ejecuta `dotrino-terminal --name <perfil>`, el cliente TTY del paquete
 //!   `@dotrino/terminal-agent`. La shell vive en el agente del perfil, así que lo que se abre
 //!   aquí también se puede abrir desde los otros aparatos de esa cuenta. Esta app no habla el
@@ -195,6 +196,27 @@ fn load_profiles(launch: &Launch) -> Result<Vec<Profile>, String> {
     Ok(all.into_iter().filter(|p| p.linked || Path::new(&p.dir).is_dir()).collect())
 }
 
+/// Dónde se recuerda el último perfil elegido en la app (una preferencia, nada más).
+fn last_profile_file() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("dotrino-terminal").join("last-profile"))
+}
+
+fn last_profile() -> Option<String> {
+    let name = std::fs::read_to_string(last_profile_file()?).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+fn save_last_profile(name: &str) {
+    let Some(file) = last_profile_file() else { return };
+    // Si no se puede guardar, la próxima ventana elige por el orden de siempre: es una preferencia.
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(file, name);
+}
+
 fn linked_names(profiles: &[Profile]) -> Vec<String> {
     profiles.iter().filter(|p| p.linked).map(|p| p.name.clone()).collect()
 }
@@ -204,18 +226,24 @@ impl App {
         let launch = resolve();
         let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0 };
         let _ = app.reload_profiles();
-        // Perfil de la primera ventana: `--name <n>` en la línea de órdenes; si no, el único
-        // enlazado; si no hay ninguno o hay varios, sin perfil (no se adivina cuál quería: el
-        // menú Perfil deja elegir).
         let args: Vec<String> = std::env::args().skip(1).collect();
-        let profile = args.iter().position(|a| a == "--name").and_then(|i| args.get(i + 1).cloned()).or_else(|| {
-            match linked_names(&app.profiles).as_slice() {
-                [only] => Some(only.clone()),
-                _ => None,
-            }
-        });
+        let asked = args.iter().position(|a| a == "--name").and_then(|i| args.get(i + 1).cloned());
+        let profile = asked.or_else(|| app.default_profile());
         let (_, task) = app.open_window(profile);
         (app, task)
+    }
+
+    /// El perfil con el que abre una ventana si nadie pide otro. Por defecto SE USA UN PERFIL;
+    /// «sin perfil» es solo el repliegue cuando no hay ninguno (o falta el cliente), y se ve:
+    /// el título lo dice. En orden: el último usado en esta app, `default`, el primero
+    /// enlazado, el primero que exista.
+    fn default_profile(&self) -> Option<String> {
+        let has = |n: &str| self.profiles.iter().any(|p| p.name == n);
+        last_profile()
+            .filter(|n| has(n))
+            .or_else(|| has("default").then(|| "default".to_string()))
+            .or_else(|| self.profiles.iter().find(|p| p.linked).map(|p| p.name.clone()))
+            .or_else(|| self.profiles.first().map(|p| p.name.clone()))
     }
 
     fn reload_profiles(&mut self) -> Result<(), String> {
@@ -332,6 +360,7 @@ impl App {
                 let fresh = linked_names(&self.profiles).into_iter().find(|n| !before.contains(n));
                 if let Some(win) = self.windows.get_mut(&id) {
                     if let Some(name) = fresh {
+                        save_last_profile(&name);
                         win.profile = Some(name);
                     }
                 }
@@ -357,6 +386,10 @@ impl App {
                 let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
                 if win.profile == name && matches!(win.mode, Mode::Console) {
                     return self.focus(id);
+                }
+                // Elegir un perfil a mano lo deja como el de las ventanas siguientes.
+                if let Some(n) = &name {
+                    save_last_profile(n);
                 }
                 win.profile = name;
                 self.start(id, Mode::Console);
@@ -473,7 +506,7 @@ impl App {
         };
         match &win.profile {
             Some(p) => format!("{what} — {p}"),
-            None => what,
+            None => format!("{what} — {}", t("sin perfil", "no profile")),
         }
     }
 
