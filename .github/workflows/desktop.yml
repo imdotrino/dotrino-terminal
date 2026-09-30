@@ -60,7 +60,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: desktop }
       - run: cargo build --release --locked
-      - run: scripts/macos-bundle.sh target/release arm64
+      # Con `sh`: el repo vive en un disco sin permisos de ejecución (NTFS), así que el bit no viaja.
+      - run: sh scripts/macos-bundle.sh target/release arm64
       - uses: actions/attest-build-provenance@v1
         with:
           subject-path: desktop/dist/*.zip
