@@ -28,7 +28,10 @@ use serde::Deserialize;
 const CLIENT: &str = "dotrino-terminal";
 const DEFAULT_PROFILE: &str = "default";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const HELP_URL: &str = "https://wiki.dotrino.com/herramientas/terminal/";
+/// «Ayuda → Cómo se usa»: la página del wiki de esta app, en el idioma del sistema.
+fn help_url() -> &'static str {
+    if es() { "https://wiki.dotrino.com/herramientas/terminal-escritorio/" } else { "https://wiki.dotrino.com/en/herramientas/terminal-escritorio/" }
+}
 
 fn main() -> iced::Result {
     iced::daemon(App::boot, App::update, App::view)
@@ -351,7 +354,7 @@ impl App {
             }
             Message::MenuRoot => Task::none(),
             Message::Help => {
-                let _ = open::that_detached(HELP_URL);
+                let _ = open::that_detached(help_url());
                 Task::none()
             }
             Message::Terminal(iced_term::Event::BackendCall(term_id, cmd)) => {

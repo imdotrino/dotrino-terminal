@@ -7,7 +7,8 @@ aparato de tu cuenta, y una shell real (`bash`, `zsh`…) de tus máquinas en es
 reconoce con permiso `sign`, y todo viaja cifrado de punta a punta por el proxio.
 No hay puertos abiertos ni contraseñas.
 
-**Cómo se usa:** [wiki.dotrino.com/herramientas/terminal](https://wiki.dotrino.com/herramientas/terminal/).
+**Cómo se usa:** en el wiki, [la app de escritorio](https://wiki.dotrino.com/herramientas/terminal-escritorio/)
+y [el acceso desde el navegador](https://wiki.dotrino.com/herramientas/terminal/).
 
 ```
  ventanas de la máquina                    ┌──────────────────────────┐
@@ -55,7 +56,12 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
 
 ## Estructura
 
-- **`index.html` + `src/`** — la PWA (Vite), `terminal.dotrino.com`.
+- **`index.html` + `src/`** — la PWA (Vite), `terminal.dotrino.com`. Una sola página con dos
+  rutas (§5.1: informativa o administrativa, nunca las dos):
+  - `/` — la portada: qué es, descargar la app, «Cómo instalar» al wiki. No toca la bóveda.
+  - `/consoles` — las consolas: tus máquinas y sus pestañas. La PWA instalada abre aquí
+    (`start_url`). Pages no sabe de rutas, así que `vite.config.js` copia `index.html` a
+    `dist/consoles/` y a `dist/404.html`.
 - **`agent/`** — el paquete `@dotrino/terminal-agent` (Node + PTY prebuilt): el agente
   (`dotrino-terminal-agent`) y el cliente de las ventanas (`dotrino-terminal`).
 - **`desktop/`** — la app de escritorio (Rust: `iced` + `iced_term` sobre

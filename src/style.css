@@ -135,3 +135,17 @@ button.primary.danger { background: #e5484d; border-color: #e5484d; }
 /* Elegir entre las consolas que siguen abiertas en la máquina */
 .resume { padding: 16px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .resume-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* Portada (`/`): informativa, sin acciones sobre lo del usuario (§5.1). */
+.home { width: 100%; max-width: 820px; padding: 24px 4px; }
+.home h1 { font-size: clamp(1.6rem, 5vw, 2.4rem); margin: 8px 0 12px; line-height: 1.2; }
+.home .lead { font-size: 1.1rem; line-height: 1.6; color: var(--text); margin: 0 0 22px; max-width: 640px; }
+.home-cta { display: flex; flex-wrap: wrap; gap: 10px; }
+a.btn { display: inline-block; text-decoration: none; color: inherit; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 10px 16px; font-weight: 600; }
+a.btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.home-how { color: var(--muted); margin: 12px 0 28px; }
+.home a:not(.btn) { color: var(--text); text-underline-offset: 3px; }
+.home-points { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.home-points .point { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.home-points .point span { color: var(--muted); line-height: 1.5; }
+.home-remote { color: var(--muted); margin-top: 28px; }

@@ -8,7 +8,7 @@ el acta, canal cifrado, revocación, renovación) es
 [`@dotrino/remote-agent`](https://www.npmjs.com/package/@dotrino/remote-agent); esto
 añade el PTY.
 
-**Cómo se instala y se usa:** [wiki.dotrino.com/herramientas/terminal](https://wiki.dotrino.com/herramientas/terminal/).
+**Cómo se instala y se usa:** [las ventanas y la app de escritorio](https://wiki.dotrino.com/herramientas/terminal-escritorio/) · [el acceso desde el navegador](https://wiki.dotrino.com/herramientas/terminal/).
 
 ```sh
 npx @dotrino/terminal-agent                  # enlaza (si falta) y corre

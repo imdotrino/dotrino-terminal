@@ -24,6 +24,20 @@ const AGENT_KIND = 'terminal-agent'
 // ---------- i18n (bilingüe es/en, §9) ----------
 const M = {
   es: {
+    home_title: 'Tu terminal, también desde el teléfono',
+    home_lead: 'Una terminal para tu computadora. Cada ventana que abres la puedes retomar desde el navegador de otro aparato tuyo, tal como la dejaste.',
+    home_download: 'Descargar para tu computadora',
+    home_platforms: 'Linux y macOS',
+    home_open: 'Abrir mis consolas',
+    home_how: 'Cómo instalar',
+    home_p1: 'Tus ventanas, en cualquier aparato',
+    home_p1_d: 'Abre en el teléfono la consola que dejaste en la computadora y sigue donde ibas. Las dos pantallas ven lo mismo.',
+    home_p2: 'Solo entran tus aparatos',
+    home_p2_d: 'Entra únicamente el aparato que tú enlazaste, y lo que escribes viaja cifrado de punta a punta. Si alguien abre una de tus ventanas desde fuera, la ventana te avisa.',
+    home_p3: 'Varios perfiles, una terminal',
+    home_p3_d: 'Tu cuenta personal y la del trabajo en la misma computadora. Cambias de una a otra desde el menú.',
+    home_remote: '¿Solo quieres entrar a una computadora desde el navegador?',
+    home_remote_link: 'Así se prepara',
     step1: '1 · Instala la bóveda en tu PC desde',
     step2: '2 · Conecta este dispositivo (escanea el QR de <code>dotrino-vault pair</code>) en',
     step3: '3 · Vuelve aquí y pulsa:',
@@ -71,6 +85,20 @@ const M = {
     self_back_vault: 'Usar una bóveda externa',
   },
   en: {
+    home_title: 'Your terminal, from your phone too',
+    home_lead: 'A terminal for your computer. Every window you open can be picked up from the browser on another device of yours, right where you left it.',
+    home_download: 'Download for your computer',
+    home_platforms: 'Linux and macOS',
+    home_open: 'Open my consoles',
+    home_how: 'How to install',
+    home_p1: 'Your windows, on any device',
+    home_p1_d: 'Open on your phone the console you left on your computer and carry on. Both screens see the same thing.',
+    home_p2: 'Only your devices get in',
+    home_p2_d: 'Only a device you linked gets in, and what you type is end-to-end encrypted. If someone opens one of your windows from outside, the window tells you.',
+    home_p3: 'Several profiles, one terminal',
+    home_p3_d: 'Your personal account and your work one on the same computer. You switch between them from the menu.',
+    home_remote: 'Just want to reach a computer from the browser?',
+    home_remote_link: 'Here is how to set it up',
     step1: '1 · Install the vault on your PC from',
     step2: '2 · Connect this device (scan the QR from <code>dotrino-vault pair</code>) at',
     step3: '3 · Come back here and press:',
@@ -178,11 +206,37 @@ async function selfMachines (id) {
   return listAgentsByLabel(id)
 }
 
+// Rutas (§5.1: una pantalla es informativa o administrativa, nunca las dos):
+//  · `/`          la portada: qué es, descargar la app, cómo instalar. No hace nada del usuario.
+//  · `/consoles`  las consolas: tus máquinas, las pestañas. Solo aquí se abre la bóveda.
+const onConsoles = /\/consoles\/?$/.test(location.pathname)
+const RELEASES = 'https://github.com/imdotrino/dotrino-terminal/releases/latest'
+// La portada es la página de entrada: no se vuelve de ninguna parte.
+if (!onConsoles) topbar.setAttribute('no-back', '')
+const WIKI = (page) => `https://wiki.dotrino.com${lang === 'en' ? '/en' : ''}/herramientas/${page}/`
+
+function homeScreen () {
+  const points = [1, 2, 3].map((i) => `<div class="point"><b>${t('home_p' + i)}</b><span>${t('home_p' + i + '_d')}</span></div>`).join('')
+  return el(`
+    <section class="home" data-testid="home">
+      <h1>${t('home_title')}</h1>
+      <p class="lead">${t('home_lead')}</p>
+      <div class="home-cta">
+        <a class="btn primary" href="${RELEASES}" target="_blank" rel="noopener" data-testid="home-download">${t('home_download')}</a>
+        <a class="btn" href="/consoles" data-testid="home-consoles">${t('home_open')}</a>
+      </div>
+      <p class="home-how">${t('home_platforms')} · <a href="${WIKI('terminal-escritorio')}" target="_blank" rel="noopener" data-testid="home-how">${t('home_how')}</a></p>
+      <div class="home-points">${points}</div>
+      <p class="home-remote">${t('home_remote')} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('home_remote_link')}</a></p>
+    </section>`)
+}
+
 async function render () {
   if (_probeTimer) { clearInterval(_probeTimer); _probeTimer = null }
   if (_probeClient) { try { _probeClient.close() } catch (_) {} _probeClient = null }
-  link = await getLink().catch(() => ({ paired: false }))
   installEl.setAttribute('lang', lang)
+  if (!onConsoles) { app.replaceChildren(homeScreen()); return }
+  link = await getLink().catch(() => ({ paired: false }))
   app.innerHTML = ''
   if (link.paired) {
     app.appendChild(terminalScreen(link))
@@ -488,7 +542,7 @@ render()
 // --- Service worker ---
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').then((reg) => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).then((reg) => {
       setInterval(() => reg.update(), 30 * 60 * 1000)
     }).catch(() => {})
   })

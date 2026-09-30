@@ -1,9 +1,9 @@
 {
   "name": "Terminal — Dotrino",
   "short_name": "Terminal",
-  "description": "Abre una consola en tu propia máquina desde el navegador. Solo tu dispositivo enlazado al vault entra; cifrado punto a punto.",
-  "start_url": "./",
-  "scope": "./",
+  "description": "Tu terminal, también desde el teléfono: abre las consolas de tus computadoras desde el navegador. Solo entran tus aparatos.",
+  "start_url": "/consoles",
+  "scope": "/",
   "launch_handler": { "client_mode": "focus-existing" },
   "display": "standalone",
   "orientation": "any",
