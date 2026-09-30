@@ -10,6 +10,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
 import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil+support)
+import '@dotrino/install' // botón «Instalar app»: captura beforeinstallprompt al importarse
 import { createVaultReputation } from '@dotrino/reputation'
 import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
@@ -29,7 +30,6 @@ const M = {
     recheck: 'Ya lo conecté',
     checking: 'Comprobando…',
     still_not: 'Este dispositivo aún no está conectado a una bóveda.',
-    install: 'Instalar',
     machines_title: 'Tus máquinas',
     machines_loading: 'Buscando tus máquinas…',
     machines_none: 'No hay ninguna máquina con el agente encendido. Si ya lo instalaste, comprueba que esté corriendo: aparecerá aquí sola.',
@@ -77,7 +77,6 @@ const M = {
     recheck: 'I connected it',
     checking: 'Checking…',
     still_not: 'This device is not connected to a vault yet.',
-    install: 'Install',
     machines_title: 'Your machines',
     machines_loading: 'Looking for your machines…',
     machines_none: 'No machine has the agent running. If you already installed it, check that it is running: it will show up here by itself.',
@@ -129,12 +128,7 @@ topbar.addEventListener('dotrino-lang', (e) => { lang = e.detail.lang; render() 
 
 const app = document.getElementById('app')
 
-// --- Instalar (PWA): botón propio en el slot "end" del topbar ---
-let deferredPrompt = null
-const installBtn = document.getElementById('installBtn')
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; installBtn.hidden = false })
-window.addEventListener('appinstalled', () => { installBtn.hidden = true; deferredPrompt = null })
-installBtn.addEventListener('click', async () => { if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; installBtn.hidden = true } })
+const installEl = document.getElementById('install')
 
 function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return tpl.content.firstElementChild }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -188,7 +182,7 @@ async function render () {
   if (_probeTimer) { clearInterval(_probeTimer); _probeTimer = null }
   if (_probeClient) { try { _probeClient.close() } catch (_) {} _probeClient = null }
   link = await getLink().catch(() => ({ paired: false }))
-  installBtn.textContent = t('install')
+  installEl.setAttribute('lang', lang)
   app.innerHTML = ''
   if (link.paired) {
     app.appendChild(terminalScreen(link))
