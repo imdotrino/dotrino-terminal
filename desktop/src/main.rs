@@ -29,6 +29,7 @@ use iced_aw::menu::{Item, Menu, MenuBar};
 use serde::Deserialize;
 
 const CLIENT: &str = "dotrino-terminal";
+const CLIENT_PKG: &str = "@dotrino/terminal-agent";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// «Ayuda → Cómo se usa»: la página del wiki de esta app, en el idioma del sistema.
 fn help_url() -> &'static str {
@@ -75,6 +76,9 @@ enum Mode {
     Console,
     /// `dotrino-terminal link`: al terminar se mira qué perfil quedó enlazado.
     Linking { linked_before: Vec<String> },
+    /// `npm install -g @dotrino/terminal-agent`, a la vista en la ventana: al terminar se vuelve
+    /// a buscar el cliente y la ventana pasa a su perfil por defecto.
+    Installing,
 }
 
 struct Win {
@@ -104,6 +108,8 @@ enum Message {
     /// `None`: sin perfil.
     SwitchProfile(window::Id, Option<String>),
     Enroll(window::Id),
+    /// Instalar (o actualizar) el cliente dentro de la ventana.
+    InstallClient(window::Id),
     Copy(window::Id),
     Paste(window::Id),
     Pasted(window::Id, Option<String>),
@@ -196,6 +202,11 @@ fn load_profiles(launch: &Launch) -> Result<Vec<Profile>, String> {
     Ok(all.into_iter().filter(|p| p.linked || Path::new(&p.dir).is_dir()).collect())
 }
 
+/// Un texto como UN argumento de `sh`, entre comillas simples (y las suyas escapadas).
+fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
 /// Dónde se recuerda el último perfil elegido en la app (una preferencia, nada más).
 fn last_profile_file() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
@@ -281,7 +292,26 @@ impl App {
         win.error = None;
         win.title = String::new();
         let plain = matches!(mode, Mode::Console) && win.profile.is_none();
-        let spawn = if plain {
+        let spawn = if matches!(mode, Mode::Installing) {
+            // Con /bin/sh y el PATH de inicio de sesión (el npm de nvm o Homebrew). Si falla, la
+            // salida se queda a la vista hasta una tecla: la ventana cambia cuando esto termina.
+            login_path().map(|path| {
+                let fail = t(
+                    "No se pudo instalar. Si dice EACCES, tu npm instala en una carpeta del sistema: usa nvm, o instálalo con sudo desde otra terminal. Pulsa una tecla para volver.",
+                    "Could not install. If it says EACCES, your npm installs into a system folder: use nvm, or install it with sudo from another terminal. Press a key to go back.",
+                );
+                let no_npm = t(
+                    "No encuentro npm. Instala Node 20 o más reciente (https://nodejs.org) y vuelve a intentarlo. Pulsa una tecla para volver.",
+                    "Can't find npm. Install Node 20 or newer (https://nodejs.org) and try again. Press a key to go back.",
+                );
+                let script = format!(
+                    "command -v npm >/dev/null || {{ echo {}; read -r _; exit 1; }}; echo '$ npm install -g {CLIENT_PKG}@latest'; npm install -g {CLIENT_PKG}@latest || {{ s=$?; echo; echo {}; read -r _; exit $s; }}",
+                    sh_quote(&no_npm),
+                    sh_quote(&fail)
+                );
+                ("/bin/sh".to_string(), vec!["-c".to_string(), script], HashMap::from([("PATH".to_string(), path), ("TERM".to_string(), "xterm-256color".to_string())]))
+            })
+        } else if plain {
             // Sin perfil: la shell del usuario, como cualquier terminal. En macOS las terminales
             // abren una shell de inicio de sesión; en Linux, una interactiva.
             user_shell().map(|sh| {
@@ -292,7 +322,7 @@ impl App {
             self.launch.clone().map(|launch| {
                 let args = match &mode {
                     Mode::Linking { .. } => vec!["link".to_string()],
-                    Mode::Console => vec!["--name".to_string(), win.profile.clone().unwrap_or_default()],
+                    Mode::Console | Mode::Installing => vec!["--name".to_string(), win.profile.clone().unwrap_or_default()],
                 };
                 let env = HashMap::from([
                     ("PATH".to_string(), launch.path.clone()),
@@ -352,6 +382,18 @@ impl App {
         match &win.mode {
             // La shell salió, o se soltó la consola: la ventana se va, como cualquier terminal.
             Mode::Console => self.close(id),
+            // Terminó la instalación (bien o mal): se vuelve a buscar el cliente. Con él, la
+            // ventana pasa a su perfil por defecto; sin él, sigue sin perfil y el menú lo dice.
+            Mode::Installing => {
+                self.launch = resolve();
+                let _ = self.reload_profiles();
+                let profile = self.default_profile();
+                if let Some(win) = self.windows.get_mut(&id) {
+                    win.profile = profile;
+                }
+                self.start(id, Mode::Console);
+                self.focus(id)
+            }
             // Terminó el enlace: si quedó un perfil enlazado nuevo, la ventana pasa a él; si
             // no (se canceló, falló), vuelve al que tenía.
             Mode::Linking { linked_before } => {
@@ -395,6 +437,10 @@ impl App {
                 self.start(id, Mode::Console);
                 self.focus(id)
             }
+            Message::InstallClient(id) => {
+                self.start(id, Mode::Installing);
+                self.focus(id)
+            }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
                 let linked_before = linked_names(&self.profiles);
@@ -435,7 +481,8 @@ impl App {
 
     /// La barra de menú de la ventana: Archivo, Editar, Perfil, Ayuda.
     fn menu(&self, id: window::Id, win: &Win) -> Element<'_, Message> {
-        let linking = matches!(win.mode, Mode::Linking { .. });
+        // Mientras la ventana enrola o instala, no se ofrece otra cosa que la cambie.
+        let linking = matches!(win.mode, Mode::Linking { .. } | Mode::Installing);
         let (new_key, close_key, copy_key, paste_key) = if cfg!(target_os = "macos") {
             ("⌘N", "⌘W", "⌘C", "⌘V")
         } else {
@@ -465,6 +512,8 @@ impl App {
         if let Err(why) = &self.launch {
             profiles.push(Item::new(note(why.clone())));
         }
+        let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
+        profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
         let help = Menu::new(vec![
             Item::new(entry(t("Cómo se usa", "How to use it"), "", Some(Message::Help))),
             Item::new(entry(format!("Dotrino Terminal {VERSION}"), "", None)),
@@ -501,6 +550,7 @@ impl App {
         let Some(win) = self.windows.get(&id) else { return String::new() };
         let what = match win.mode {
             Mode::Linking { .. } => t("Enrolar", "Enroll"),
+            Mode::Installing => t("Instalando dotrino-terminal", "Installing dotrino-terminal"),
             Mode::Console if win.title.is_empty() => "Dotrino Terminal".to_string(),
             Mode::Console => win.title.clone(),
         };

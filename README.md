@@ -69,7 +69,9 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   `dotrino-terminal --name <perfil>` (el último elegido, `~/.config/dotrino-terminal/last-profile`;
   si no, `default`; si no, el primero enlazado; si no, el primero que exista). **Sin perfil** es
   el repliegue cuando no hay ninguno o falta el cliente, y el título lo dice: la shell del
-  usuario directa, sin agente. El menú Perfil cambia de perfil (cierra la TTY y abre
+  usuario directa, sin agente. «Perfil → Instalar/Actualizar dotrino-terminal…» corre
+  `npm install -g @dotrino/terminal-agent@latest` dentro de la ventana (el `.deb` no lo trae:
+  así la instalación la dispara la persona, a la vista, §15). El menú Perfil cambia de perfil (cierra la TTY y abre
   otra) o enrola uno nuevo dentro de la ventana. `vendor/iced_term`
   es el crate con un método público más (ver su README).
 
