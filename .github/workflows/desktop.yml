@@ -1,5 +1,5 @@
 # Publica la app de escritorio (la carpeta desktop/, Rust) DESDE CI: Linux (.deb y .tar.gz) y
-# macOS (.app en un .zip), con la versión en el nombre de cada archivo (CONVENCIONES §11.5) y
+# macOS (.app universal en un .zip), con la versión en el nombre de cada archivo (CONVENCIONES §11.5) y
 # atestiguados, para que quien la baje pueda verificarla (§15).
 #
 # Se dispara con un tag `desktop-vX.Y.Z` (el agente va por `agent-v*`, la PWA por cada push).
@@ -57,11 +57,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with: { targets: 'aarch64-apple-darwin,x86_64-apple-darwin' }
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: desktop }
-      - run: cargo build --release --locked
+      # Universal: Apple Silicon e Intel en un solo binario.
+      - run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/dotrino-terminal-desktop \
+            target/aarch64-apple-darwin/release/dotrino-terminal-desktop \
+            target/x86_64-apple-darwin/release/dotrino-terminal-desktop
       # Con `sh`: el repo vive en un disco sin permisos de ejecución (NTFS), así que el bit no viaja.
-      - run: sh scripts/macos-bundle.sh target/release arm64
+      - run: sh scripts/macos-bundle.sh target/universal universal
       - uses: actions/attest-build-provenance@v1
         with:
           subject-path: desktop/dist/*.zip

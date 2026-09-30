@@ -86,6 +86,6 @@ Desde CI, nunca a mano:
 - **agente**: commit → tag `agent-vX.Y.Z` → `release.yml` publica `@dotrino/terminal-agent`
   con procedencia y SBOM.
 - **escritorio**: tag `desktop-vX.Y.Z` → `desktop.yml` sube `.deb`, `.tar.gz` (Linux x64) y
-  `.zip` (macOS arm64), atestiguados. El `.app` de macOS no va firmado por Apple todavía.
+  `.zip` (macOS universal: Apple Silicon e Intel), atestiguados. El `.app` de macOS no va firmado por Apple todavía.
 
 MIT.
