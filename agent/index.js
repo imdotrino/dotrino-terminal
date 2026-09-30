@@ -21,12 +21,16 @@
 import os from 'node:os'
 import { createRequire } from 'node:module'
 import { startRemoteAgent } from '@dotrino/remote-agent/agent'
-import { dataDir, LABEL } from './link.js'
+import { dataDir, loadLink, LABEL } from './link.js'
 import { ConsoleHub, REPLAY_CHUNK } from './consoles.js'
+import { listenLocal } from './local.js'
 
 const require = createRequire(import.meta.url)
 
 export { LABEL }
+
+/** Cada cuánto mira un agente sin enlazar si ya lo enlazaron. */
+export const LINK_POLL_MS = 2000
 
 export function loadPty () {
   // Binarios PREBUILT (Linux/macOS/Windows, sin toolchain), API idéntica a node-pty.
@@ -47,18 +51,34 @@ export function makeHub (pty, opts = {}) {
 }
 
 /**
- * Atiende una sesión cifrada. Una sesión mira UNA consola a la vez (una pestaña). Si la
- * sesión se cierra (el navegador se fue, inactividad), la consola se SUELTA, no se mata.
+ * Atiende una sesión: la cifrada de un aparato remoto, o la de una ventana de esta máquina
+ * (`local.js`, por el socket). Una sesión mira UNA consola a la vez.
+ *
+ * Al irse la sesión, la consola se SUELTA — salvo que sea una ventana local que la abrió
+ * ella: cerrar la ventana mata su shell, como en cualquier terminal. Una ventana que solo
+ * se enganchó a una consola ajena, o que la soltó a propósito (`detach`), no mata nada.
+ *
+ * Tamaño con varios mirando: manda el último que se enganchó o escribió (como tmux).
  * Exportada para las pruebas.
+ *
+ * @param {object} session
+ * @param {ConsoleHub} hub
+ * @param {{ origin?: 'local'|'remote' }} [opts]
  */
-export function serveSession (session, hub) {
+export function serveSession (session, hub, { origin = 'remote' } = {}) {
   let current = null
+  let owned = null                       // la consola que esta ventana local abrió
+  let size = { cols: 80, rows: 24 }
   const viewer = {
+    origin,
+    device: session.device || null,
     onOut: (data) => { session.send({ type: 'out', data }) },
-    onExit: (code) => { current = null; session.send({ type: 'exit', code }) }
+    onExit: (code) => { current = null; owned = null; session.send({ type: 'exit', code }) },
+    onMeta: (info) => { session.send({ type: 'meta', console: info }) }
   }
   const release = () => { if (current) { current.detach(viewer); current = null } }
   const fail = (code, message) => session.send({ type: 'fail', code, message })
+  const takeSize = (msg) => { if (msg.cols && msg.rows) size = { cols: msg.cols, rows: msg.rows } }
 
   async function attachTo (c, { fresh }) {
     release()
@@ -68,32 +88,52 @@ export function serveSession (session, hub) {
     for (let i = 0; i < snapshot.length || i === 0; i += REPLAY_CHUNK) {
       await session.send({ type: 'replay', id: c.id, data: snapshot.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= snapshot.length })
     }
-    await session.send({ type: 'attached', id: c.id, fresh })
+    await session.send({ type: 'attached', id: c.id, fresh, console: c.info() })
   }
 
   session.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return
     if (msg.type === 'list') { session.send({ type: 'consoles', list: hub.list() }); return }
-    if (msg.type === 'open') { attachTo(hub.create({ cols: msg.cols || 80, rows: msg.rows || 24 }), { fresh: true }); return }
+    if (msg.type === 'open') {
+      takeSize(msg)
+      const c = hub.create({ ...size, origin })
+      if (origin === 'local') owned = c
+      attachTo(c, { fresh: true })
+      return
+    }
     if (msg.type === 'attach') {
       const c = hub.get(msg.id)
       if (!c) return fail('no-console', 'that console no longer exists')
-      c.resize(msg.cols, msg.rows)
+      takeSize(msg)
+      c.resize(size.cols, size.rows)
       attachTo(c, { fresh: false })
       return
     }
-    if (msg.type === 'detach') { release(); return }
-    if (msg.type === 'input') { current?.write(String(msg.data ?? '')); return }
-    if (msg.type === 'resize') { current?.resize(msg.cols, msg.rows); return }
+    if (msg.type === 'detach') { owned = null; release(); return }
+    if (msg.type === 'input') {
+      if (!current) return
+      if (current.cols !== size.cols || current.rows !== size.rows) current.resize(size.cols, size.rows)
+      current.write(String(msg.data ?? ''))
+      return
+    }
+    if (msg.type === 'resize') { takeSize(msg); current?.resize(size.cols, size.rows); return }
     if (msg.type === 'close') { if (current) hub.kill(current.id); return }
     if (msg.type === 'kill') { if (!hub.kill(msg.id)) fail('no-console', 'that console no longer exists') }
   })
-  session.on('close', release)
+  session.on('close', () => {
+    const mine = owned && owned === current ? owned : null
+    release()
+    if (mine) hub.kill(mine.id)
+  })
 }
 
 /**
- * Arranca el agente. Devuelve lo mismo que `startRemoteAgent`:
- * `{ machine, machineId, master, client, close }`.
+ * Arranca el agente: las consolas, el socket de las ventanas de esta máquina y, si la
+ * máquina está enlazada con la bóveda, la parte remota (`startRemoteAgent`).
+ *
+ * Sin enlace el agente atiende SOLO a las ventanas locales: una terminal tiene que abrir
+ * aunque no haya bóveda (ninguna app puede exigirla). Lo que no hay es acceso desde otros
+ * aparatos, y se dice en `remote: null`.
  *
  * @param {object} [opts]
  * @param {string} [opts.dir]       dónde vive el enlace (default dataDir()).
@@ -101,19 +141,49 @@ export function serveSession (session, hub) {
  * @param {string} [opts.shell]     shell a lanzar (default $SHELL).
  * @param {boolean} [opts.quiet]
  * @param {()=>void} [opts.onRevoked]
+ * @param {(remote:object)=>void} [opts.onLinked]   se enlazó mientras corría y ya atiende a otros aparatos.
+ * @param {(e:Error)=>void} [opts.onLinkError]     se enlazó, pero la parte remota no arrancó.
+ * @returns {Promise<{ consoles: ConsoleHub, socket: string, remote: object|null, machineId: string|null, close: ()=>void }>}
  */
 export async function startAgent (opts = {}) {
+  const dir = opts.dir || dataDir()
   const hub = makeHub(loadPty(), opts)
-  const ra = await startRemoteAgent({
+  const local = await listenLocal({ dir, serve: (session) => serveSession(session, hub, { origin: 'local' }) })
+  let remote = null
+  let stopped = false
+  const startRemote = () => startRemoteAgent({
     label: LABEL,
-    dir: opts.dir || dataDir(),
+    dir,
     proxyUrl: opts.proxyUrl,
     quiet: opts.quiet,
     onRevoked: () => { hub.killAll(); opts.onRevoked?.() },
-    onSession: (session) => serveSession(session, hub)
+    onSession: (session) => serveSession(session, hub, { origin: 'remote' })
   })
+  let watcher = null
+  if (loadLink(dir)) {
+    try { remote = await startRemote() } catch (e) { local.close(); throw e }
+  } else {
+    // Sin enlace: se mira cada poco si aparece (`dotrino-terminal link` desde una ventana).
+    // Al aparecer se enciende la parte remota SIN reiniciar, así las consolas abiertas siguen.
+    watcher = setInterval(() => {
+      if (!loadLink(dir)) return
+      clearInterval(watcher); watcher = null
+      startRemote().then((r) => {
+        if (stopped) { r.close(); return }
+        remote = r
+        opts.onLinked?.(r)
+      }).catch((e) => opts.onLinkError?.(e))
+    }, LINK_POLL_MS)
+    watcher.unref()
+  }
   // Parar el agente sí mata las consolas: sin agente no hay quién las atienda.
-  return { ...ra, consoles: hub, close: () => { hub.killAll(); ra.close() } }
+  return {
+    consoles: hub,
+    socket: local.path,
+    get remote () { return remote },
+    get machineId () { return remote?.machineId || null },
+    close: () => { stopped = true; if (watcher) clearInterval(watcher); hub.killAll(); local.close(); remote?.close() }
+  }
 }
 
 export default { startAgent, LABEL }

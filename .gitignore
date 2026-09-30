@@ -4,3 +4,4 @@ dist/
 agent/node_modules/
 *.log
 .npmrc
+desktop/target/

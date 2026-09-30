@@ -56,6 +56,8 @@ const M = {
     new_console: 'Nueva consola',
     kill_console: 'Cerrar esta consola',
     console_item: (n, ago) => `Consola ${n} · activa ${ago}`,
+    console_local: 'ventana abierta en la máquina',
+    console_in_use: 'en uso',
     ago_now: 'ahora',
     ago_min: (m) => `hace ${m} min`,
     ago_h: (h) => `hace ${h} h`,
@@ -102,6 +104,8 @@ const M = {
     new_console: 'New console',
     kill_console: 'Close this console',
     console_item: (n, ago) => `Console ${n} · active ${ago}`,
+    console_local: 'window open on the machine',
+    console_in_use: 'in use',
     ago_now: 'now',
     ago_min: (m) => `${m} min ago`,
     ago_h: (h) => `${h} h ago`,
@@ -312,6 +316,18 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
   /**
+   * Cómo se nombra una consola en la lista: el título que puso su shell (si puso uno), si es
+   * una ventana abierta en la propia máquina (`dotrino-terminal`) y si alguien la está usando.
+   * Entrar en una ventana de la máquina avisa a quien esté delante de ella.
+   */
+  function consoleLabel (c, i) {
+    const parts = [c.title ? `${c.title} · ${agoText(c.lastActive)}` : t('console_item', i + 1, agoText(c.lastActive))]
+    if (c.origin === 'local') parts.push(t('console_local'))
+    if (c.viewers > 0) parts.push(t('console_in_use'))
+    return parts.join(' · ')
+  }
+
+  /**
    * Las consolas de la máquina que NO están ya en una pestaña de esta página. Si hay,
    * se ofrece retomarlas; si no, se abre una nueva sin preguntar.
    * @returns {Promise<{ resume?: string }>} qué eligió el usuario
@@ -329,7 +345,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       const holder = node.querySelector('.resume-list')
       free.sort((a, b) => b.lastActive - a.lastActive).forEach((c, i) => {
         const row = el(`<div class="machine-row">
-          <button class="machine" data-testid="resume-console">${esc(t('console_item', i + 1, agoText(c.lastActive)))} · ${t('resume')}</button>
+          <button class="machine" data-testid="resume-console" data-console-id="${esc(c.id)}">${esc(consoleLabel(c, i))} · ${t('resume')}</button>
           <button class="machine-x" title="${esc(t('kill_console'))}" aria-label="${esc(t('kill_console'))}">×</button>
         </div>`)
         row.querySelector('.machine').addEventListener('click', () => resolve({ resume: c.id }))

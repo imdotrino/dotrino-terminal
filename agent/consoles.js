@@ -27,18 +27,27 @@ export const REPLAY_CHUNK = 64 * 1024
 const randomId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
 
 class Console {
-  constructor ({ id, pty, cols, rows }) {
+  constructor ({ id, pty, cols, rows, origin }) {
     this.id = id
     this.pty = pty
+    this.origin = origin              // 'local' (una ventana de esta máquina) | 'remote' (otro aparato)
+    this.title = ''                   // el que pone la shell (OSC 0/2), para reconocerla en la lista
     this.cols = cols
     this.rows = rows
     this.createdAt = Date.now()
     this.lastActive = Date.now()
-    this.viewers = new Set()          // sesiones mirando: { onOut(data), onExit(code) }
+    this.viewers = new Set()          // sesiones mirando: { onOut(data), onExit(code), onMeta?(info), origin, device? }
     this.exited = false
     this.screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
     this.serializer = new SerializeAddon()
     this.screen.loadAddon(this.serializer)
+    this.screen.onTitleChange((t) => { this.title = String(t).slice(0, 200); this._meta() })
+  }
+
+  /** Avisa a todos los que miran de que cambió quién mira o el título. */
+  _meta () {
+    const info = this.info()
+    for (const v of this.viewers) v.onMeta?.(info)
   }
 
   /** Lo que sale de la shell: a la pantalla sin pantalla y a quien esté mirando. */
@@ -75,14 +84,20 @@ class Console {
         this.viewers.delete(buffering)
         this.viewers.add(viewer)
         resolve(snapshot + pending.join(''))
+        this._meta()
       })
     })
   }
 
-  detach (viewer) { this.viewers.delete(viewer) }
+  detach (viewer) { if (this.viewers.delete(viewer)) this._meta() }
 
+  /**
+   * `watchers` dice QUIÉN mira: una ventana de esta máquina o un aparato de la cuenta (con
+   * su pubkey). Es lo que deja a la ventana local avisar de que alguien entró desde fuera.
+   */
   info () {
-    return { id: this.id, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size }
+    const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null }))
+    return { id: this.id, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 
@@ -97,10 +112,10 @@ export class ConsoleHub {
     this.consoles = new Map()
   }
 
-  create ({ cols = 80, rows = 24 } = {}) {
+  create ({ cols = 80, rows = 24, origin = 'remote' } = {}) {
     const id = randomId()
     const pty = this._spawn({ cols, rows })
-    const c = new Console({ id, pty, cols, rows })
+    const c = new Console({ id, pty, cols, rows, origin })
     pty.onData((d) => c._out(d))
     pty.onExit(({ exitCode }) => {
       c.exited = true

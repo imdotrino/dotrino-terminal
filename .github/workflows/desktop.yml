@@ -1,0 +1,70 @@
+# Publica la app de escritorio (la carpeta desktop/, Rust) DESDE CI: Linux (.deb y .tar.gz) y
+# macOS (.app en un .zip), con la versión en el nombre de cada archivo (CONVENCIONES §11.5) y
+# atestiguados, para que quien la baje pueda verificarla (§15).
+#
+# Se dispara con un tag `desktop-vX.Y.Z` (el agente va por `agent-v*`, la PWA por cada push).
+name: Release desktop
+
+on:
+  push:
+    tags: ['desktop-v*']
+
+permissions:
+  contents: write      # crear la release y subirle los archivos
+  id-token: write      # OIDC: la atestación
+  attestations: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: desktop }
+      - run: cargo build --release --locked
+      - run: cargo install cargo-deb --locked
+      - run: cargo deb --no-build
+      - name: tar.gz
+        run: |
+          V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          D=dotrino-terminal-desktop-$V-linux-x64
+          mkdir -p dist/$D
+          cp target/release/dotrino-terminal-desktop assets/dotrino-terminal.desktop assets/icon.svg dist/$D/
+          tar -C dist -czf dist/$D.tar.gz $D
+          cp target/debian/*.deb dist/
+      - uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            desktop/dist/*.deb
+            desktop/dist/*.tar.gz
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "Dotrino Terminal (escritorio) ${GITHUB_REF_NAME#desktop-v}" --notes "Necesita el cliente: npm install -g @dotrino/terminal-agent"
+          gh release upload "$GITHUB_REF_NAME" dist/*.deb dist/*.tar.gz --clobber
+
+  macos:
+    needs: linux        # la release la crea el de Linux; aquí solo se suben los archivos
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: desktop }
+      - run: cargo build --release --locked
+      - run: scripts/macos-bundle.sh target/release arm64
+      - uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: desktop/dist/*.zip
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber

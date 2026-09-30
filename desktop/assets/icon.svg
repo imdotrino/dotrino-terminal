@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Dotrino Terminal">
+  <rect width="512" height="512" rx="112" fill="#0e0b1a"/>
+  <rect x="72" y="104" width="368" height="304" rx="28" fill="#171331" stroke="#7c3aed" stroke-width="14"/>
+  <path d="M150 210l60 46-60 46" fill="none" stroke="#7c3aed" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="238" y1="320" x2="342" y2="320" stroke="#7c3aed" stroke-width="26" stroke-linecap="round"/>
+</svg>

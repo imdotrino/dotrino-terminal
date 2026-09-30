@@ -1,10 +1,11 @@
 {
   "name": "@dotrino/terminal-agent",
-  "version": "0.5.1",
-  "description": "Agente de Dotrino Terminal: abre una shell (PTY) en esta máquina solo para los aparatos de tu cuenta, cifrada punto a punto, vía @dotrino/remote-agent.",
+  "version": "0.6.0",
+  "description": "Dotrino Terminal: las ventanas de esta máquina (dotrino-terminal) y su agente, que deja abrir esas mismas consolas desde los otros aparatos de tu cuenta, cifrado punto a punto.",
   "type": "module",
   "bin": {
-    "dotrino-terminal-agent": "bin/cli.js"
+    "dotrino-terminal-agent": "bin/cli.js",
+    "dotrino-terminal": "bin/terminal.js"
   },
   "exports": {
     ".": "./index.js"
@@ -13,6 +14,8 @@
     "index.js",
     "consoles.js",
     "link.js",
+    "local.js",
+    "title.js",
     "bin"
   ],
   "scripts": {

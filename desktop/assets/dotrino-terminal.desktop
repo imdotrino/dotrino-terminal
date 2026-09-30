@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Dotrino Terminal
+GenericName=Terminal
+GenericName[es]=Terminal
+Comment=A terminal whose windows you can also open from your other devices
+Comment[es]=Una terminal cuyas ventanas también puedes abrir desde tus otros aparatos
+Exec=dotrino-terminal-desktop
+Icon=dotrino-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;console;remote;
+StartupWMClass=dotrino-terminal

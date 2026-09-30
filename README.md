@@ -2,14 +2,17 @@
 
 > **Parte del ecosistema [Dotrino](https://dotrino.com).**
 
-Abre una shell real (`bash`, `zsh`, `powershell`…) de una de tus máquinas desde el
-navegador de otro aparato de tu cuenta. Solo entran los aparatos que tu **acta**
+Una terminal para Linux y macOS cuyas ventanas también se abren desde el navegador de otro
+aparato de tu cuenta, y una shell real (`bash`, `zsh`…) de tus máquinas en ese navegador. Solo entran los aparatos que tu **acta**
 reconoce con permiso `sign`, y todo viaja cifrado de punta a punta por el proxio.
 No hay puertos abiertos ni contraseñas.
 
 **Cómo se usa:** [wiki.dotrino.com/herramientas/terminal](https://wiki.dotrino.com/herramientas/terminal/).
 
 ```
+ ventanas de la máquina                    ┌──────────────────────────┐
+ (dotrino-terminal, app de escritorio) ──► │ socket local (0700)      │
+                                           │                          │
  navegador (aparato de la cuenta)          máquina (agente)
  ┌──────────────────────────┐             ┌──────────────────────────┐
  │ terminal.dotrino.com      │             │ @dotrino/terminal-agent   │
@@ -32,10 +35,19 @@ de la cuenta puede volver a ellas y ver la pantalla como estaba (una terminal si
 `@xterm/headless`, la reconstruye; todo en memoria). La × de la pestaña sí la mata. Si el
 agente se reinicia, se pierden.
 
-| Sentido | Payload (dentro de la sesión cifrada) |
+El mismo protocolo sirve a las dos puntas: las ventanas locales (JSON por líneas en
+`~/.dotrino/agent/terminal-agent/<perfil>/terminal.sock`) y los aparatos remotos (dentro de la
+sesión cifrada).
+
+| Sentido | Payload |
 |---|---|
-| navegador → máquina | `list` · `open {cols,rows}` · `attach {id,cols,rows}` · `detach` · `input {data}` · `resize {cols,rows}` · `close` (mata la enganchada) · `kill {id}` |
-| máquina → navegador | `consoles {list}` · `replay {id,data,last}` · `attached {id,fresh}` · `out {data}` · `exit {code}` · `fail {code,message}` |
+| cliente → máquina | `list` · `open {cols,rows}` · `attach {id,cols,rows}` · `detach` · `input {data}` · `resize {cols,rows}` · `close` (mata la enganchada) · `kill {id}` |
+| máquina → cliente | `consoles {list}` · `replay {id,data,last}` · `attached {id,fresh,console}` · `out {data}` · `meta {console}` · `exit {code}` · `fail {code,message}` |
+
+Cada consola dice su `origin` (`local`/`remote`), su `title` (el de la shell) y `watchers`
+(quién la mira: ventana local o aparato, con su llave). Con varios mirando, el tamaño lo pone
+el último que se enganchó o escribió. Una ventana local que abrió su consola la mata al
+cerrarse; una que solo se enganchó, no.
 
 La PWA recuerda sus pestañas en `sessionStorage` y al recargar se vuelve a enganchar.
 
@@ -44,7 +56,12 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
 ## Estructura
 
 - **`index.html` + `src/`** — la PWA (Vite), `terminal.dotrino.com`.
-- **`agent/`** — el paquete `@dotrino/terminal-agent` (Node + PTY prebuilt).
+- **`agent/`** — el paquete `@dotrino/terminal-agent` (Node + PTY prebuilt): el agente
+  (`dotrino-terminal-agent`) y el cliente de las ventanas (`dotrino-terminal`).
+- **`desktop/`** — la app de escritorio (Rust: `iced` + `iced_term` sobre
+  `alacritty_terminal`). Cada ventana corre `dotrino-terminal`; el menú Perfil cambia de
+  perfil (cierra la TTY y abre otra) o enrola uno nuevo dentro de la ventana. `vendor/iced_term`
+  es el crate con un método público más (ver su README).
 
 ## Desarrollo
 
@@ -59,9 +76,16 @@ node bin/cli.js                     # enlaza (pide la invitación de `dotrino-va
 La prueba de punta a punta (bóveda como binario, agente y otro aparato en cajas
 separadas, shell por el proxio) está en `dotrino-test`: `npm run smoke:dispositivos`.
 
-## Publicar el agente
+```sh
+cd desktop && cargo run                  # la app de escritorio (DOTRINO_TERMINAL_BIN=../agent/bin/terminal.js)
+```
 
-Desde CI, nunca a mano: commit → tag `agent-vX.Y.Z` → `release.yml` publica
-`@dotrino/terminal-agent` con procedencia y SBOM.
+## Publicar
+
+Desde CI, nunca a mano:
+- **agente**: commit → tag `agent-vX.Y.Z` → `release.yml` publica `@dotrino/terminal-agent`
+  con procedencia y SBOM.
+- **escritorio**: tag `desktop-vX.Y.Z` → `desktop.yml` sube `.deb`, `.tar.gz` (Linux x64) y
+  `.zip` (macOS arm64), atestiguados. El `.app` de macOS no va firmado por Apple todavía.
 
 MIT.
