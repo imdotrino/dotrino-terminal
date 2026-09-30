@@ -1,11 +1,13 @@
 //! Dotrino Terminal — la app de escritorio (Linux y macOS).
 //!
-//! Cada ventana es una terminal nativa (`iced` + `iced_term`, sobre `alacritty_terminal`)
-//! que ejecuta `dotrino-terminal`, el cliente TTY del paquete `@dotrino/terminal-agent`.
-//! La shell no vive aquí: vive en el agente del PERFIL de la ventana, así que lo que se abre
-//! aquí también se puede abrir desde los otros aparatos de esa cuenta. Esta app no habla el
-//! protocolo del agente; solo pone la ventana y elige el perfil. La lógica de las consolas
-//! está en un solo sitio.
+//! Cada ventana es una terminal nativa (`iced` + `iced_term`, sobre `alacritty_terminal`).
+//!
+//! - **Sin perfil** es una terminal más: corre tu shell directamente, sin agente y sin nada de
+//!   Dotrino. Funciona aunque `dotrino-terminal` no esté instalado.
+//! - **Con perfil** ejecuta `dotrino-terminal --name <perfil>`, el cliente TTY del paquete
+//!   `@dotrino/terminal-agent`. La shell vive en el agente del perfil, así que lo que se abre
+//!   aquí también se puede abrir desde los otros aparatos de esa cuenta. Esta app no habla el
+//!   protocolo del agente; solo pone la ventana y elige el perfil.
 //!
 //! Las opciones van en la barra de menú de la ventana (Archivo, Editar, Perfil, Ayuda).
 //!
@@ -26,7 +28,6 @@ use iced_aw::menu::{Item, Menu, MenuBar};
 use serde::Deserialize;
 
 const CLIENT: &str = "dotrino-terminal";
-const DEFAULT_PROFILE: &str = "default";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// «Ayuda → Cómo se usa»: la página del wiki de esta app, en el idioma del sistema.
 fn help_url() -> &'static str {
@@ -55,6 +56,7 @@ struct Profile {
     linked: bool,
     id: Option<String>,
     vault: Option<String>,
+    dir: String,
 }
 
 impl std::fmt::Display for Profile {
@@ -68,14 +70,15 @@ impl std::fmt::Display for Profile {
 
 /// Qué corre en la TTY de la ventana.
 enum Mode {
-    /// Una consola del agente de `Win::profile`.
+    /// Con perfil, una consola del agente de `Win::profile`; sin perfil, la shell del usuario.
     Console,
     /// `dotrino-terminal link`: al terminar se mira qué perfil quedó enlazado.
     Linking { linked_before: Vec<String> },
 }
 
 struct Win {
-    profile: String,
+    /// `None`: sin perfil, una terminal más.
+    profile: Option<String>,
     mode: Mode,
     term: Option<iced_term::Terminal>,
     title: String,
@@ -97,7 +100,8 @@ enum Message {
     Opened(window::Id),
     /// La ventana pidió cerrarse (la X, Alt+F4).
     Close(window::Id),
-    SwitchProfile(window::Id, String),
+    /// `None`: sin perfil.
+    SwitchProfile(window::Id, Option<String>),
     Enroll(window::Id),
     Copy(window::Id),
     Paste(window::Id),
@@ -119,11 +123,25 @@ fn t(es_text: &str, en_text: &str) -> String {
     if es() { es_text } else { en_text }.to_string()
 }
 
+/// La shell del usuario: `$SHELL`, y si no está (una app abierta desde el Finder de macOS),
+/// la de su cuenta del sistema (`getpwuid`). Si tampoco, se dice.
+fn user_shell() -> Result<String, String> {
+    if let Some(sh) = std::env::var("SHELL").ok().filter(|s| !s.is_empty()) {
+        return Ok(sh);
+    }
+    // SAFETY: getpwuid devuelve un puntero a memoria estática de libc o nulo; se copia enseguida.
+    let from_passwd = unsafe {
+        let pw = libc::getpwuid(libc::getuid());
+        if pw.is_null() || (*pw).pw_shell.is_null() { None } else { Some(std::ffi::CStr::from_ptr((*pw).pw_shell).to_string_lossy().into_owned()) }
+    };
+    from_passwd.filter(|s| !s.is_empty()).ok_or_else(|| t("no sé cuál es tu shell: no está $SHELL ni en tu cuenta", "can't tell your shell: no $SHELL and none in your account"))
+}
+
 /// El PATH de una shell de inicio de sesión del usuario. Una app abierta desde el menú del
 /// escritorio (y en macOS, siempre) no hereda el PATH de la terminal, y ahí es donde viven
 /// `node` y `dotrino-terminal` (nvm, Homebrew, npm global).
 fn login_path() -> Result<String, String> {
-    let shell = std::env::var("SHELL").map_err(|_| t("no está definida la variable SHELL", "the SHELL variable is not set"))?;
+    let shell = user_shell()?;
     let out = Command::new(&shell)
         .args(["-l", "-c", "printf %s \"$PATH\""])
         .output()
@@ -146,16 +164,16 @@ fn is_executable(p: &Path) -> bool {
 }
 
 /// Dónde está el cliente. `DOTRINO_TERMINAL_BIN` lo fija a mano; si no, se busca en el PATH
-/// de inicio de sesión. Si no aparece, se dice y la ventana lo enseña: no se abre otra shell
-/// en su lugar, porque esa no se vería desde los otros aparatos y nadie se enteraría.
+/// de inicio de sesión. Si no aparece, los perfiles no se pueden usar y el menú lo dice; la
+/// ventana sin perfil funciona igual.
 fn resolve() -> Result<Launch, String> {
     let path = login_path()?;
     let program = match std::env::var_os("DOTRINO_TERMINAL_BIN") {
         Some(p) => PathBuf::from(p),
         None => find_in(&path, CLIENT).ok_or_else(|| {
             t(
-                "No encuentro «dotrino-terminal».\n\nInstálalo con:\n\n    npm install -g @dotrino/terminal-agent\n\ny vuelve a abrir esta ventana.",
-                "Can't find \"dotrino-terminal\".\n\nInstall it with:\n\n    npm install -g @dotrino/terminal-agent\n\nand open this window again.",
+                "Para usar perfiles, instala dotrino-terminal: npm install -g @dotrino/terminal-agent",
+                "To use profiles, install dotrino-terminal: npm install -g @dotrino/terminal-agent",
             )
         })?,
     };
@@ -171,7 +189,10 @@ fn load_profiles(launch: &Launch) -> Result<Vec<Profile>, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    serde_json::from_slice(&out.stdout).map_err(|e| format!("dotrino-terminal profiles: {e}"))
+    let all: Vec<Profile> = serde_json::from_slice(&out.stdout).map_err(|e| format!("dotrino-terminal profiles: {e}"))?;
+    // Sin ningún perfil, el cliente cuenta uno `default` que todavía no existe (es el que usaría
+    // `dotrino-terminal` a secas). Aquí «ninguno» es «sin perfil»: solo los que están en el disco.
+    Ok(all.into_iter().filter(|p| p.linked || Path::new(&p.dir).is_dir()).collect())
 }
 
 fn linked_names(profiles: &[Profile]) -> Vec<String> {
@@ -182,23 +203,18 @@ impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
         let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0 };
-        let first = app.reload_profiles().err();
+        let _ = app.reload_profiles();
         // Perfil de la primera ventana: `--name <n>` en la línea de órdenes; si no, el único
-        // enlazado, o `default`. Con varios enlazados y sin `--name`, se abre `default` y el
-        // selector de arriba deja elegir: no se adivina cuál quería.
+        // enlazado; si no hay ninguno o hay varios, sin perfil (no se adivina cuál quería: el
+        // menú Perfil deja elegir).
         let args: Vec<String> = std::env::args().skip(1).collect();
-        let profile = args
-            .iter()
-            .position(|a| a == "--name")
-            .and_then(|i| args.get(i + 1).cloned())
-            .unwrap_or_else(|| match linked_names(&app.profiles).as_slice() {
-                [only] => only.clone(),
-                _ => DEFAULT_PROFILE.to_string(),
-            });
-        let (id, task) = app.open_window(profile);
-        if let (Some(e), Some(win)) = (first, app.windows.get_mut(&id)) {
-            win.error.get_or_insert(e);
-        }
+        let profile = args.iter().position(|a| a == "--name").and_then(|i| args.get(i + 1).cloned()).or_else(|| {
+            match linked_names(&app.profiles).as_slice() {
+                [only] => Some(only.clone()),
+                _ => None,
+            }
+        });
+        let (_, task) = app.open_window(profile);
         (app, task)
     }
 
@@ -208,7 +224,7 @@ impl App {
         Ok(())
     }
 
-    fn open_window(&mut self, profile: String) -> (window::Id, Task<Message>) {
+    fn open_window(&mut self, profile: Option<String>) -> (window::Id, Task<Message>) {
         let (id, task) = window::open(window::Settings {
             size: Size::new(960.0, 600.0),
             // El cierre lo hace la app (`Message::Close`): así sabe cuándo se fue la última
@@ -224,8 +240,9 @@ impl App {
         (id, task.map(Message::Opened))
     }
 
-    /// Pone en la ventana una TTY nueva. La anterior se suelta: su PTY se cierra, el cliente
-    /// recibe SIGHUP y el agente mata la consola que esa TTY había abierto.
+    /// Pone en la ventana una TTY nueva. La anterior se suelta: su PTY se cierra, y lo que
+    /// corría ahí recibe SIGHUP (sin perfil, la shell; con perfil, el cliente, y el agente mata
+    /// la consola que esa TTY había abierto).
     fn start(&mut self, id: window::Id, mode: Mode) {
         let term_id = self.next_term;
         self.next_term += 1;
@@ -235,27 +252,40 @@ impl App {
         }
         win.error = None;
         win.title = String::new();
-        let launch = match &self.launch {
-            Ok(l) => l,
+        let plain = matches!(mode, Mode::Console) && win.profile.is_none();
+        let spawn = if plain {
+            // Sin perfil: la shell del usuario, como cualquier terminal. En macOS las terminales
+            // abren una shell de inicio de sesión; en Linux, una interactiva.
+            user_shell().map(|sh| {
+                let args = if cfg!(target_os = "macos") { vec!["-l".to_string()] } else { Vec::new() };
+                (sh, args, HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]))
+            })
+        } else {
+            self.launch.clone().map(|launch| {
+                let args = match &mode {
+                    Mode::Linking { .. } => vec!["link".to_string()],
+                    Mode::Console => vec!["--name".to_string(), win.profile.clone().unwrap_or_default()],
+                };
+                let env = HashMap::from([
+                    ("PATH".to_string(), launch.path.clone()),
+                    ("TERM".to_string(), "xterm-256color".to_string()),
+                    // Si el cliente falla, que espere una tecla: la ventana se cierra cuando sale.
+                    ("DOTRINO_TERMINAL_HOLD".to_string(), "1".to_string()),
+                ]);
+                (launch.program.to_string_lossy().into_owned(), args, env)
+            })
+        };
+        win.mode = mode;
+        let (program, args, env) = match spawn {
+            Ok(s) => s,
             Err(e) => {
-                win.error = Some(e.clone());
+                win.error = Some(e);
                 return;
             }
         };
-        let args = match &mode {
-            Mode::Console => vec!["--name".to_string(), win.profile.clone()],
-            Mode::Linking { .. } => vec!["link".to_string()],
-        };
-        win.mode = mode;
-        let env = HashMap::from([
-            ("PATH".to_string(), launch.path.clone()),
-            ("TERM".to_string(), "xterm-256color".to_string()),
-            // Si el cliente falla, que espere una tecla: la ventana se cierra cuando sale.
-            ("DOTRINO_TERMINAL_HOLD".to_string(), "1".to_string()),
-        ]);
         let settings = iced_term::settings::Settings {
             backend: iced_term::settings::BackendSettings {
-                program: launch.program.to_string_lossy().into_owned(),
+                program: program.clone(),
                 args,
                 env,
                 working_directory: std::env::var_os("HOME").map(PathBuf::from),
@@ -267,7 +297,7 @@ impl App {
                 self.by_term.insert(term_id, id);
                 win.term = Some(term);
             }
-            Err(e) => win.error = Some(format!("{}: {e}", launch.program.display())),
+            Err(e) => win.error = Some(format!("{program}: {e}")),
         }
     }
 
@@ -302,7 +332,7 @@ impl App {
                 let fresh = linked_names(&self.profiles).into_iter().find(|n| !before.contains(n));
                 if let Some(win) = self.windows.get_mut(&id) {
                     if let Some(name) = fresh {
-                        win.profile = name;
+                        win.profile = Some(name);
                     }
                 }
                 self.start(id, Mode::Console);
@@ -317,10 +347,7 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::NewWindow(from) => {
-                let profile = from
-                    .and_then(|id| self.windows.get(&id))
-                    .map(|w| w.profile.clone())
-                    .unwrap_or_else(|| DEFAULT_PROFILE.to_string());
+                let profile = from.and_then(|id| self.windows.get(&id)).and_then(|w| w.profile.clone());
                 let _ = self.reload_profiles();
                 self.open_window(profile).1
             }
@@ -389,16 +416,22 @@ impl App {
             Item::new(entry(t("Copiar", "Copy"), copy_key, Some(Message::Copy(id)))),
             Item::new(entry(t("Pegar", "Paste"), paste_key, Some(Message::Paste(id)))),
         ]);
-        let mut profiles: Vec<_> = self
-            .profiles
-            .iter()
-            .map(|p| {
-                let mark = if p.name == win.profile && !linking { "●  " } else { "     " };
-                Item::new(entry(format!("{mark}{p}"), "", Some(Message::SwitchProfile(id, p.name.clone()))))
-            })
-            .collect();
+        let mark = |on: bool| if on && !linking { "●  " } else { "     " };
+        let mut profiles = vec![Item::new(entry(
+            format!("{}{}", mark(win.profile.is_none()), t("Sin perfil (terminal normal)", "No profile (plain terminal)")),
+            "",
+            Some(Message::SwitchProfile(id, None)),
+        ))];
+        profiles.extend(self.profiles.iter().map(|p| {
+            let on = win.profile.as_deref() == Some(p.name.as_str());
+            Item::new(entry(format!("{}{p}", mark(on)), "", Some(Message::SwitchProfile(id, Some(p.name.clone())))))
+        }));
         profiles.push(Item::new(separator()));
-        profiles.push(Item::new(entry(t("Enrolar…", "Enroll…"), "", (!linking).then_some(Message::Enroll(id)))));
+        // Sin el cliente no hay perfiles ni enrolar: se ve deshabilitado, y la razón a la vista.
+        profiles.push(Item::new(entry(t("Enrolar…", "Enroll…"), "", (!linking && self.launch.is_ok()).then_some(Message::Enroll(id)))));
+        if let Err(why) = &self.launch {
+            profiles.push(Item::new(note(why.clone())));
+        }
         let help = Menu::new(vec![
             Item::new(entry(t("Cómo se usa", "How to use it"), "", Some(Message::Help))),
             Item::new(entry(format!("Dotrino Terminal {VERSION}"), "", None)),
@@ -428,8 +461,7 @@ impl App {
                 .into(),
             (None, None) => text("").into(),
         };
-        let menu = if self.launch.is_ok() { self.menu(id, win) } else { space().into() };
-        column![menu, container(body).width(Length::Fill).height(Length::Fill)].into()
+        column![self.menu(id, win), container(body).width(Length::Fill).height(Length::Fill)].into()
     }
 
     fn title(&self, id: window::Id) -> String {
@@ -439,7 +471,10 @@ impl App {
             Mode::Console if win.title.is_empty() => "Dotrino Terminal".to_string(),
             Mode::Console => win.title.clone(),
         };
-        format!("{what} — {}", win.profile)
+        match &win.profile {
+            Some(p) => format!("{what} — {p}"),
+            None => what,
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -477,6 +512,13 @@ fn entry(label: String, keys: &str, msg: Option<Message>) -> Element<'static, Me
         .padding([4, 10])
         .style(menu_button)
         .on_press_maybe(msg)
+        .into()
+}
+
+/// Una línea de texto en un menú que no es una opción: la razón de que algo esté deshabilitado.
+fn note(msg: String) -> Element<'static, Message> {
+    container(text(msg).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.strong.color) }))
+        .padding([4, 10])
         .into()
 }
 
