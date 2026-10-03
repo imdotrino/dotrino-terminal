@@ -5,3 +5,9 @@ agent/node_modules/
 *.log
 .npmrc
 desktop/target/
+
+android/.gradle
+android/.kotlin
+android/local.properties
+android/app/build
+android/build

@@ -29,5 +29,11 @@
   "devDependencies": {
     "typescript": "5.9.3",
     "vite": "^7.3.1"
+  },
+  "dotrino": {
+    "platforms": [
+      "pwa",
+      "android"
+    ]
   }
 }

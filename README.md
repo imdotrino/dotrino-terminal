@@ -64,6 +64,13 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
     `dist/consoles/` y a `dist/404.html`.
 - **`agent/`** — el paquete `@dotrino/terminal-agent` (Node + PTY prebuilt): el agente
   (`dotrino-terminal-agent`) y el cliente de las ventanas (`dotrino-terminal`).
+- **`android/`** — la versión NATIVA de Android (`com.dotrino.terminal`, CONVENCIONES §16): las
+  máquinas encendidas, sus consolas (retomar o nueva), pestañas y una fila con las teclas que
+  el teclado del teléfono no tiene. Vistas nativas, sin WebView. El emulador de terminal es
+  propio (`term/Terminal.kt`, Kotlin puro con sus pruebas: el de Termux es GPLv3) y lo dibuja
+  `term/TerminalView.kt` en un Canvas. El perfil, la conexión y el agente remoto vienen de
+  `dotrino-native` (submódulo `native/`, `RemoteAgent`). `./gradlew :app:testDebugUnitTest`;
+  `DemoActivity` (solo depuración) enseña la terminal sin perfil ni red.
 - **`desktop/`** — la app de escritorio (Rust: `iced` + `iced_term` sobre
   `alacritty_terminal`). Por defecto una ventana **usa un perfil** y corre
   `dotrino-terminal --name <perfil>` (el último elegido, `~/.config/dotrino-terminal/last-profile`;
