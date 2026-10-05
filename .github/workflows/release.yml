@@ -69,3 +69,6 @@ jobs:
         with:
           files: 'agent/sbom-*.cdx.json'
           generate_release_notes: true
+          # «Latest» es la de la app de escritorio: la portada descarga de releases/latest, y
+          # esta release no trae instaladores (el agente va por npm).
+          make_latest: false
