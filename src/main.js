@@ -65,16 +65,17 @@ const M = {
     error: 'Error: ',
     close: 'Cerrar',
     exited: (c) => `[la consola terminó (${c})]`,
-    resume_title: 'Esta máquina tiene consolas abiertas:',
-    resume: 'Retomar',
     new_console: 'Nueva consola',
     kill_console: 'Cerrar esta consola',
-    console_item: (n, ago) => `Consola ${n} · activa ${ago}`,
+    consoles: 'Consolas',
+    panel_open: 'Abrir el panel',
+    panel_close: 'Colapsar el panel',
+    fit_here: 'Ajustar a esta pantalla',
+    open_here: 'Abrir aquí',
+    console_here: 'en esta pestaña',
+    console_other: 'abierta en otro aparato',
+    console_free: 'suelta',
     console_local: 'ventana abierta en la máquina',
-    console_in_use: 'en uso',
-    ago_now: 'ahora',
-    ago_min: (m) => `hace ${m} min`,
-    ago_h: (h) => `hace ${h} h`,
     console_gone: 'Esta consola ya no existe en la máquina: se cerró, o el agente se reinició.',
     self_choice_title: '¿Cómo quieres entrar?',
     self_choice_intro: 'Para abrir una consola en tus máquinas necesitas certificarlas con una identidad. Elige dónde vive esa identidad:',
@@ -126,16 +127,17 @@ const M = {
     error: 'Error: ',
     close: 'Close',
     exited: (c) => `[console ended (${c})]`,
-    resume_title: 'This machine has open consoles:',
-    resume: 'Resume',
     new_console: 'New console',
     kill_console: 'Close this console',
-    console_item: (n, ago) => `Console ${n} · active ${ago}`,
+    consoles: 'Consoles',
+    panel_open: 'Open the panel',
+    panel_close: 'Collapse the panel',
+    fit_here: 'Fit to this screen',
+    open_here: 'Open here',
+    console_here: 'in this tab',
+    console_other: 'open on another device',
+    console_free: 'detached',
     console_local: 'window open on the machine',
-    console_in_use: 'in use',
-    ago_now: 'now',
-    ago_min: (m) => `${m} min ago`,
-    ago_h: (h) => `${h} h ago`,
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
     self_choice_title: 'How do you want to sign in?',
     self_choice_intro: 'To open a console on your machines you need to certify them with an identity. Choose where that identity lives:',
@@ -307,30 +309,27 @@ const SS_TABS = 'dotrino-terminal:tabs'
 function loadTabs () { try { return JSON.parse(sessionStorage.getItem(SS_TABS) || '[]') } catch { return [] } }
 function saveTabs (list) { try { sessionStorage.setItem(SS_TABS, JSON.stringify(list)) } catch {} }
 
-function agoText (ts) {
-  const m = Math.floor((Date.now() - ts) / 60000)
-  if (m < 1) return t('ago_now')
-  return m < 60 ? t('ago_min', m) : t('ago_h', Math.floor(m / 60))
-}
 
 function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
-  const sessions = [] // { id, alias, pub, agent, term, fit, box, tab, status, onResize }
+  const sessions = [] // { id, alias, pub, agent, term, fit, box, side, view, tab, status, list, collapsed, poll }
   let active = null
   let counter = 0
 
   const persist = () => saveTabs(sessions.filter((s) => s.agent?.consoleId).map((s) => ({ sub: s.pub, alias: s.alias, consoleId: s.agent.consoleId })))
 
+  // Al cambiar de pestaña no se toca el tamaño de nadie (§ tamaño: la pantalla lo toma al abrir o
+  // cambiar de consola, o con «Ajustar a esta pantalla»).
   function setActive (s) {
     active = s
     for (const x of sessions) {
-      x.box.style.display = x === s ? 'block' : 'none'
+      x.box.style.display = x === s ? 'flex' : 'none'
       x.tab.classList.toggle('on', x === s)
     }
-    if (s?.term) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows); s.term.focus() } catch {} }
+    if (s?.term) { try { s.term.focus() } catch {} }
   }
 
   function removeSession (s) {
-    if (s.onResize) window.removeEventListener('resize', s.onResize)
+    clearInterval(s.poll)
     try { s.term?.dispose() } catch {}
     s.box.remove(); s.tab.remove()
     const i = sessions.indexOf(s); if (i >= 0) sessions.splice(i, 1)
@@ -351,99 +350,182 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.tab.title = state === 'err' ? (s.status || 'error') : ''
   }
 
+  /** El tamaño que cabe en esta pantalla. */
+  const fitted = (s) => s.fit.proposeDimensions() || { cols: s.term.cols, rows: s.term.rows }
+
+  /**
+   * La vista sigue el tamaño de la consola: si otra pantalla lo tiene, se muestra a ese tamaño (con
+   * desplazamiento), sin encogerla.
+   */
+  function follow (s, info) {
+    if (!info?.cols || !info?.rows) return
+    if (info.cols !== s.term.cols || info.rows !== s.term.rows) { try { s.term.resize(info.cols, info.rows) } catch {} }
+  }
+
   function mountTerm (s) {
     s.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0e0b1a' } })
     s.fit = new FitAddon(); s.term.loadAddon(s.fit)
-    s.box.replaceChildren()
-    s.term.open(s.box); s.fit.fit()
+    s.view.replaceChildren()
+    s.term.open(s.view); s.fit.fit()
     s.agent.onData = (d) => s.term.write(d)
-    s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`); persist() }
+    s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s) }
+    s.agent.onMeta = (info) => follow(s, info)
     s.term.onData((d) => s.agent.input(d))
-    s.onResize = () => { if (active === s) { try { s.fit.fit(); s.agent.resize(s.term.cols, s.term.rows) } catch {} } }
-    window.addEventListener('resize', s.onResize)
   }
 
-  /**
-   * Cómo se nombra una consola en la lista: el título que puso su shell (si puso uno), si es
-   * una ventana abierta en la propia máquina (`dotrino-terminal`) y si alguien la está usando.
-   * Entrar en una ventana de la máquina avisa a quien esté delante de ella.
-   */
-  function consoleLabel (c, i) {
-    // El número lo da el agente (≥ 0.12) y no cambia al cerrar otras; con uno anterior, la posición.
-    const n = c.n ?? i + 1
-    const parts = [c.title ? `${n} · ${c.title} · ${agoText(c.lastActive)}` : t('console_item', n, agoText(c.lastActive))]
-    if (c.origin === 'local') parts.push(t('console_local'))
-    if (c.viewers > 0) parts.push(t('console_in_use'))
-    return parts.join(' · ')
+  // ---- El panel de consolas: el mismo de la app de escritorio ----
+
+  /** Número fijo (lo da el agente ≥ 0.12); con uno anterior, la posición. */
+  const numOf = (c, i) => c.n ?? i + 1
+
+  function where (s, c) {
+    const others = (c.watchers || []).length - (c.id === s.agent?.consoleId ? 1 : 0)
+    if ((c.watchers || []).some((w) => w.origin === 'local')) return t('console_local')
+    if (others > 0) return t('console_other')
+    if (c.id === s.agent?.consoleId) return t('console_here')
+    return t('console_free')
   }
 
-  /**
-   * Las consolas de la máquina que NO están ya en una pestaña de esta página. Si hay,
-   * se ofrece retomarlas; si no, se abre una nueva sin preguntar.
-   * @returns {Promise<{ resume?: string }>} qué eligió el usuario
-   */
-  async function choose (s) {
-    const mine = new Set(sessions.map((x) => x.agent?.consoleId).filter(Boolean))
-    const free = (await s.agent.list()).filter((c) => !mine.has(c.id))
-    if (!free.length) return {}
-    return new Promise((resolve) => {
-      const node = el(`<div class="resume" data-testid="resume">
-        <b>${t('resume_title')}</b>
-        <div class="resume-list"></div>
-        <button class="primary" data-testid="new-console">${t('new_console')}</button>
-      </div>`)
-      const holder = node.querySelector('.resume-list')
-      free.sort((a, b) => b.lastActive - a.lastActive).forEach((c, i) => {
-        const row = el(`<div class="machine-row">
-          <button class="machine" data-testid="resume-console" data-console-id="${esc(c.id)}">${esc(consoleLabel(c, i))} · ${t('resume')}</button>
-          <button class="machine-x" title="${esc(t('kill_console'))}" aria-label="${esc(t('kill_console'))}">×</button>
-        </div>`)
-        row.querySelector('.machine').addEventListener('click', () => resolve({ resume: c.id }))
-        row.querySelector('.machine-x').addEventListener('click', () => { s.agent.kill(c.id); row.remove() })
-        holder.appendChild(row)
-      })
-      node.querySelector('[data-testid=new-console]').addEventListener('click', () => resolve({}))
-      s.box.replaceChildren(node)
+  function renderSide (s) {
+    const list = s.list || []
+    const mine = s.agent?.consoleId
+    const side = s.side
+    side.classList.toggle('collapsed', s.collapsed)
+    if (s.collapsed) {
+      side.innerHTML = `
+        <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
+        <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
+        <button class="sbtn" data-act="fit" title="${esc(t('fit_here'))}">⤢</button>
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}" title="${esc(c.title || String(numOf(c, i)))}">${numOf(c, i)}</button>`).join('')}`
+    } else {
+      side.innerHTML = `
+        <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
+        <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
+        <div class="srow"><span class="grow">${t('fit_here')}</span><button class="sbtn" data-act="fit">⤢</button></div>
+        ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}">
+          <button class="pick" data-id="${esc(c.id)}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(c.title) : ''}</span><small>${esc(where(s, c))}</small></button>
+          <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
+        </div>`).join('')}`
+    }
+  }
+
+  async function refresh (s) {
+    if (!s.agent?.rc?.key) return
+    try { s.list = await s.agent.list(); renderSide(s) } catch (_) {}
+  }
+
+  /** Pasar a otra consola (o a una nueva) en la misma conexión: toma el tamaño de esta pantalla. */
+  async function switchTo (s, id) {
+    if (id && id === s.agent.consoleId) return
+    const { cols, rows } = fitted(s)
+    try {
+      s.term.reset()
+      try { s.term.resize(cols, rows) } catch {}
+      const p = id ? await s.agent.attach(id, cols, rows) : await s.agent.open(cols, rows)
+      follow(s, p.console)
+      persist()
+    } catch (e) {
+      s.term.write(`\r\n\x1b[31m${e.code === 'no-console' ? t('console_gone') : e.message}\x1b[0m\r\n`)
+    }
+    refresh(s); s.term.focus()
+  }
+
+  /** Cerrar una consola. Si es la de esta pestaña, primero se pasa a otra (o a una nueva). */
+  async function killConsole (s, id) {
+    if (id === s.agent.consoleId) {
+      const other = (s.list || []).find((c) => c.id !== id && !(c.watchers || []).length)
+      await switchTo(s, other?.id || null)
+    }
+    s.agent.kill(id)
+    setTimeout(() => refresh(s), 200)
+  }
+
+  /** «Ajustar a esta pantalla»: la consola toma el tamaño de esta pestaña. */
+  function takeSize (s) {
+    const { cols, rows } = fitted(s)
+    try { s.term.resize(cols, rows) } catch {}
+    s.agent.resize(cols, rows)
+    s.term.focus()
+  }
+
+  /** Clic derecho (o mantener pulsado) sobre una consola: lo que se puede hacer con ella. */
+  function consoleMenu (s, id, x, y) {
+    document.querySelector('.cmenu')?.remove()
+    const m = el(`<div class="cmenu" style="left:${x}px;top:${y}px">
+      <button data-a="here" ${id === s.agent.consoleId ? 'disabled' : ''}>${t('open_here')}</button>
+      <button data-a="kill">${t('kill_console')}</button>
+    </div>`)
+    m.addEventListener('click', (e) => {
+      const a = e.target.dataset.a
+      m.remove()
+      if (a === 'here') switchTo(s, id)
+      if (a === 'kill') killConsole(s, id)
     })
+    document.body.appendChild(m)
+    setTimeout(() => document.addEventListener('click', () => m.remove(), { once: true }), 0)
+  }
+
+  function wireSide (s) {
+    s.side.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return
+      if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { s.collapsed = !s.collapsed; renderSide(s); return }
+      if (b.dataset.act === 'new') return switchTo(s, null)
+      if (b.dataset.act === 'fit') return takeSize(s)
+      if (b.dataset.kill) return killConsole(s, b.dataset.kill)
+      if (b.dataset.id) return switchTo(s, b.dataset.id)
+    })
+    const menuAt = (target, x, y) => { const id = target.closest('[data-id]')?.dataset.id; if (id) consoleMenu(s, id, x, y) }
+    s.side.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-id]')) { e.preventDefault(); menuAt(e.target, e.clientX, e.clientY) } })
+    // Mantener pulsado en el teléfono: lo mismo que el clic derecho.
+    let hold = null
+    s.side.addEventListener('touchstart', (e) => { const tt = e.touches[0]; hold = setTimeout(() => menuAt(e.target, tt.clientX, tt.clientY), 550) }, { passive: true })
+    for (const ev of ['touchend', 'touchmove', 'touchcancel']) s.side.addEventListener(ev, () => clearTimeout(hold), { passive: true })
   }
 
   /**
    * Abre una pestaña con la máquina `pub`. Con `consoleId` se engancha a esa consola (al
-   * recargar); sin él, ofrece las consolas sueltas o abre una nueva.
+   * recargar); sin él, a una consola libre de la máquina, o a una nueva si no hay.
    * @param {string} pub
    * @param {string} [alias]
    * @param {{ consoleId?: string }} [opts]
    */
   async function openConsole (pub, alias, { consoleId } = {}) {
     const id = ++counter
-    const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando' }
-    s.box = el('<div class="term"></div>'); s.box.style.display = 'none'
+    const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando', collapsed: true, list: [] }
+    s.box = el('<div class="term-wrap"><div class="side"></div><div class="term"></div></div>'); s.box.style.display = 'none'
+    s.side = s.box.querySelector('.side'); s.view = s.box.querySelector('.term')
     termsEl.appendChild(s.box)
     sessions.push(s)
-    renderTab(s); setActive(s); setTabState(s, 'conn')
+    renderTab(s); setActive(s); setTabState(s, 'conn'); wireSide(s); renderSide(s)
     hint.textContent = t('connecting', s.alias)
     try {
       s.agent = new AgentClient(link, { agentPubkey: pub })
       s.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
       await s.agent.connect()
-      const pick = consoleId ? { resume: consoleId } : await choose(s)
       mountTerm(s)
-      if (pick.resume) {
-        try { await s.agent.attach(pick.resume, s.term.cols, s.term.rows) } catch (e) {
-          if (e.code !== 'no-console') throw e
-          // Ya no existe: se dice en la pestaña y no se recuerda más.
-          s.status = t('console_gone'); setTabState(s, 'err'); persist()
-          s.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
-          if (active === s) hint.textContent = t('console_gone')
-          return
-        }
-      } else {
-        await s.agent.open(s.term.cols, s.term.rows)
+      // Como en la app de escritorio: una consola que no esté abierta en ninguna parte, antes
+      // que crear otra.
+      let target = consoleId
+      if (!target) {
+        const open = new Set(sessions.map((x) => x.agent?.consoleId).filter(Boolean))
+        target = (await s.agent.list()).find((c) => !(c.watchers || []).length && !open.has(c.id))?.id
+      }
+      const { cols, rows } = fitted(s)
+      try {
+        const p = target ? await s.agent.attach(target, cols, rows) : await s.agent.open(cols, rows)
+        follow(s, p.console)
+      } catch (e) {
+        if (e.code !== 'no-console') throw e
+        // Ya no existe: se dice y se abre una nueva.
+        s.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
+        follow(s, (await s.agent.open(cols, rows)).console)
       }
       persist()
       s.status = 'conectado'; setTabState(s, 'ok')
       if (active === s) hint.textContent = t('connected', s.alias)
       setActive(s)
+      refresh(s)
+      s.poll = setInterval(() => { if (active === s) refresh(s) }, 2000)
     } catch (e) {
       s.status = e.message; setTabState(s, 'err')
       if (active === s) hint.textContent = t('conn_fail') + e.message

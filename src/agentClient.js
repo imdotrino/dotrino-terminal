@@ -22,7 +22,10 @@ export class AgentClient {
     /** @type {(data:string)=>void} */ this.onData = () => {}
     /** @type {(code:number)=>void} */ this.onExit = () => {}
     /** @type {(e:Error)=>void} */ this.onError = () => {}
+    /** La consola enganchada cambió (quién mira, título, TAMAÑO): `info` como en `list`. */
+    /** @type {(info:object)=>void} */ this.onMeta = () => {}
     this._waiting = null   // { type, resolve, reject }: la respuesta que se espera
+    this._queue = Promise.resolve()   // las preguntas van de una en una (ver `_ask`)
   }
 
   async connect () {
@@ -30,6 +33,7 @@ export class AgentClient {
       if (!p || typeof p !== 'object') return
       if (p.type === 'out' || p.type === 'replay') { this.onData(p.data); return }
       if (p.type === 'exit') { this.consoleId = null; this.onExit(p.code); return }
+      if (p.type === 'meta') { if (p.console) this.onMeta(p.console); return }
       const w = this._waiting
       if (p.type === 'fail') {
         if (w) { this._waiting = null; w.reject(agentError(p)) } else this.onError(agentError(p))
@@ -42,8 +46,18 @@ export class AgentClient {
     return this
   }
 
-  /** Manda `msg` y espera la respuesta de tipo `type`. Una a la vez por pestaña. */
+  /**
+   * Manda `msg` y espera la respuesta de tipo `type`. EN COLA: el panel pregunta la lista cada
+   * poco, y si eso pisara un `attach` en curso, el `attach` no recibiría nunca su respuesta.
+   */
   _ask (msg, type, timeoutMs = 20000) {
+    const run = () => this._askNow(msg, type, timeoutMs)
+    const p = this._queue.then(run, run)
+    this._queue = p.catch(() => {})
+    return p
+  }
+
+  _askNow (msg, type, timeoutMs) {
     return new Promise((resolve, reject) => {
       this._waiting = { type, resolve, reject }
       setTimeout(() => {
@@ -55,21 +69,24 @@ export class AgentClient {
     })
   }
 
-  /** Las consolas vivas en la máquina: `[{ id, cols, rows, createdAt, lastActive, viewers }]`. */
+  /** Las consolas vivas en la máquina: `[{ id, n, title, origin, cols, rows, viewers, watchers… }]`. */
   async list () { return (await this._ask({ type: 'list' }, 'consoles')).list }
 
-  /** Abre una consola nueva y se engancha. Devuelve su id. */
+  /** Abre una consola nueva y se engancha. Devuelve `{ id, console }`. */
   async open (cols, rows) {
     const p = await this._ask({ type: 'open', cols, rows }, 'attached')
     this.consoleId = p.id
-    return p.id
+    return p
   }
 
-  /** Se engancha a una consola existente; su pantalla llega por `onData`. Lanza `no-console`. */
+  /**
+   * Se engancha a una consola existente (también para CAMBIAR de consola en la misma conexión:
+   * el agente suelta la anterior). Su pantalla llega por `onData`. Lanza `no-console`.
+   */
   async attach (id, cols, rows) {
     const p = await this._ask({ type: 'attach', id, cols, rows }, 'attached')
     this.consoleId = p.id
-    return p.id
+    return p
   }
 
   input (data) { return this.rc.send({ type: 'input', data }) }

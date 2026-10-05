@@ -70,7 +70,9 @@ export function makeHub (pty, opts = {}) {
  * ella: cerrar la ventana mata su shell, como en cualquier terminal. Una ventana que solo
  * se enganchó a una consola ajena, o que la soltó a propósito (`detach`), no mata nada.
  *
- * Tamaño con varios mirando: manda el último que se enganchó o escribió (como tmux).
+ * Tamaño con varios mirando: manda el último que se enganchó (o abrió). Escribir lo cambia solo
+ * desde una ventana de esta máquina; desde otro aparato (la PWA), solo al engancharse o con su
+ * botón «Ajustar a esta pantalla» (un `resize` explícito).
  * Exportada para las pruebas.
  *
  * @param {object} session
@@ -131,7 +133,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
     if (msg.type === 'detach') { owned = null; release(); return }
     if (msg.type === 'input') {
       if (!current) return
-      if (current.cols !== size.cols || current.rows !== size.rows) current.resize(size.cols, size.rows)
+      if (origin === 'local' && (current.cols !== size.cols || current.rows !== size.rows)) current.resize(size.cols, size.rows)
       current.write(String(msg.data ?? ''))
       return
     }

@@ -62,9 +62,13 @@ class Console {
 
   resize (cols, rows) {
     if (!cols || !rows) return
+    const changed = cols !== this.cols || rows !== this.rows
     this.cols = cols; this.rows = rows
     try { this.pty.resize(cols, rows) } catch (_) {}
     try { this.screen.resize(cols, rows) } catch (_) {}
+    // Quien mira desde otro aparato se entera del tamaño nuevo y adapta su vista (la PWA no
+    // encoge la consola: la muestra a su tamaño, con desplazamiento).
+    if (changed) this._meta()
   }
 
   /**

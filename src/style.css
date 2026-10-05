@@ -112,7 +112,27 @@ button.primary.danger { background: #e5484d; border-color: #e5484d; }
 @keyframes pulse { 50% { opacity: .3; } }
 
 .terms { flex: 1; }
-.term { height: 62vh; min-height: 320px; border: 1px solid var(--line); border-radius: 0 10px 10px 10px; overflow: hidden; }
+.term-wrap { height: 62vh; min-height: 320px; border: 1px solid var(--line); border-radius: 0 10px 10px 10px; overflow: hidden; display: flex; }
+/* La consola puede ser más grande que esta pantalla (otra pantalla tiene el tamaño): se desplaza. */
+.term { flex: 1; min-width: 0; overflow: auto; }
+/* El panel de consolas: el mismo de la app de escritorio. Colapsado, una franja numerada. */
+.side { width: 210px; flex: none; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.side.collapsed { width: 32px; padding: 4px 3px; align-items: center; }
+.sbtn { background: transparent; border: 0; color: var(--text); padding: 3px 0; width: 24px; border-radius: 4px; font-size: 13px; cursor: pointer; }
+.sbtn:hover { background: var(--line); }
+.sbtn.num.on { background: var(--brand); color: #fff; }
+.srow { display: flex; align-items: center; gap: 4px; padding: 2px 4px; font-size: 13px; }
+.srow .grow { flex: 1; color: var(--muted); font-size: 12px; }
+.srow.head b { font-weight: 500; }
+.srow.item .pick { flex: 1; min-width: 0; text-align: left; background: transparent; border: 0; color: var(--text); padding: 4px 6px; border-radius: 6px; cursor: pointer; display: flex; flex-direction: column; }
+.srow.item .pick span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.srow.item .pick small { color: var(--muted); font-size: 11px; }
+.srow.item.on .pick { background: var(--brand); }
+.srow.item.on .pick small { color: #e7e3ff; }
+.cmenu { position: fixed; z-index: 50; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: flex; flex-direction: column; min-width: 180px; }
+.cmenu button { background: transparent; border: 0; color: var(--text); text-align: left; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.cmenu button:hover:not(:disabled) { background: var(--line); }
+.cmenu button:disabled { color: var(--muted); cursor: default; }
 .term .xterm { padding: 8px; height: 100%; }
 
 /* Pantalla de elección de modo (vault externo vs dispositivo) */
