@@ -91,6 +91,8 @@ export class AgentClient {
 
   input (data) { return this.rc.send({ type: 'input', data }) }
   resize (cols, rows) { return this.rc.send({ type: 'resize', cols, rows }) }
+  /** 📌 Fijar (o soltar) el tamaño de la consola a esta pantalla (agente ≥ 0.14). */
+  pin (on) { return this.rc.send({ type: 'pin', on: !!on }) }
   kill (id) { return this.rc.send({ type: 'kill', id }) }
 
   /** Suelta la consola (sigue viva en la máquina) y corta la conexión. */

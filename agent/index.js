@@ -12,7 +12,7 @@
  * Payloads de dominio (van cifrados dentro de la sesión, el proxio no los ve):
  *   cliente → agente: { type:'list' } · { type:'open', cols, rows, cwd?, tag? } ·
  *                     { type:'attach', id, cols, rows } · { type:'detach' } ·
- *                     { type:'input', data } · { type:'resize', cols, rows } ·
+ *                     { type:'input', data } · { type:'resize', cols, rows } · { type:'pin', on } ·
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id }
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
@@ -70,9 +70,9 @@ export function makeHub (pty, opts = {}) {
  * ella: cerrar la ventana mata su shell, como en cualquier terminal. Una ventana que solo
  * se enganchó a una consola ajena, o que la soltó a propósito (`detach`), no mata nada.
  *
- * Tamaño con varios mirando: manda el último que se enganchó (o abrió). Escribir lo cambia solo
- * desde una ventana de esta máquina; desde otro aparato (la PWA), solo al engancharse o con su
- * botón «Ajustar a esta pantalla» (un `resize` explícito).
+ * Tamaño con varios mirando: lo decide quien lo FIJÓ (`pin`, el 📌 de la app o el teléfono) y, si
+ * nadie, el último que se enganchó. Solo esa pantalla lo cambia (sus `resize` se siguen: girar el
+ * teléfono, redimensionar la ventana). Escribir o dar foco no cambia nada.
  * Exportada para las pruebas.
  *
  * @param {object} session
@@ -92,7 +92,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
   }
   const release = () => { if (current) { current.detach(viewer); current = null } }
   const fail = (code, message) => session.send({ type: 'fail', code, message })
-  const takeSize = (msg) => { if (msg.cols && msg.rows) size = { cols: msg.cols, rows: msg.rows } }
+  const takeSize = (msg) => { if (msg.cols && msg.rows) { size = { cols: msg.cols, rows: msg.rows }; viewer.size = size } }
   // La etiqueta con la que se presenta quien mira (una ventana de la app de escritorio).
   const takeTag = (msg) => { if (typeof msg.tag === 'string') viewer.tag = msg.tag.slice(0, 64) }
 
@@ -100,6 +100,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
     release()
     current = c
     const snapshot = await c.attach(viewer)
+    c.sizeFrom(viewer, { attaching: true })
     // La pantalla va en trozos: el proxio corta los mensajes a 1 MB.
     for (let i = 0; i < snapshot.length || i === 0; i += REPLAY_CHUNK) {
       await session.send({ type: 'replay', id: c.id, data: snapshot.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= snapshot.length })
@@ -126,18 +127,18 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
       if (!c) return fail('no-console', 'that console no longer exists')
       takeSize(msg)
       takeTag(msg)
-      c.resize(size.cols, size.rows)
       attachTo(c, { fresh: false })
       return
     }
     if (msg.type === 'detach') { owned = null; release(); return }
     if (msg.type === 'input') {
       if (!current) return
-      if (origin === 'local' && (current.cols !== size.cols || current.rows !== size.rows)) current.resize(size.cols, size.rows)
       current.write(String(msg.data ?? ''))
       return
     }
-    if (msg.type === 'resize') { takeSize(msg); current?.resize(size.cols, size.rows); return }
+    if (msg.type === 'resize') { takeSize(msg); current?.sizeFrom(viewer); return }
+    // 📌 «Esta pantalla manda en el tamaño» (on) o soltarlo (off).
+    if (msg.type === 'pin') { current?.pin(viewer, !!msg.on); return }
     if (msg.type === 'close') { if (current) hub.kill(current.id); return }
     if (msg.type === 'kill') { if (!hub.kill(msg.id)) fail('no-console', 'that console no longer exists') }
   })

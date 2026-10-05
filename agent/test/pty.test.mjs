@@ -129,23 +129,47 @@ test('cada consola tiene un número fijo: al cerrar la 1, la 2 sigue siendo 2 y 
   h.killAll()
 })
 
-test('desde otro aparato, escribir no cambia el tamaño; engancharse o pedirlo sí, y los demás se enteran', async () => {
+test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (📌) o el último que llegó; escribir no lo cambia', async () => {
   const h = hub()
-  const local = fakeSession(); serveSession(local, h, { origin: 'local' })
-  local.deliver({ type: 'open', cols: 120, rows: 40 })
-  await until(() => local.sent.some((p) => p.type === 'attached'))
-  const id = local.sent.find((p) => p.type === 'attached').id
-  const phone = fakeSession(); serveSession(phone, h, { origin: 'remote' })
-  phone.deliver({ type: 'attach', id, cols: 40, rows: 20 })
-  await until(() => phone.sent.some((p) => p.type === 'attached'))
-  assert.equal(h.get(id).cols, 40, 'engancharse toma el tamaño')
-  await until(() => local.sent.some((p) => p.type === 'meta' && p.console.cols === 40))
-  local.deliver({ type: 'input', data: 'x' })
-  await until(() => h.get(id).cols === 120)
-  phone.deliver({ type: 'input', data: 'y' })
-  await new Promise((r) => setTimeout(r, 100))
-  assert.equal(h.get(id).cols, 120, 'escribir desde el teléfono no lo cambia')
-  phone.deliver({ type: 'resize', cols: 40, rows: 20 })
-  await until(() => h.get(id).cols === 40)
-  h.killAll()
+  try {
+    const sizeOf = (id) => `${h.get(id).cols}x${h.get(id).rows}`
+    const pc = fakeSession(); serveSession(pc, h, { origin: 'local' })
+    pc.deliver({ type: 'open', cols: 120, rows: 40 })
+    await until(() => pc.sent.some((p) => p.type === 'attached'))
+    const id = pc.sent.find((p) => p.type === 'attached').id
+    assert.equal(sizeOf(id), '120x40', 'quien la abre tiene el tamaño')
+
+    const tel = fakeSession(); serveSession(tel, h, { origin: 'remote', device: 'TEL' }); tel.device = 'TEL'
+    tel.deliver({ type: 'attach', id, cols: 40, rows: 20 })
+    await until(() => sizeOf(id) === '40x20')
+    await until(() => pc.sent.some((p) => p.type === 'meta' && p.console.cols === 40), 2000)
+
+    pc.deliver({ type: 'input', data: 'x' })
+    pc.deliver({ type: 'resize', cols: 130, rows: 40 })
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(sizeOf(id), '40x20', 'ni escribir ni redimensionar desde quien NO tiene el tamaño lo cambia')
+
+    const tab = fakeSession(); serveSession(tab, h, { origin: 'remote' })
+    tab.deliver({ type: 'attach', id, cols: 80, rows: 30 })
+    await until(() => sizeOf(id) === '80x30')
+    assert.equal(h.get(id).info().sizeBy.pinned, false, 'el último que llegó, sin fijar')
+
+    tel.deliver({ type: 'pin', on: true })
+    await until(() => sizeOf(id) === '40x20')
+    tab.deliver({ type: 'resize', cols: 90, rows: 30 })
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(sizeOf(id), '40x20', 'con el teléfono fijado, la tablet no lo cambia')
+    tel.deliver({ type: 'resize', cols: 20, rows: 40 })
+    await until(() => sizeOf(id) === '20x40')  // girar el teléfono fijado: se sigue
+
+    pc.deliver({ type: 'pin', on: true })
+    await until(() => sizeOf(id) === '130x40')
+    assert.equal(h.get(id).info().sizeBy.pinned, true, 'el último que fija se lo queda')
+
+    pc.deliver({ type: 'detach' })
+    await until(() => sizeOf(id) === '90x30')  // se fue el fijado: vuelve al último que llegó (la tablet)
+
+    tab.deliver({ type: 'detach' })
+    await until(() => sizeOf(id) === '20x40')  // y si se va también, al que queda
+  } finally { h.killAll() }
 })

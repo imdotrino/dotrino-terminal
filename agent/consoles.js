@@ -37,7 +37,12 @@ class Console {
     this.rows = rows
     this.createdAt = Date.now()
     this.lastActive = Date.now()
-    this.viewers = new Set()          // sesiones mirando: { onOut(data), onExit(code), onMeta?(info), origin, device? }
+    this.viewers = new Set()          // sesiones mirando: { onOut(data), onExit(code), onMeta?(info), origin, device?, tag?, size? }
+    // QUIÉN MANDA EN EL TAMAÑO. `pinned`: quien lo fijó a propósito (📌 en la app o el teléfono);
+    // si nadie, `holder`: el último que se enganchó. Solo ese lo cambia, y se sigue su pantalla
+    // (redimensionar la ventana, girar el teléfono). Escribir o dar foco no cambia nada.
+    this.pinned = null
+    this.holder = null
     this.exited = false
     this.screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
     this.serializer = new SerializeAddon()
@@ -94,7 +99,39 @@ class Console {
     })
   }
 
-  detach (viewer) { if (this.viewers.delete(viewer)) this._meta() }
+  detach (viewer) {
+    if (!this.viewers.delete(viewer)) return
+    const before = this.decider()
+    if (this.pinned === viewer) this.pinned = null
+    // Si se fue el último que llegó, lo es el último de los que quedan.
+    if (this.holder === viewer) this.holder = [...this.viewers].filter((v) => v.size).pop() || null
+    // Si cambió quién decide (se fue el que lo tenía, fijado o no), manda su tamaño.
+    const d = this.decider()
+    if (d !== before && d?.size) this.resize(d.size.cols, d.size.rows)
+    this._meta()
+  }
+
+  /** Quién decide el tamaño ahora. */
+  decider () { return this.pinned || this.holder }
+
+  /**
+   * `viewer` dice su tamaño (al engancharse, `attaching`, o porque cambió su pantalla). Se aplica
+   * solo si es quien decide; engancharse lo hace decidir si nadie lo tiene fijado.
+   */
+  sizeFrom (viewer, { attaching = false } = {}) {
+    if (attaching) this.holder = viewer
+    if (this.decider() === viewer && viewer.size) this.resize(viewer.size.cols, viewer.size.rows)
+    else this._meta()
+  }
+
+  /** 📌: `viewer` fija (o suelta) el tamaño a su pantalla. */
+  pin (viewer, on) {
+    if (on) this.pinned = viewer
+    else if (this.pinned === viewer) this.pinned = null
+    const d = this.decider()
+    if (d?.size) this.resize(d.size.cols, d.size.rows)
+    this._meta()
+  }
 
   /**
    * `watchers` dice QUIÉN mira: una ventana de esta máquina o un aparato de la cuenta (con
@@ -103,7 +140,9 @@ class Console {
    */
   info () {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
-    return { id: this.id, n: this.n, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    const d = this.decider()
+    const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null, pinned: d === this.pinned } : null
+    return { id: this.id, n: this.n, sizeBy, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 

@@ -70,7 +70,11 @@ const M = {
     consoles: 'Consolas',
     panel_open: 'Abrir el panel',
     panel_close: 'Colapsar el panel',
-    fit_here: 'Ajustar a esta pantalla',
+    pin_here: 'Esta pantalla manda en el tamaño',
+    size_label: 'tamaño',
+    size_here: 'esta pantalla',
+    size_device: 'otro aparato',
+    size_window: 'una ventana de la máquina',
     open_here: 'Abrir aquí',
     console_here: 'en esta pestaña',
     console_other: 'abierta en otro aparato',
@@ -132,7 +136,11 @@ const M = {
     consoles: 'Consoles',
     panel_open: 'Open the panel',
     panel_close: 'Collapse the panel',
-    fit_here: 'Fit to this screen',
+    pin_here: 'This screen sets the size',
+    size_label: 'size',
+    size_here: 'this screen',
+    size_device: 'another device',
+    size_window: 'a window on the machine',
     open_here: 'Open here',
     console_here: 'in this tab',
     console_other: 'open on another device',
@@ -330,6 +338,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   function removeSession (s) {
     clearInterval(s.poll)
+    if (s.onResize) window.removeEventListener('resize', s.onResize)
     try { s.term?.dispose() } catch {}
     s.box.remove(); s.tab.remove()
     const i = sessions.indexOf(s); if (i >= 0) sessions.splice(i, 1)
@@ -371,6 +380,10 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s) }
     s.agent.onMeta = (info) => follow(s, info)
     s.term.onData((d) => s.agent.input(d))
+    // Cambió esta pantalla (girar el teléfono, redimensionar): se le dice al agente, que lo aplica
+    // solo si el tamaño es de esta pestaña; si no, la vista sigue al tamaño de la consola.
+    s.onResize = () => { if (active === s && s.agent?.consoleId) { const d = fitted(s); s.agent.resize(d.cols, d.rows) } }
+    window.addEventListener('resize', s.onResize)
   }
 
   // ---- El panel de consolas: el mismo de la app de escritorio ----
@@ -378,12 +391,28 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Número fijo (lo da el agente ≥ 0.12); con uno anterior, la posición. */
   const numOf = (c, i) => c.n ?? i + 1
 
+  /** La llave de este aparato: con ella se reconoce, en `sizeBy`, si el tamaño es nuestro. */
+  const myDevice = () => link?.id?.me?.publickey || null
+
   function where (s, c) {
     const others = (c.watchers || []).length - (c.id === s.agent?.consoleId ? 1 : 0)
-    if ((c.watchers || []).some((w) => w.origin === 'local')) return t('console_local')
-    if (others > 0) return t('console_other')
-    if (c.id === s.agent?.consoleId) return t('console_here')
-    return t('console_free')
+    let w = t('console_free')
+    if ((c.watchers || []).some((v) => v.origin === 'local')) w = t('console_local')
+    else if (others > 0) w = t('console_other')
+    else if (c.id === s.agent?.consoleId) w = t('console_here')
+    // Quién tiene el tamaño, si se comparte o está fijado.
+    const b = c.sizeBy
+    if (b && ((c.watchers || []).length > 1 || b.pinned)) {
+      const who = b.device && b.device === myDevice() ? t('size_here') : b.origin === 'local' ? t('size_window') : t('size_device')
+      w += ` · ${b.pinned ? '📌 ' : ''}${t('size_label')}: ${who}`
+    }
+    return w
+  }
+
+  /** ¿Tiene ESTA pestaña fijado el tamaño de su consola? */
+  function pinnedHere (s) {
+    const c = (s.list || []).find((x) => x.id === s.agent?.consoleId)
+    return !!(c?.sizeBy?.pinned && c.sizeBy.device && c.sizeBy.device === myDevice())
   }
 
   function renderSide (s) {
@@ -395,13 +424,13 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       side.innerHTML = `
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
-        <button class="sbtn" data-act="fit" title="${esc(t('fit_here'))}">⤢</button>
+        <button class="sbtn${pinnedHere(s) ? ' on' : ''}" data-act="pin" title="${esc(t('pin_here'))}" aria-pressed="${pinnedHere(s)}">📌</button>
         ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}" title="${esc(c.title || String(numOf(c, i)))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
-        <div class="srow"><span class="grow">${t('fit_here')}</span><button class="sbtn" data-act="fit">⤢</button></div>
+        <div class="srow"><span class="grow">${t('pin_here')}</span><button class="sbtn${pinnedHere(s) ? ' on' : ''}" data-act="pin" aria-pressed="${pinnedHere(s)}">📌</button></div>
         ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}">
           <button class="pick" data-id="${esc(c.id)}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(c.title) : ''}</span><small>${esc(where(s, c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
@@ -440,11 +469,20 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     setTimeout(() => refresh(s), 200)
   }
 
-  /** «Ajustar a esta pantalla»: la consola toma el tamaño de esta pestaña. */
-  function takeSize (s) {
-    const { cols, rows } = fitted(s)
-    try { s.term.resize(cols, rows) } catch {}
-    s.agent.resize(cols, rows)
+  /**
+   * 📌 «Esta pantalla manda en el tamaño»: la consola toma el tamaño de esta pestaña y lo sigue
+   * (girar el teléfono…) hasta que se suelte, o lo fije otra pantalla. Sin fijar, lo tiene el
+   * último que se enganchó.
+   */
+  function togglePin (s) {
+    const on = !pinnedHere(s)
+    if (on) {
+      const { cols, rows } = fitted(s)
+      try { s.term.resize(cols, rows) } catch {}
+      s.agent.resize(cols, rows)
+    }
+    s.agent.pin(on)
+    setTimeout(() => refresh(s), 200)
     s.term.focus()
   }
 
@@ -470,7 +508,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       const b = e.target.closest('button'); if (!b) return
       if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { s.collapsed = !s.collapsed; renderSide(s); return }
       if (b.dataset.act === 'new') return switchTo(s, null)
-      if (b.dataset.act === 'fit') return takeSize(s)
+      if (b.dataset.act === 'pin') return togglePin(s)
       if (b.dataset.kill) return killConsole(s, b.dataset.kill)
       if (b.dataset.id) return switchTo(s, b.dataset.id)
     })

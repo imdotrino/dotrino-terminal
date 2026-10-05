@@ -59,6 +59,8 @@ struct Launch {
 /// `--tag`. A uno anterior NO se le mandan: los pasaría a la shell, que los ejecutaría como texto
 /// (el id acababa como «command not found»).
 const PANEL_CLIENT: (u32, u32, u32) = (0, 11, 0);
+/// Desde qué versión entiende el cliente Ctrl+] p / u (fijar o soltar el tamaño).
+const PIN_CLIENT: (u32, u32, u32) = (0, 14, 0);
 
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
@@ -103,6 +105,19 @@ struct ConsoleInfo {
     title: String,
     #[serde(default)]
     watchers: Vec<Watcher>,
+    /// Quién tiene el tamaño: quien lo fijó (📌) o el último que se enganchó (agente ≥ 0.14).
+    #[serde(default, rename = "sizeBy")]
+    size_by: Option<SizeBy>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SizeBy {
+    #[serde(default)]
+    origin: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    pinned: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -231,8 +246,8 @@ enum Message {
     /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
     KillNow(window::Id, String),
     ToggleSidebar(window::Id),
-    /// La ventana ganó el foco: su consola pasa a su tamaño.
-    Focused(window::Id),
+    /// 📌 Esta ventana fija el tamaño de su consola (o lo suelta).
+    TogglePin(window::Id),
     /// La barra de desplazamiento: llevar la vista a tantas líneas desde el final.
     ScrollTo(window::Id, f32),
     /// Colapsar el panel a solo botones (o volver a abrirlo).
@@ -700,6 +715,31 @@ impl App {
         }
     }
 
+    fn pin_ready(&self) -> bool {
+        self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= PIN_CLIENT)
+    }
+
+    /// ¿Tiene ESTA ventana fijado el tamaño de la consola que muestra?
+    fn pinned_here(&self, id: window::Id) -> bool {
+        let (Some(win), Some(cid)) = (self.windows.get(&id), self.mine(id)) else { return false };
+        let Some(c) = win.profile.as_ref().and_then(|p| self.consoles.get(p)).and_then(|l| l.iter().find(|c| c.id == cid)) else { return false };
+        c.size_by.as_ref().is_some_and(|b| b.pinned && b.tag.as_deref() == Some(win.tag.as_str()))
+    }
+
+    /// Quién tiene el tamaño de una consola, dicho para esta ventana.
+    fn size_owner_text(&self, id: window::Id, c: &ConsoleInfo) -> Option<String> {
+        let b = c.size_by.as_ref()?;
+        let my_tag = self.windows.get(&id).map(|w| w.tag.clone());
+        let who = if b.tag.is_some() && b.tag == my_tag {
+            t("esta ventana", "this window")
+        } else if b.origin.as_deref() == Some("remote") {
+            t("otro aparato", "another device")
+        } else {
+            t("otra ventana", "another window")
+        };
+        Some(format!("{}{} {who}", if b.pinned { "📌 " } else { "" }, t("tamaño:", "size:")))
+    }
+
     /// ¿Entiende el cliente instalado los atajos del panel? Si no se sabe su versión, no.
     fn panel_ready(&self) -> bool {
         self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= PANEL_CLIENT)
@@ -1079,22 +1119,14 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Focused(id) if !self.panel_ready() => {
-                let _ = id;
-                Task::none()
-            }
-            Message::Focused(id) => {
-                // Varias ventanas de distinto tamaño en la misma consola: manda la que tiene el
-                // foco. Se lo pide a su cliente con su atajo (Ctrl+] r); sin perfil no hay consola
-                // compartida y no hace falta.
-                if let Some(win) = self.windows.get_mut(&id) {
-                    if win.profile.is_some() && matches!(win.mode, Mode::Console) {
-                        if let Some(term) = win.term.as_mut() {
-                            term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(b"\x1dr".to_vec())));
-                        }
-                    }
+            Message::TogglePin(id) => {
+                // 📌: esta ventana fija el tamaño de su consola, o lo suelta (Ctrl+] p / u).
+                let pinned = self.pinned_here(id);
+                if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
+                    let keys: &[u8] = if pinned { b"\x1du" } else { b"\x1dp" };
+                    term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(keys.to_vec())));
                 }
-                Task::none()
+                Task::batch([later(200, Message::Poll), self.focus(id)])
             }
             Message::ToggleSidebar(id) => {
                 if let Some(w) = self.windows.get_mut(&id) {
@@ -1215,11 +1247,20 @@ impl App {
         let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
         // Corre en una ventana aparte.
         profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
-        let view_menu = Menu::new(vec![Item::new(entry(
-            format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
-            if cfg!(target_os = "macos") { "⌘B" } else { "Ctrl+Shift+B" },
-            Some(Message::ToggleSidebar(id)),
-        ))]);
+        let pin_on = self.pinned_here(id);
+        let view_menu = Menu::new(vec![
+            Item::new(entry(
+                format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
+                if cfg!(target_os = "macos") { "⌘B" } else { "Ctrl+Shift+B" },
+                Some(Message::ToggleSidebar(id)),
+            )),
+            // 📌 Quién manda en el tamaño: esta ventana, si se marca (con un cliente ≥ 0.14).
+            Item::new(entry(
+                format!("{}{}", if pin_on { "✓  " } else { "     " }, t("Esta ventana manda en el tamaño", "This window sets the size")),
+                "",
+                (self.pin_ready() && win.profile.is_some() && self.mine(id).is_some()).then_some(Message::TogglePin(id)),
+            )),
+        ]);
         let help = Menu::new(vec![
             Item::new(entry(t("Cómo se usa", "How to use it"), "", Some(Message::Help))),
             Item::new(entry(format!("Dotrino Terminal {VERSION}"), "", None)),
@@ -1303,6 +1344,8 @@ impl App {
         let ready = self.panel_ready();
         let in_bg = self.windows.get(&id).and_then(|w| w.profile.clone()).is_some_and(|p| self.background.contains(&(p, cid.clone())));
         let bg_label = if in_bg { t("Quitar de segundo plano", "Remove from background") } else { t("Dejar en segundo plano", "Keep in background") };
+        let pin_label = if self.pinned_here(id) { t("Soltar el tamaño", "Release the size") } else { t("Fijar el tamaño a esta ventana", "Pin the size to this window") };
+        let can_pin = is_mine && self.pin_ready();
         ContextMenu::new(under, move || {
             let here = (!is_mine && ready).then(|| Message::ShowConsole(id, cid.clone()));
             container(
@@ -1311,6 +1354,7 @@ impl App {
                     entry(t("Abrir en otra ventana", "Open in another window"), "", Some(Message::OpenInNewWindow(id, cid.clone()))),
                     // Las de segundo plano siguen vivas al cerrar la app; las demás se cierran con ella.
                     entry(bg_label.clone(), "", Some(Message::ToggleBackground(id, cid.clone()))),
+                    entry(pin_label.clone(), "", can_pin.then_some(Message::TogglePin(id))),
                     separator(),
                     entry(t("Cerrar consola", "Close console"), "", Some(Message::KillConsole(id, cid.clone()))),
                 ]
@@ -1399,6 +1443,10 @@ impl App {
             } else {
                 t("suelta", "detached")
             };
+            let where_ = match self.size_owner_text(id, c) {
+                Some(size) if c.watchers.len() > 1 || c.size_by.as_ref().is_some_and(|b| b.pinned) => format!("{where_} · {size}"),
+                _ => where_,
+            };
             // Con número: dos consolas con el mismo título (el prompt) se distinguen igual.
             let name = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { format!("{n} · {}", c.title) };
             let label = column![
@@ -1440,9 +1488,6 @@ impl App {
 /// Los atajos del menú Archivo: Ctrl+Shift+N / Ctrl+Shift+W (Cmd+N / Cmd+W en macOS).
 /// Copiar y pegar ya los atiende la propia terminal.
 fn shortcut(event: Event, _status: iced::event::Status, id: window::Id) -> Option<Message> {
-    if let Event::Window(window::Event::Focused) = event {
-        return Some(Message::Focused(id));
-    }
     let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else { return None };
     let chord = if cfg!(target_os = "macos") {
         modifiers == Modifiers::COMMAND

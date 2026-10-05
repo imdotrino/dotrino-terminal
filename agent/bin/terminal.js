@@ -55,8 +55,8 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente: cierra sus consolas)
 
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla; Ctrl+] n abre otra
-(y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola; Ctrl+] r ajusta la consola al
-tamaño de esta ventana.
+(y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola; Ctrl+] p fija el tamaño de la
+consola a esta ventana y Ctrl+] u lo suelta.
 Cerrar la ventana cierra la consola que abrió.`, `usage:
   dotrino-terminal [--name <n>] [--cwd <dir>] open a new console in this window, in the current folder
   dotrino-terminal attach <id> [--name <n>]  attach to an open console
@@ -67,8 +67,8 @@ Cerrar la ventana cierra la consola que abrió.`, `usage:
   dotrino-terminal rename <profile> [new]    rename a profile (stops its agent: closes its consoles)
 
 Inside a console: Ctrl+] then d detaches without closing it; Ctrl+] n opens another
-(detaching the current one); Ctrl+] a <id> Enter switches to that console; Ctrl+] r fits the
-console to this window's size.
+(detaching the current one); Ctrl+] a <id> Enter switches to that console; Ctrl+] p pins the
+console's size to this window and Ctrl+] u unpins it.
 Closing the window closes the console it opened.`))
   process.exit(0)
 }
@@ -380,6 +380,8 @@ function interactive (conn, first, dir) {
         // «r»: esta ventana manda en el tamaño de la consola (la app la usa al ganar el foco: con
         // varias ventanas de tamaños distintos en la misma consola, se ajusta a la que miras).
         if (ch === 'r') { conn.send({ type: 'resize', ...size() }); continue }
+        // «p» / «u»: esta ventana fija (📌) o suelta el tamaño de la consola.
+        if (ch === 'p' || ch === 'u') { conn.send({ type: 'pin', on: ch === 'p' }); if (ch === 'p') conn.send({ type: 'resize', ...size() }); continue }
         if (ch === 'n') {
           if (send) { input(send); send = '' }
           switchTo({ type: 'open', cwd: first.cwd || path.resolve(process.cwd()) })
