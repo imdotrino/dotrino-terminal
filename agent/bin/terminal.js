@@ -76,6 +76,9 @@ Closing the window closes the console it opened.`))
  */
 const HOLD = Symbol('hold')
 function die (msg) {
+  // Si la TTY ya estaba en crudo (ver `captureEarly`), se devuelve a normal para que el
+  // mensaje salga con sus saltos de línea.
+  try { if (process.stdin.isTTY) process.stdin.setRawMode(false) } catch (_) {}
   process.stderr.write(msg + '\n')
   if (process.env.DOTRINO_TERMINAL_HOLD !== '1' || !process.stdin.isTTY) process.exit(1)
   process.stderr.write(t('\nPulsa una tecla para cerrar.', '\nPress any key to close.'))
@@ -83,6 +86,22 @@ function die (msg) {
   process.stdin.resume()
   process.stdin.once('data', () => process.exit(1))
   throw HOLD                          // corta lo que venía detrás; el proceso sale con la tecla
+}
+
+/**
+ * Lo que se teclea MIENTRAS el cliente arranca (Node, y a veces levantar el agente). Con la TTY
+ * en modo normal, eso se repetía en pantalla a destiempo y luego la pantalla de la consola lo
+ * pisaba (un retorno de carro y a sobrescribir), y el agente lo descartaba porque aún no había
+ * consola. Ahora la TTY pasa a crudo nada más empezar, y lo tecleado se guarda y se manda
+ * entero cuando la consola está lista.
+ */
+const early = []
+const earlyTap = (b) => early.push(b)
+function captureEarly () {
+  if (!process.stdin.isTTY) return
+  process.stdin.setRawMode(true)
+  process.stdin.resume()
+  process.stdin.on('data', earlyTap)
 }
 
 /** El agente de esta máquina; si no hay ninguno escuchando, lo levanta y espera a que conteste. */
@@ -249,6 +268,10 @@ async function list (conn) {
 
 /** La ventana: la TTY enganchada a una consola del agente. */
 function interactive (conn, first, dir) {
+  // Hasta que el agente diga `attached` no hay consola a la que escribir: se guarda.
+  let ready = false
+  let queued = ''
+  const input = (data) => { if (ready) conn.send({ type: 'input', data }); else queued += data }
   if (!process.stdin.isTTY || !process.stdout.isTTY) die(t('dotrino-terminal necesita una terminal (TTY).', 'dotrino-terminal needs a terminal (TTY).'))
   const out = process.stdout
   let consoleId = null
@@ -286,7 +309,14 @@ function interactive (conn, first, dir) {
 
   conn.on('message', (m) => {
     if (m.type === 'out' || m.type === 'replay') { out.write(filter(m.data)); return }
-    if (m.type === 'attached') { consoleId = m.id; onInfo(m.console); return }
+    if (m.type === 'attached') {
+      consoleId = m.id
+      onInfo(m.console)
+      // Ya hay consola: va lo que se tecleó mientras tanto, en orden y de una vez.
+      ready = true
+      if (queued) { conn.send({ type: 'input', data: queued }); queued = '' }
+      return
+    }
     if (m.type === 'meta') { onInfo(m.console); return }
     if (m.type === 'exit') { finish(m.code || 0); return }
     if (m.type === 'fail') { finish(1, `dotrino-terminal: ${m.message} (${m.code})`) }
@@ -299,9 +329,10 @@ function interactive (conn, first, dir) {
 
   process.stdin.setRawMode(true)
   process.stdin.resume()
+  process.stdin.off('data', earlyTap)
   const decoder = new StringDecoder('utf8')
   let prefixed = false
-  process.stdin.on('data', (buf) => {
+  const onKeys = (buf) => {
     // Ctrl+] abre el atajo: «d» suelta la consola, otro Ctrl+] manda uno literal, y cualquier
     // otra tecla pasa tal cual, con su Ctrl+] delante. Las dos teclas pueden llegar juntas.
     let send = ''
@@ -309,7 +340,7 @@ function interactive (conn, first, dir) {
       if (prefixed) {
         prefixed = false
         if (ch === 'd') {
-          if (send) conn.send({ type: 'input', data: send })
+          if (send) input(send)
           conn.send({ type: 'detach' })
           return finish(0, t(`Consola soltada. Para volver: dotrino-terminal attach ${consoleId}`, `Console detached. To return: dotrino-terminal attach ${consoleId}`))
         }
@@ -317,8 +348,11 @@ function interactive (conn, first, dir) {
       } else if (ch === DETACH_PREFIX) prefixed = true
       else send += ch
     }
-    if (send) conn.send({ type: 'input', data: send })
-  })
+    if (send) input(send)
+  }
+  process.stdin.on('data', onKeys)
+  // Lo tecleado antes de llegar aquí pasa por el mismo camino (el atajo de soltar incluido).
+  for (const b of early.splice(0)) onKeys(b)
   out.on('resize', () => conn.send({ type: 'resize', ...size() }))
   // La ventana se cerró: el agente ve caer la conexión y mata la consola que abrimos.
   for (const sig of ['SIGHUP', 'SIGTERM']) process.on(sig, () => { conn.close(); process.exit(0) })
@@ -331,6 +365,7 @@ try {
   if (cmd === 'link') { await link(); process.exit(0) }
   if (cmd === 'rename') { await rename(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))
+  if (cmd === 'open' || cmd === 'attach') captureEarly()
   const conn = await agent(dir)
   if (cmd === 'ls' || cmd === 'list') { await list(conn); conn.close() } else if (cmd === 'kill') {
     if (!args[1]) die(t('falta el id: dotrino-terminal kill <id>', 'missing id: dotrino-terminal kill <id>'))
