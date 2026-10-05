@@ -35,8 +35,11 @@ export { LABEL }
 export const LINK_POLL_MS = 2000
 
 export function loadPty () {
-  // Binarios PREBUILT (Linux/macOS/Windows, sin toolchain), API idéntica a node-pty.
-  try { return require('@homebridge/node-pty-prebuilt-multiarch') } catch (e) {
+  // node-pty (Microsoft, el de VS Code) ≥ 1.2 trae los binarios DENTRO del paquete para Linux,
+  // macOS y Windows: no compila ni descarga nada al instalarse (funciona con ignore-scripts).
+  // Antes: @homebridge/node-pty-prebuilt-multiarch, que los bajaba al instalar con
+  // prebuild-install, abandonado (npm avisaba «deprecated»).
+  try { return require('node-pty') } catch (e) {
     throw new Error('PTY module missing. Reinstall the agent: `npx @dotrino/terminal-agent` (' + e.message + ')')
   }
 }

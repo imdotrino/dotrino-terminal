@@ -102,6 +102,10 @@ struct App {
     next_term: u64,
     /// Se pidió instalar el cliente y todavía no aparece.
     awaiting_client: bool,
+    /// La fuente de las terminales: la misma que la terminal de siempre (ver `terminal_font`).
+    font: iced_term::settings::FontSettings,
+    /// Los colores: los de XFCE Terminal si los tiene (ver `terminal_palette`).
+    palette: iced_term::ColorPalette,
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +236,103 @@ fn load_profiles(launch: &Launch) -> Result<Vec<Profile>, String> {
     Ok(all.into_iter().filter(|p| p.linked || Path::new(&p.dir).is_dir()).collect())
 }
 
+/// La fuente de las ventanas: la MISMA que la terminal de siempre, para que no se note el
+/// cambio. En orden: `DOTRINO_TERMINAL_FONT` («Familia tamaño», p. ej. "DejaVu Sans Mono 9"), la
+/// de XFCE Terminal, la monoespaciada del escritorio (GNOME/GTK) y, si no hay ninguna, la que usa
+/// la terminal del sistema por defecto. Los puntos pasan a píxeles a 96 ppp, como GTK.
+fn terminal_font() -> iced_term::settings::FontSettings {
+    let configured = std::env::var("DOTRINO_TERMINAL_FONT").ok().or_else(xfce_terminal_font).or_else(desktop_monospace_font);
+    let (family, points) = configured.as_deref().and_then(parse_font_name).unwrap_or(if cfg!(target_os = "macos") {
+        ("Menlo".to_string(), 12.0 * 72.0 / 96.0) // Terminal.app: 12 px
+    } else {
+        ("DejaVu Sans Mono".to_string(), 9.0)
+    });
+    iced_term::settings::FontSettings {
+        size: points * 96.0 / 72.0,
+        // Interlineado: con DejaVu 9 pt, XFCE Terminal deja 15 px por línea (12 × 1,25).
+        // iced_term traía 1,3.
+        scale_factor: 1.25,
+        // iced pide un nombre `'static`: se crea una vez por proceso.
+        font_type: iced::Font::with_name(Box::leak(family.into_boxed_str())),
+    }
+}
+
+/// «DejaVu Sans Mono 9» → ("DejaVu Sans Mono", 9). El tamaño es la última palabra; si no es un
+/// número, no se entiende el nombre y no se usa.
+fn parse_font_name(name: &str) -> Option<(String, f32)> {
+    let name = name.trim().trim_matches('\'');
+    let (family, size) = name.rsplit_once(' ')?;
+    let size: f32 = size.parse().ok().filter(|s: &f32| *s > 3.0 && *s < 72.0)?;
+    (!family.trim().is_empty()).then(|| (family.trim().to_string(), size))
+}
+
+/// Los colores de la terminal de siempre: fondo, texto y los 16 de la paleta de XFCE Terminal.
+/// Lo que no esté, o no se entienda, se queda con el de iced_term (un color mal escrito lo haría
+/// entrar en pánico al pintar, por eso se valida aquí).
+fn terminal_palette() -> iced_term::ColorPalette {
+    let mut pal = iced_term::ColorPalette::default();
+    let Some(rc) = xfce_terminalrc() else { return pal };
+    let get = |key: &str| rc.lines().find_map(|l| l.strip_prefix(&format!("{key}=")).map(str::to_string));
+    let set = |slot: &mut String, value: Option<String>, key: &str| match value.as_deref().map(hex6) {
+        Some(Some(c)) => *slot = c,
+        Some(None) => eprintln!("dotrino-terminal-desktop: {key} is not a color, keeping the default"),
+        None => {}
+    };
+    set(&mut pal.foreground, get("ColorForeground"), "ColorForeground");
+    set(&mut pal.background, get("ColorBackground"), "ColorBackground");
+    if let Some(list) = get("ColorPalette") {
+        let colors: Vec<String> = list.split(';').map(str::to_string).collect();
+        let slots: [&mut String; 16] = [
+            &mut pal.black, &mut pal.red, &mut pal.green, &mut pal.yellow, &mut pal.blue, &mut pal.magenta, &mut pal.cyan, &mut pal.white,
+            &mut pal.bright_black, &mut pal.bright_red, &mut pal.bright_green, &mut pal.bright_yellow, &mut pal.bright_blue,
+            &mut pal.bright_magenta, &mut pal.bright_cyan, &mut pal.bright_white,
+        ];
+        for (slot, value) in slots.into_iter().zip(colors) {
+            set(slot, Some(value), "ColorPalette");
+        }
+    }
+    pal
+}
+
+/// Un color en `#rrggbb`, que es lo único que entiende iced_term. GTK también guarda
+/// `#rrrrggggbbbb`: se queda con el byte alto de cada canal.
+fn hex6(c: &str) -> Option<String> {
+    let c = c.trim();
+    let hex = c.strip_prefix('#')?;
+    if !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    match hex.len() {
+        6 => Some(format!("#{}", hex.to_lowercase())),
+        12 => Some(format!("#{}{}{}", &hex[0..2], &hex[4..6], &hex[8..10]).to_lowercase()),
+        _ => None,
+    }
+}
+
+fn xfce_terminalrc() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    std::fs::read_to_string(PathBuf::from(home).join(".config/xfce4/terminal/terminalrc")).ok()
+}
+
+fn xfce_terminal_font() -> Option<String> {
+    let rc = xfce_terminalrc()?;
+    // Si XFCE Terminal usa la fuente del sistema, manda la del escritorio.
+    if rc.lines().any(|l| l.trim() == "FontUseSystem=TRUE") {
+        return None;
+    }
+    rc.lines().find_map(|l| l.strip_prefix("FontName=").map(str::to_string))
+}
+
+fn desktop_monospace_font() -> Option<String> {
+    let run = |cmd: &str, args: &[&str]| -> Option<String> {
+        let out = Command::new(cmd).args(args).output().ok()?;
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !s.is_empty()).then_some(s)
+    };
+    run("xfconf-query", &["-c", "xsettings", "-p", "/Gtk/MonospaceFontName"])
+        .or_else(|| run("gsettings", &["get", "org.gnome.desktop.interface", "monospace-font-name"]))
+}
+
 /// La línea de órdenes de la app. Lo que XFCE (exo) y los lanzadores esperan de un emulador de
 /// terminal, más el perfil:
 ///   `--name <perfil>` · `--working-directory <dir>` (o `=dir`) · `-x prog args…` · `-e "orden"`
@@ -301,7 +402,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -424,6 +525,8 @@ impl App {
                 env,
                 working_directory: Some(win.cwd.clone()),
             },
+            font: self.font.clone(),
+            theme: iced_term::settings::ThemeSettings::new(Box::new(self.palette.clone())),
             ..Default::default()
         };
         match iced_term::Terminal::new(term_id, settings) {
