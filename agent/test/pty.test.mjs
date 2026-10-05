@@ -110,3 +110,21 @@ test('si la shell termina sola, se avisa con su código y deja de listarse', asy
   assert.equal(s.sent.find((p) => p.type === 'exit').code, 3)
   assert.equal(h.list().length, 0)
 })
+
+test('cada consola tiene un número fijo: al cerrar la 1, la 2 sigue siendo 2 y la próxima es la 1', async () => {
+  const h = hub()
+  const open = async () => {
+    const s = fakeSession(); serveSession(s, h)
+    s.deliver({ type: 'open', cols: 80, rows: 24 })
+    await until(() => s.sent.some((p) => p.type === 'attached'))
+    return s.sent.find((p) => p.type === 'attached').id
+  }
+  const a = await open(); const b = await open()
+  assert.deepEqual(h.list().map((c) => c.n), [1, 2])
+  h.kill(a)
+  await until(() => h.list().length === 1)
+  assert.equal(h.list()[0].n, 2, 'la 2 sigue siendo la 2')
+  await open()
+  assert.deepEqual(h.list().map((c) => [c.n, c.id === b]), [[1, false], [2, true]], 'la nueva toma el 1')
+  h.killAll()
+})

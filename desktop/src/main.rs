@@ -93,6 +93,9 @@ impl std::fmt::Display for Profile {
 #[derive(Debug, Clone, Deserialize)]
 struct ConsoleInfo {
     id: String,
+    /// Su número, fijo mientras viva (lo da el agente ≥ 0.12). Con uno anterior, la posición.
+    #[serde(default)]
+    n: Option<u32>,
     /// `local` (abierta desde esta máquina) o `remote` (desde otro aparato).
     #[serde(default)]
     origin: String,
@@ -152,6 +155,9 @@ struct Win {
     /// La consola recién elegida en el panel, marcada YA, antes de que la próxima lectura de la
     /// lista lo confirme (si no, durante un momento salían dos marcadas, o ninguna).
     showing: Option<String>,
+    /// Al terminar de soltarla para cerrar la ventana, cerrar también esta consola (ver
+    /// `request_close`).
+    kill_on_close: Option<String>,
     /// ¿Se ve el panel lateral de consolas en ESTA ventana? (cada ventana el suyo)
     sidebar: bool,
     /// Panel colapsado: una franja con un botón numerado por consola, para que ocupe poco.
@@ -590,7 +596,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true });
+        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, kill_on_close: None, sidebar: true, sidebar_collapsed: true });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -815,19 +821,43 @@ impl App {
         }
     }
 
-    /// Cerrar una ventana. Si su consola está en segundo plano, primero se suelta (Ctrl+] d) y la
-    /// ventana se cierra cuando el cliente termina: la ventana que abrió una consola la mata al
-    /// cerrarse, y una de segundo plano tiene que sobrevivir.
+    /// Cerrar una ventana. La regla (la que se lee igual que se usa): **cerrar una ventana cierra
+    /// la consola que está mostrando, salvo que la esté mirando otra ventana u otro aparato, o que
+    /// esté en segundo plano.** Las que dejó atrás al cambiar desde el panel siguen sueltas.
+    ///
+    /// Primero se SUELTA (Ctrl+] d): el agente, por su cuenta, mataría la consola que esta ventana
+    /// abrió, la mire quien la mire. Luego, si toca, se cierra la que se mostraba.
     fn request_close(&mut self, id: window::Id) -> Task<Message> {
-        let keep = self.mine(id).zip(self.windows.get(&id).and_then(|w| w.profile.clone())).is_some_and(|(cid, p)| self.background.contains(&(p, cid)));
-        if keep {
-            if let Some(win) = self.windows.get_mut(&id) {
+        if self.panel_ready() {
+            if let (Some(cid), Some(win)) = (self.mine(id), self.windows.get(&id)) {
+                let profile = win.profile.clone().unwrap_or_default();
+                let tag = win.tag.clone();
+                // Quién mira, preguntado en el momento (la lista guardada puede tener 1,5 s).
+                let list = self.profile_dir(&profile).and_then(|d| agent_list(&d)).unwrap_or_default();
+                let others = list
+                    .iter()
+                    .find(|c| c.id == cid)
+                    .is_some_and(|c| c.watchers.iter().any(|w| w.tag.as_deref() != Some(tag.as_str())));
+                let background = self.background.contains(&(profile, cid.clone()));
+                let win = self.windows.get_mut(&id).expect("window");
                 if let (Some(term), Mode::Console) = (win.term.as_mut(), &win.mode) {
+                    win.kill_on_close = (!others && !background).then_some(cid);
                     win.pending = Some(Pending::Close);
                     term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(b"\x1dd".to_vec())));
                     // Si el cliente no contesta (colgado), la ventana se cierra igual al rato.
                     return later(3000, Message::ForceClose(id));
                 }
+            }
+        }
+        self.close(id)
+    }
+
+    /// Cerrar ya la ventana, y la consola que mostraba si `request_close` decidió cerrarla.
+    fn finish_close(&mut self, id: window::Id) -> Task<Message> {
+        let kill = self.windows.get_mut(&id).and_then(|w| w.kill_on_close.take().map(|c| (w.profile.clone(), c)));
+        if let Some((Some(p), cid)) = kill {
+            if let Some(dir) = self.profile_dir(&p) {
+                agent_send(&dir, &serde_json::json!({ "type": "kill", "id": cid }));
             }
         }
         self.close(id)
@@ -869,7 +899,7 @@ impl App {
             // Salvo que su perfil haya cambiado de nombre (`dotrino-terminal rename` desde esta
             // misma consola): entonces la ventana sigue, en el perfil con su nombre nuevo.
             // La ventana soltó su consola para pasar a otra (panel lateral): sigue, en esa.
-            Mode::Console if matches!(win.pending, Some(Pending::Close)) => self.close(id),
+            Mode::Console if matches!(win.pending, Some(Pending::Close)) => self.finish_close(id),
             Mode::Console if win.pending.is_some() => {
                 let win = self.windows.get_mut(&id).expect("window");
                 match win.pending.take() {
@@ -946,7 +976,7 @@ impl App {
             Message::Opened(id) => self.focus(id),
             Message::Close(id) => self.request_close(id),
             Message::ForceClose(id) => {
-                if self.windows.contains_key(&id) { self.close(id) } else { Task::none() }
+                if self.windows.contains_key(&id) { self.finish_close(id) } else { Task::none() }
             }
             Message::SwitchProfile(id, name) => {
                 let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
@@ -1312,16 +1342,17 @@ impl App {
         let centered = |s: String, size: u32| text(s).size(size).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
         if collapsed {
             let mut strip = column![
-                button(centered("»".into(), 13)).width(30).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
-                button(centered("+".into(), 14)).width(30).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
+                button(centered("»".into(), 13)).width(24).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
+                button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
             ]
             .spacing(4)
             .align_x(iced::Alignment::Center);
-            for (n, c) in list.iter().enumerate() {
+            for (i, c) in list.iter().enumerate() {
+                let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let is_mine = mine.as_deref() == Some(c.id.as_str());
-                let tip = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n + 1) } else { c.title.clone() };
-                let b = button(centered(format!("{}", n + 1), 12))
-                    .width(30)
+                let tip = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { c.title.clone() };
+                let b = button(centered(format!("{n}"), 12))
+                    .width(24)
                     .padding([4, 0])
                     .style(if is_mine { side_selected } else { menu_button })
                     .on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
@@ -1329,7 +1360,8 @@ impl App {
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
                 strip = strip.push(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right));
             }
-            return container(iced::widget::scrollable(strip)).width(40).height(Length::Fill).padding([4, 2]).style(panel_style).into();
+            // Lo justo para dos dígitos («00»): 24 px de botón en 30 de franja.
+            return container(iced::widget::scrollable(strip)).width(30).height(Length::Fill).padding([4, 3]).style(panel_style).into();
         }
         // Como en la franja colapsada: «« » arriba y «+» en su propia fila, debajo.
         let mut items = column![
@@ -1352,7 +1384,8 @@ impl App {
         if !ready {
             items = items.push(note(why.clone()));
         }
-        for (n, c) in list.iter().enumerate() {
+        for (i, c) in list.iter().enumerate() {
+            let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
             let is_mine = mine.as_deref() == Some(c.id.as_str());
             let others = c.watchers.iter().filter(|w| w.tag.as_deref() != Some(my_tag.as_str())).collect::<Vec<_>>();
             let where_ = if others.iter().any(|w| w.origin == "remote") {
@@ -1367,7 +1400,7 @@ impl App {
                 t("suelta", "detached")
             };
             // Con número: dos consolas con el mismo título (el prompt) se distinguen igual.
-            let name = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n + 1) } else { format!("{} · {}", n + 1, c.title) };
+            let name = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { format!("{n} · {}", c.title) };
             let label = column![
                 text(format!("{}{name}", if is_mine { "● " } else { "" })).size(12),
                 text(where_).size(11).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) }),

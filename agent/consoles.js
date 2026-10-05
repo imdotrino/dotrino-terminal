@@ -27,8 +27,9 @@ export const REPLAY_CHUNK = 64 * 1024
 const randomId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
 
 class Console {
-  constructor ({ id, pty, cols, rows, origin }) {
+  constructor ({ id, n, pty, cols, rows, origin }) {
     this.id = id
+    this.n = n                        // su número, fijo mientras viva (ver ConsoleHub.create)
     this.pty = pty
     this.origin = origin              // 'local' (una ventana de esta máquina) | 'remote' (otro aparato)
     this.title = ''                   // el que pone la shell (OSC 0/2), para reconocerla en la lista
@@ -98,7 +99,7 @@ class Console {
    */
   info () {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
-    return { id: this.id, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    return { id: this.id, n: this.n, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 
@@ -115,8 +116,14 @@ export class ConsoleHub {
 
   create ({ cols = 80, rows = 24, origin = 'remote', cwd = null } = {}) {
     const id = randomId()
+    // Su NÚMERO: el libre más bajo, y no cambia mientras viva. Si se cierra la 1, la 2 sigue
+    // siendo la 2 y la próxima nueva será la 1. Lo da el agente para que sea el mismo en todas
+    // las ventanas y aparatos.
+    const used = new Set([...this.consoles.values()].map((c) => c.n))
+    let n = 1
+    while (used.has(n)) n++
     const pty = this._spawn({ cols, rows, cwd })
-    const c = new Console({ id, pty, cols, rows, origin })
+    const c = new Console({ id, n, pty, cols, rows, origin })
     pty.onData((d) => c._out(d))
     pty.onExit(({ exitCode }) => {
       c.exited = true
@@ -131,7 +138,7 @@ export class ConsoleHub {
 
   get (id) { return this.consoles.get(id) || null }
 
-  list () { return [...this.consoles.values()].map((c) => c.info()) }
+  list () { return [...this.consoles.values()].map((c) => c.info()).sort((a, b) => a.n - b.n) }
 
   kill (id) {
     const c = this.consoles.get(id)

@@ -369,7 +369,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * Entrar en una ventana de la máquina avisa a quien esté delante de ella.
    */
   function consoleLabel (c, i) {
-    const parts = [c.title ? `${c.title} · ${agoText(c.lastActive)}` : t('console_item', i + 1, agoText(c.lastActive))]
+    // El número lo da el agente (≥ 0.12) y no cambia al cerrar otras; con uno anterior, la posición.
+    const n = c.n ?? i + 1
+    const parts = [c.title ? `${n} · ${c.title} · ${agoText(c.lastActive)}` : t('console_item', n, agoText(c.lastActive))]
     if (c.origin === 'local') parts.push(t('console_local'))
     if (c.viewers > 0) parts.push(t('console_in_use'))
     return parts.join(' · ')
