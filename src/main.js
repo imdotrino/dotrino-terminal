@@ -45,6 +45,7 @@ const M = {
     checking: 'Comprobando…',
     still_not: 'Este dispositivo aún no está conectado a una bóveda.',
     machines_title: 'Tus máquinas',
+    machine_open: (n) => `Abrir una consola en ${n}`,
     machines_loading: 'Buscando tus máquinas…',
     machines_none: 'No se puede conectar con ninguna de tus máquinas.',
     conn_machine: (a) => `No se pudo conectar con ${a}.`,
@@ -112,6 +113,7 @@ const M = {
     checking: 'Checking…',
     still_not: 'This device is not connected to a vault yet.',
     machines_title: 'Your machines',
+    machine_open: (n) => `Open a console on ${n}`,
     machines_loading: 'Looking for your machines…',
     machines_none: "Can't connect to any of your machines.",
     conn_machine: (a) => `Couldn't connect to ${a}.`,
@@ -333,7 +335,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   function closeSession (s) { try { s.agent?.close() } catch {} removeSession(s) }
 
   function renderTab (s) {
-    s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel">${esc(s.alias)}</span><span class="x" title="${t('close')}">×</span></button>`)
+    s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel" title="${esc(s.alias)}">${esc(s.alias.split(' · ')[0])}</span><span class="x" title="${t('close')}">×</span></button>`)
     s.tab.addEventListener('click', (e) => { if (!e.target.classList.contains('x')) setActive(s) })
     s.tab.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); closeSession(s) })
     tabsEl.appendChild(s.tab)
@@ -356,7 +358,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
   function mountTerm (s) {
-    s.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0e0b1a' } })
+    s.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0f1416', foreground: '#dfe3e6', cursor: '#81cfff', selectionBackground: '#004c6b' } })
     s.fit = new FitAddon(); s.term.loadAddon(s.fit)
     s.view.replaceChildren()
     s.term.open(s.view); s.fit.fit()
@@ -601,10 +603,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 function terminalScreen (link) {
   const node = el(`
     <section class="card term-card">
-      <div id="machines" class="machines">
-        <span class="status">${t('machines_loading')}</span>
+      <div class="bar">
+        <div id="tabs" class="tabs"></div>
+        <div id="machines" class="machines">
+          <span class="status">${t('machines_loading')}</span>
+        </div>
       </div>
-      <div id="tabs" class="tabs"></div>
       <div id="terms" class="terms"></div>
       <span id="hint" class="status">${link.mode === 'self' ? t('self_hint') : t('linked_to', esc(link.deviceId || ''))}</span>
     </section>`)
@@ -631,7 +635,7 @@ function terminalScreen (link) {
     const seen = new Map() // sub → fila: las que alguna vez contestaron como terminal
     const holderOf = () => {
       let holder = box.querySelector('.machine-list')
-      if (!holder) { box.innerHTML = `<b>${t('machines_title')}</b><div class="machine-list"></div>`; holder = box.querySelector('.machine-list') }
+      if (!holder) { box.innerHTML = `<span class="mlabel">${t('machines_title')}</span><div class="machine-list"></div>`; holder = box.querySelector('.machine-list') }
       return holder
     }
     // Página administrativa (§5.1): dice lo que pasa y enlaza la guía; cómo se instala y se
@@ -647,7 +651,7 @@ function terminalScreen (link) {
         const deviceId = (await pubkeyId(m.sub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
         const name = m.label ? `${m.label} · ${deviceId}` : deviceId
         const row = el(`<div class="machine-row" data-sub="${esc(m.sub)}">
-          <button class="machine" data-testid="machine-item" title="${esc(deviceId)}"><span class="mdot"></span>🖥 ${esc(name)}</button>
+          <button class="machine" data-testid="machine-item" title="${esc(t('machine_open', name))}"><span class="mdot"></span>${esc(m.label || deviceId)} +</button>
         </div>`)
         row.querySelector('.machine').addEventListener('click', () => host.openConsole(m.sub, name))
         holderOf().appendChild(row)
