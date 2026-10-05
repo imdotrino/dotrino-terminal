@@ -13,13 +13,13 @@
   },
   "dependencies": {
     "@dotrino/identity": "0.105.0",
-    "@dotrino/install": "0.3.1",
+    "@dotrino/install": "0.3.2",
     "@dotrino/nav": "0.3.0",
-    "@dotrino/proxy-client": "0.25.0",
+    "@dotrino/proxy-client": "0.28.0",
     "@dotrino/remote-agent": "0.12.1",
     "@dotrino/reputation": "0.12.0",
     "@dotrino/store": "0.11.0",
-    "@dotrino/topbar": "0.12.0",
+    "@dotrino/topbar": "0.14.1",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0"
   },
