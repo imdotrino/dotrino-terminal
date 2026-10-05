@@ -31,3 +31,6 @@ Sexto cambio: `Backend::resize` no redimensiona el PTY hasta que el widget dice 
 área (antes, el primer evento lo dejaba en ~11×3 celdas, con el área de arranque de 80×50 píxeles,
 y readline acababa con el cursor fuera de sitio), y solo avisa al PTY cuando el tamaño cambia (se
 llamaba en cada evento, con una señal de redimensionado cada vez).
+
+Séptimo cambio: `Terminal::cell_size()` devuelve el tamaño de una celda en píxeles, para dibujar la
+consola al tamaño que tiene cuando el tamaño lo decide otra pantalla.

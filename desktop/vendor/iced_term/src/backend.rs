@@ -566,6 +566,12 @@ pub(crate) fn layout_size(backend: &Backend) -> iced::Size<f32> {
     iced::Size::new(s.layout_width, s.layout_height)
 }
 
+/// Ver `Terminal::cell_size` (parche de Dotrino).
+pub(crate) fn cell_size(backend: &Backend) -> iced::Size<f32> {
+    let s = &backend.renderable_content().terminal_size;
+    iced::Size::new(s.cell_width as f32, s.cell_height as f32)
+}
+
 /// Ver `Terminal::clear_selection` (parche de Dotrino).
 pub(crate) fn clear_selection(backend: &mut Backend) {
     backend.term.lock().selection = None;

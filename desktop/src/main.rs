@@ -730,6 +730,18 @@ impl App {
         c.size_by.as_ref().is_some_and(|b| b.pinned && b.tag.as_deref() == Some(win.tag.as_str()))
     }
 
+    /// El tamaño (columnas, filas) de la consola de esta ventana cuando lo decide OTRA pantalla.
+    /// `None` si lo tiene esta ventana o todavía no se sabe: entonces ocupa toda la ventana.
+    fn followed_size(&self, id: window::Id) -> Option<(u32, u32)> {
+        let (win, cid) = (self.windows.get(&id)?, self.mine(id)?);
+        let c = win.profile.as_ref().and_then(|p| self.consoles.get(p))?.iter().find(|c| c.id == cid)?;
+        let b = c.size_by.as_ref()?;
+        if b.tag.as_deref() == Some(win.tag.as_str()) || c.cols == 0 || c.rows == 0 {
+            return None;
+        }
+        Some((c.cols, c.rows))
+    }
+
     /// Quién tiene el tamaño de una consola, dicho para esta ventana.
     fn size_owner_text(&self, id: window::Id, c: &ConsoleInfo) -> Option<String> {
         let b = c.size_by.as_ref()?;
@@ -1292,9 +1304,18 @@ impl App {
             // cambiar de perfil (o enrolar, renombrar) el widget conservaba el tamaño de la
             // anterior, no se lo decía al PTY nuevo, y este se quedaba en 80×50: desbordado.
             (Some(term), None) => {
+                // Si el tamaño de la consola lo tiene otra pantalla, se dibuja a ESE tamaño y el resto
+                // de la ventana queda vacío, como en la PWA: así se ve que la consola es más chica.
+                let (w, h) = match self.followed_size(id) {
+                    Some((cols, rows)) => {
+                        let cell = term.cell_size();
+                        (Length::Fixed(cols as f32 * cell.width + 1.0), Length::Fixed(rows as f32 * cell.height + 1.0))
+                    }
+                    None => (Length::Fill, Length::Fill),
+                };
                 let view = keyed_column([(term.id, iced_term::TerminalView::show(term).map(Message::Terminal))])
-                    .width(Length::Fill)
-                    .height(Length::Fill);
+                    .width(w)
+                    .height(h);
                 // La barra de desplazamiento: solo si hay historial. Arriba es el principio.
                 let (offset, history, screen) = term.scroll_position();
                 let view: Element<'_, Message> = if history > 0 {
@@ -1305,7 +1326,7 @@ impl App {
                     let bar = iced::widget::vertical_slider(0.0..=history as f32, offset as f32, move |v| Message::ScrollTo(id, v))
                         .width(10)
                         .style(move |theme: &Theme, status| scrollbar(theme, status, handle));
-                    row![view, container(bar).padding([2, 1])].into()
+                    row![view, container(bar).padding([2, 1])].height(h).into()
                 } else {
                     view.into()
                 };

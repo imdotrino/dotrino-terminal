@@ -82,6 +82,12 @@ impl Terminal {
         self.redraw();
     }
 
+    /// El tamaño de una celda, en píxeles. Parche de Dotrino: para dibujar la consola al tamaño
+    /// que tiene cuando lo decide otra pantalla.
+    pub fn cell_size(&self) -> iced::Size<f32> {
+        crate::backend::cell_size(&self.backend)
+    }
+
     /// Dónde está la vista: (líneas desplazadas hacia arriba, líneas de historial, líneas de
     /// pantalla). Parche de Dotrino: para dibujar una barra de desplazamiento.
     pub fn scroll_position(&self) -> (usize, usize, usize) {
