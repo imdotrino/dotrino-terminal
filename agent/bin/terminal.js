@@ -380,7 +380,7 @@ function interactive (conn, first, dir) {
         // «r»: esta ventana manda en el tamaño de la consola (la app la usa al ganar el foco: con
         // varias ventanas de tamaños distintos en la misma consola, se ajusta a la que miras).
         if (ch === 'r') { conn.send({ type: 'resize', ...size() }); continue }
-        // «p» / «u»: esta ventana fija (📌) o suelta el tamaño de la consola.
+        // «p» / «u»: esta ventana fija (⤢) o suelta el tamaño de la consola.
         if (ch === 'p' || ch === 'u') { conn.send({ type: 'pin', on: ch === 'p' }); if (ch === 'p') conn.send({ type: 'resize', ...size() }); continue }
         if (ch === 'n') {
           if (send) { input(send); send = '' }

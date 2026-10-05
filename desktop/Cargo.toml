@@ -1,6 +1,6 @@
 [package]
 name = "dotrino-terminal-desktop"
-version = "0.2.11"
+version = "0.2.12"
 edition = "2024"
 description = "Dotrino Terminal: terminal windows (Linux, macOS) whose consoles you can also open from your other devices."
 license = "MIT"
@@ -8,7 +8,7 @@ repository = "https://github.com/imdotrino/dotrino-terminal"
 homepage = "https://terminal.dotrino.com/"
 
 [dependencies]
-iced = { version = "0.14", features = ["tokio", "advanced"] }
+iced = { version = "0.14", features = ["tokio", "advanced", "svg"] }
 iced_aw = { version = "0.14", default-features = false, features = ["menu", "context_menu"] }
 iced_term = "0.8"
 libc = "0.2"

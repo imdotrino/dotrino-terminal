@@ -70,7 +70,7 @@ export function makeHub (pty, opts = {}) {
  * ella: cerrar la ventana mata su shell, como en cualquier terminal. Una ventana que solo
  * se enganchó a una consola ajena, o que la soltó a propósito (`detach`), no mata nada.
  *
- * Tamaño con varios mirando: lo decide quien lo FIJÓ (`pin`, el 📌 de la app o el teléfono) y, si
+ * Tamaño con varios mirando: lo decide quien lo FIJÓ (`pin`, el ⤢ de la app o el teléfono) y, si
  * nadie, el último que se enganchó. Solo esa pantalla lo cambia (sus `resize` se siguen: girar el
  * teléfono, redimensionar la ventana). Escribir o dar foco no cambia nada.
  * Exportada para las pruebas.
@@ -137,7 +137,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
       return
     }
     if (msg.type === 'resize') { takeSize(msg); current?.sizeFrom(viewer); return }
-    // 📌 «Esta pantalla manda en el tamaño» (on) o soltarlo (off).
+    // ⤢ «Esta pantalla manda en el tamaño» (on) o soltarlo (off).
     if (msg.type === 'pin') { current?.pin(viewer, !!msg.on); return }
     if (msg.type === 'close') { if (current) hub.kill(current.id); return }
     if (msg.type === 'kill') { if (!hub.kill(msg.id)) fail('no-console', 'that console no longer exists') }

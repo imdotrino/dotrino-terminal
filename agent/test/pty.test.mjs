@@ -129,7 +129,7 @@ test('cada consola tiene un número fijo: al cerrar la 1, la 2 sigue siendo 2 y 
   h.killAll()
 })
 
-test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (📌) o el último que llegó; escribir no lo cambia', async () => {
+test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (⤢) o el último que llegó; escribir no lo cambia', async () => {
   const h = hub()
   try {
     const sizeOf = (id) => `${h.get(id).cols}x${h.get(id).rows}`
@@ -139,7 +139,7 @@ test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (📌) o el último q
     const id = pc.sent.find((p) => p.type === 'attached').id
     assert.equal(sizeOf(id), '120x40', 'quien la abre tiene el tamaño')
 
-    const tel = fakeSession(); serveSession(tel, h, { origin: 'remote', device: 'TEL' }); tel.device = 'TEL'
+    const tel = fakeSession(); tel.device = 'TEL'; serveSession(tel, h, { origin: 'remote' })
     tel.deliver({ type: 'attach', id, cols: 40, rows: 20 })
     await until(() => sizeOf(id) === '40x20')
     await until(() => pc.sent.some((p) => p.type === 'meta' && p.console.cols === 40), 2000)
@@ -149,7 +149,7 @@ test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (📌) o el último q
     await new Promise((r) => setTimeout(r, 100))
     assert.equal(sizeOf(id), '40x20', 'ni escribir ni redimensionar desde quien NO tiene el tamaño lo cambia')
 
-    const tab = fakeSession(); serveSession(tab, h, { origin: 'remote' })
+    const tab = fakeSession(); tab.device = 'TAB'; serveSession(tab, h, { origin: 'remote' })
     tab.deliver({ type: 'attach', id, cols: 80, rows: 30 })
     await until(() => sizeOf(id) === '80x30')
     assert.equal(h.get(id).info().sizeBy.pinned, false, 'el último que llegó, sin fijar')
@@ -171,5 +171,14 @@ test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (📌) o el último q
 
     tab.deliver({ type: 'detach' })
     await until(() => sizeOf(id) === '20x40')  // y si se va también, al que queda
+
+    // La elección es de la PANTALLA, no de la conexión: el PC pasa a otra consola y vuelve, y la
+    // recupera aunque el teléfono haya llegado después.
+    pc.deliver({ type: 'attach', id, cols: 130, rows: 40 })
+    await until(() => sizeOf(id) === '130x40')
+    assert.equal(h.get(id).info().sizeBy.pinned, true, 'al volver, sigue siendo la que eligió')
+    tel.deliver({ type: 'resize', cols: 30, rows: 40 })
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(sizeOf(id), '130x40', 'y el teléfono no se lo quita')
   } finally { h.killAll() }
 })

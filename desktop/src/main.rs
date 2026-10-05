@@ -105,7 +105,7 @@ struct ConsoleInfo {
     title: String,
     #[serde(default)]
     watchers: Vec<Watcher>,
-    /// Quién tiene el tamaño: quien lo fijó (📌) o el último que se enganchó (agente ≥ 0.14).
+    /// Quién tiene el tamaño: quien lo fijó (⤢) o el último que se enganchó (agente ≥ 0.14).
     #[serde(default, rename = "sizeBy")]
     size_by: Option<SizeBy>,
     #[serde(default)]
@@ -250,7 +250,7 @@ enum Message {
     /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
     KillNow(window::Id, String),
     ToggleSidebar(window::Id),
-    /// 📌 Esta ventana fija el tamaño de su consola (o lo suelta).
+    /// ⤢ Esta ventana fija el tamaño de su consola (o lo suelta).
     TogglePin(window::Id),
     /// La barra de desplazamiento: llevar la vista a tantas líneas desde el final.
     ScrollTo(window::Id, f32),
@@ -753,7 +753,7 @@ impl App {
         } else {
             t("otra ventana", "another window")
         };
-        Some(format!("{}{} {who}", if b.pinned { "📌 " } else { "" }, t("tamaño:", "size:")))
+        Some(format!("{} {who}", t("tamaño:", "size:")))
     }
 
     /// ¿Entiende el cliente instalado los atajos del panel? Si no se sabe su versión, no.
@@ -1136,7 +1136,7 @@ impl App {
                 Task::none()
             }
             Message::TogglePin(id) => {
-                // 📌: esta ventana fija el tamaño de su consola, o lo suelta (Ctrl+] p / u).
+                // ⤢: esta ventana fija el tamaño de su consola, o lo suelta (Ctrl+] p / u).
                 let pinned = self.pinned_here(id);
                 if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
                     let keys: &[u8] = if pinned { b"\x1du" } else { b"\x1dp" };
@@ -1270,7 +1270,7 @@ impl App {
                 if cfg!(target_os = "macos") { "⌘B" } else { "Ctrl+Shift+B" },
                 Some(Message::ToggleSidebar(id)),
             )),
-            // 📌 Quién manda en el tamaño: esta ventana, si se marca (con un cliente ≥ 0.14).
+            // ⤢ Quién manda en el tamaño: esta ventana, si se marca (con un cliente ≥ 0.14).
             Item::new(entry(
                 format!("{}{}", if pin_on { "✓  " } else { "     " }, t("Esta ventana manda en el tamaño", "This window sets the size")),
                 "",
@@ -1369,7 +1369,7 @@ impl App {
         let ready = self.panel_ready();
         let in_bg = self.windows.get(&id).and_then(|w| w.profile.clone()).is_some_and(|p| self.background.contains(&(p, cid.clone())));
         let bg_label = if in_bg { t("Quitar de segundo plano", "Remove from background") } else { t("Dejar en segundo plano", "Keep in background") };
-        let pin_label = if self.pinned_here(id) { t("Soltar el tamaño", "Release the size") } else { t("Fijar el tamaño a esta ventana", "Pin the size to this window") };
+        let pin_label = if self.pinned_here(id) { t("Soltar el tamaño", "Release the size") } else { t("Usar el tamaño de esta ventana", "Use this window's size") };
         let can_pin = is_mine && self.pin_ready();
         ContextMenu::new(under, move || {
             let here = (!is_mine && ready).then(|| Message::ShowConsole(id, cid.clone()));
@@ -1409,18 +1409,19 @@ impl App {
         let why = t("Actualiza dotrino-terminal (Perfil → Actualizar) para usar el panel", "Update dotrino-terminal (Profile → Update) to use the panel");
         let act = |m: Message| ready.then_some(m);
         let centered = |s: String, size: u32| text(s).size(size).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
-        // 📌 actúa sobre la consola de ESTA ventana: fija su tamaño a esta ventana, o lo suelta.
+        // ⤢ actúa sobre la consola de ESTA ventana: fija su tamaño a esta ventana, o lo suelta.
         let cur = list.iter().enumerate().find(|(_, c)| mine.as_deref() == Some(c.id.as_str())).map(|(i, c)| (c.n.map(|n| n as usize).unwrap_or(i + 1), c));
         let pin_on = self.pinned_here(id);
         let can_pin = self.pin_ready() && cur.is_some();
         let pin_tip = match cur {
-            _ if !self.pin_ready() => t("Actualiza dotrino-terminal (Perfil → Actualizar) para fijar el tamaño", "Update dotrino-terminal (Profile → Update) to pin the size"),
-            Some((n, _)) if pin_on => format!("{} {n}", t("Soltar el tamaño de la consola", "Release the size of console")),
-            Some((n, _)) => format!("{} {n} {}", t("Fijar el tamaño de la consola", "Pin the size of console"), t("a esta ventana", "to this window")),
-            None => t("Fijar el tamaño a esta ventana", "Pin the size to this window"),
+            _ if !self.pin_ready() => t("Actualiza dotrino-terminal (Perfil → Actualizar) para elegir el tamaño", "Update dotrino-terminal (Profile → Update) to choose the size"),
+            Some((n, _)) if pin_on => format!("{} {n} {}", t("Soltar: la consola", "Release: console"), t("deja de usar el tamaño de esta ventana", "stops using this window's size")),
+            Some((n, _)) => format!("{} {n}", t("Usar el tamaño de esta ventana en la consola", "Use this window's size for console")),
+            None => t("Usar el tamaño de esta ventana", "Use this window's size"),
         };
         let pin_btn = |w: f32| -> Element<'_, Message> {
-            let b = button(centered("📌".into(), 12)).width(w).padding([2, 0]).style(if pin_on { side_selected } else { menu_button }).on_press_maybe(can_pin.then_some(Message::TogglePin(id)));
+            let icon = iced::widget::svg(iced::widget::svg::Handle::from_memory(ICON_SIZE)).width(14).height(14).style(move |theme: &Theme, _| iced::widget::svg::Style { color: Some(if pin_on { theme.palette().primary } else { theme.extended_palette().background.base.text.scale_alpha(0.7) }) });
+            let b = button(container(icon).center_x(Length::Fill)).width(w).padding([4, 0]).style(if pin_on { side_selected } else { menu_button }).on_press_maybe(can_pin.then_some(Message::TogglePin(id)));
             iced::widget::tooltip(b, container(text(pin_tip.clone()).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into()
         };
         if collapsed {
@@ -1465,7 +1466,7 @@ impl App {
             .padding(iced::Padding { left: 8.0, ..Default::default() }),
         ]
         .spacing(2);
-        // Quién tiene el tamaño de la consola de esta ventana, y el 📌 para quedárselo.
+        // Quién tiene el tamaño de la consola de esta ventana, y el ⤢ para quedárselo.
         if let Some((n, c)) = cur {
             let who = match c.size_by.as_ref() {
                 Some(b) if b.tag.is_some() && b.tag.as_deref() == Some(my_tag.as_str()) => t("esta ventana", "this window"),
@@ -1473,7 +1474,7 @@ impl App {
                 Some(_) => t("otra ventana", "another window"),
                 None => t("esta ventana", "this window"),
             };
-            let how = if c.size_by.as_ref().is_some_and(|b| b.pinned) { t("fijado 📌", "pinned 📌") } else { t("lo tiene la última pantalla que la abre", "set by the last screen that opens it") };
+            let how = if c.size_by.as_ref().is_some_and(|b| b.pinned) { t("elegido a propósito", "chosen on purpose") } else { t("lo tiene la última pantalla que la abre", "set by the last screen that opens it") };
             let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
             items = items.push(
                 row![
@@ -1631,6 +1632,10 @@ fn scrollbar(theme: &Theme, status: iced::widget::slider::Status, handle_len: u1
         handle: Handle { shape: HandleShape::Rectangle { width: handle_len, border_radius: 3.0.into() }, background: handle.into(), border_width: 0.0, border_color: Color::TRANSPARENT },
     }
 }
+
+/// ⤢ «Usar el tamaño de esta ventana»: flecha diagonal doble, dibujada (no depende de las fuentes
+/// del sistema). El color lo pone el estilo del widget.
+const ICON_SIZE: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5l-11 11"/></svg>"#;
 
 fn side_selected(theme: &Theme, status: button::Status) -> button::Style {
     let mut s = menu_button(theme, status);
