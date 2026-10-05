@@ -15,8 +15,20 @@ import { Identity } from '@dotrino/identity'
 let _id = null
 
 export async function identity () {
-  if (!_id) _id = await Identity.connect()
+  if (!_id) _id = await Identity.connect(identityOptions())
   return _id
+}
+
+/**
+ * En desarrollo y en las pruebas (dotrino-test) se puede apuntar la identidad a un iframe LOCAL
+ * con `?vault=<url>`. Solo si esta página se sirve desde localhost: sin ese cerrojo, un enlace
+ * `terminal.dotrino.com/consoles?vault=…` podría apuntar tu identidad a un iframe ajeno. Igual
+ * que en la consola de la bóveda.
+ */
+function identityOptions () {
+  const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)
+  const url = local ? new URLSearchParams(location.search).get('vault') : null
+  return url ? { vaultUrl: url } : {}
 }
 
 // --- Modo de la terminal (selección de vista, no una preferencia persistente) ---
