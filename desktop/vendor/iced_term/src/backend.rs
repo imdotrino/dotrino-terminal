@@ -547,6 +547,26 @@ fn visible_regex_match_iter<'a>(
         .take_while(move |rm| rm.start().line <= viewport_end)
 }
 
+/// Ver `Terminal::clear_selection` (parche de Dotrino).
+pub(crate) fn clear_selection(backend: &mut Backend) {
+    backend.term.lock().selection = None;
+    backend.sync();
+}
+
+/// Ver `Terminal::paste_bytes` (parche de Dotrino).
+pub(crate) fn paste_bytes(backend: &Backend, text: &str) -> Vec<u8> {
+    let bracketed = backend.renderable_content().terminal_mode.contains(TermMode::BRACKETED_PASTE);
+    if !bracketed {
+        return text.as_bytes().to_vec();
+    }
+    let clean = text.replace("\x1b[201~", "");
+    let mut out = Vec::with_capacity(clean.len() + 12);
+    out.extend_from_slice(b"\x1b[200~");
+    out.extend_from_slice(clean.as_bytes());
+    out.extend_from_slice(b"\x1b[201~");
+    out
+}
+
 pub struct RenderableContent {
     pub grid: Grid<Cell>,
     pub hovered_hyperlink: Option<RangeInclusive<Point>>,

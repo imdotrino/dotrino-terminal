@@ -9,3 +9,12 @@ teclado, dentro del widget).
 
 Se usa por `[patch.crates-io]` en `../Cargo.toml`. Cuando upstream exponga algo equivalente,
 se borra esta carpeta y el parche.
+
+Segundo cambio: `Terminal::paste_bytes()` (y el atajo de pegar del widget lo usa). El crate
+pegaba los bytes tal cual, así que un texto con saltos de línea se EJECUTABA al pegarlo aunque la
+shell hubiera pedido el pegado entre corchetes (`ESC[?2004h`). Ahora va entre `ESC[200~` y
+`ESC[201~` cuando el programa lo pide, quitando del texto cualquier `ESC[201~`.
+
+Tercer cambio: `Terminal::clear_selection()`. El clic sobre una opción del menú contextual (clic
+derecho → Copiar/Pegar) llega también a la terminal de debajo y empieza una selección; la app la
+quita después de cada acción del menú.

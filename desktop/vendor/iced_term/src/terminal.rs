@@ -67,6 +67,22 @@ impl Terminal {
         self.backend.selectable_content()
     }
 
+    /// Quita la selección. Parche de Dotrino: el clic sobre una opción de un menú contextual
+    /// llega también a la terminal de debajo y empieza una selección que nadie pidió.
+    pub fn clear_selection(&mut self) {
+        crate::backend::clear_selection(&mut self.backend);
+        self.redraw();
+    }
+
+    /// Los bytes que hay que escribir para PEGAR `text`. Parche de Dotrino: si el programa pidió
+    /// el pegado entre corchetes (bash, zsh, vim lo piden), va entre `ESC[200~` y `ESC[201~`, y
+    /// así un texto con saltos de línea queda en el prompt en vez de ejecutarse solo. Del texto
+    /// se quita cualquier `ESC[201~`, que cerraría el corchete antes de tiempo y colaría el resto
+    /// como si se hubiera tecleado.
+    pub fn paste_bytes(&self, text: &str) -> Vec<u8> {
+        crate::backend::paste_bytes(&self.backend, text)
+    }
+
     pub fn widget_id(&self) -> &iced::widget::Id {
         &self.widget_id
     }

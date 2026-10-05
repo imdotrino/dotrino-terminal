@@ -8,6 +8,8 @@
  *   dotrino-terminal kill <id> [--name <n>]    cierra una consola
  *   dotrino-terminal profiles [--json]         los perfiles de esta máquina (enlazados o no)
  *   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
+  dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente: cierra sus consolas)
+ *   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente si corre)
  *
  * Un PERFIL es un agente con nombre (`~/.dotrino/agent/terminal-agent/<nombre>/`), enlazado a
  * una bóveda o solo local. Cada consola vive en el agente de un perfil.
@@ -50,6 +52,7 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal kill <id> [--name <n>]    cierra una consola
   dotrino-terminal profiles [--json]         los perfiles de esta máquina
   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
+  dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente: cierra sus consolas)
 
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla.
 Cerrar la ventana cierra la consola que abrió.`, `usage:
@@ -59,6 +62,7 @@ Cerrar la ventana cierra la consola que abrió.`, `usage:
   dotrino-terminal kill <id> [--name <n>]    close a console
   dotrino-terminal profiles [--json]         this machine's profiles
   dotrino-terminal link [--name <n>]         link a profile with your vault
+  dotrino-terminal rename <profile> [new]    rename a profile (stops its agent: closes its consoles)
 
 Inside a console: Ctrl+] then d detaches without closing it.
 Closing the window closes the console it opened.`))
@@ -138,6 +142,87 @@ async function link () {
   console.log(t(`Perfil «${name}» enlazado.`, `Profile "${name}" linked.`))
 }
 
+function ask (q) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolve) => rl.question(q, (a) => { rl.close(); resolve(a.trim()) }))
+}
+
+/**
+ * Renombra un perfil: su carpeta, nada más. Es el mismo aparato con la misma llave, así que el
+ * acta no se entera ni hace falta volver a enrolar. El nombre es solo tuyo, de esta máquina.
+ *
+ * Si su agente está corriendo hay que pararlo (las ventanas lo encuentran por el socket de esa
+ * carpeta), y eso cierra sus consolas: si quedan abiertas, se dice cuántas y se pregunta.
+ */
+async function rename () {
+  const from = args[1]
+  if (!from) die(t('falta el perfil: dotrino-terminal rename <perfil> [nuevo]', 'missing profile: dotrino-terminal rename <profile> [new]'))
+  if (!isValidName(from)) die(t(`nombre no válido: «${from}»`, `invalid name: "${from}"`))
+  const { dir } = resolveInstance(LABEL, from)
+  if (!fs.existsSync(dir)) die(t(`no existe el perfil «${from}»`, `there is no profile "${from}"`))
+  let to = args[2] && !args[2].startsWith('-') ? args[2] : await ask(t(`Nuevo nombre para «${from}» (a-z, 0-9, -): `, `New name for "${from}" (a-z, 0-9, -): `))
+  if (!isValidName(to)) die(t(`nombre no válido: «${to}» (usa a-z, 0-9 y -, hasta 32)`, `invalid name: "${to}" (use a-z, 0-9 and -, up to 32)`))
+  if (to === from) die(t('es el mismo nombre', 'that is the same name'))
+  const target = resolveInstance(LABEL, to).dir
+  if (fs.existsSync(target)) die(t(`ya hay un perfil «${to}»`, `there is already a profile "${to}"`))
+
+  const pidFile = path.join(dir, 'agent.pid')
+  const pid = Number((() => { try { return fs.readFileSync(pidFile, 'utf8') } catch (_) { return '' } })())
+  const running = pid && alive(pid)
+  // ¿Corre esta orden DENTRO de una consola del perfil que se renombra? Entonces parar su
+  // agente cerraría esta misma consola a mitad de camino: el trabajo lo hace un proceso aparte.
+  const inside = !!process.env.DOTRINO_TERMINAL_PROFILE_DIR && samePath(process.env.DOTRINO_TERMINAL_PROFILE_DIR, dir)
+  if (running && !args.includes('--yes')) {
+    let open = 0
+    try {
+      const conn = await connectLocal(dir)
+      open = ((await request(conn, { type: 'list' }, 'consoles')).list || []).length
+      conn.close()
+    } catch (_) { /* agente viejo sin socket: igual hay que pararlo */ }
+    const others = open - (inside ? 1 : 0)
+    if (others > 0) {
+      const ok = await ask(t(`El perfil «${from}» tiene ${others} consola(s) abierta(s) más; renombrarlo las cierra. ¿Seguir? [s/N] `, `Profile "${from}" has ${others} more open console(s); renaming it closes them. Continue? [y/N] `))
+      if (!/^[sy]/i.test(ok)) die(t('No se renombró.', 'Not renamed.'))
+    }
+  }
+  if (running && inside && !args.includes('--detached-step')) {
+    const self = fileURLToPath(import.meta.url)
+    spawn(process.execPath, [self, 'rename', from, to, '--yes', '--detached-step'], { detached: true, stdio: 'ignore', env: process.env }).unref()
+    console.log(t(`Renombrando «${from}» → «${to}». Esta consola es de ese perfil y se va a cerrar; la ventana sigue en «${to}».`,
+      `Renaming "${from}" → "${to}". This console belongs to that profile and is about to close; the window continues in "${to}".`))
+    return
+  }
+  // PRIMERO se mueve la carpeta y DESPUÉS se para el agente: así quien estaba mirando ve que el
+  // perfil ya cambió de nombre cuando se le cae la conexión (y no lo confunde con un fallo).
+  // Mover la carpeta con el agente vivo no rompe nada: el socket y el pid se van con ella.
+  fs.renameSync(dir, target)
+  if (running) {
+    process.kill(pid, 'SIGTERM')
+    const t0 = Date.now()
+    while (alive(pid)) {
+      if (Date.now() - t0 > 5000) die(t(`renombrado, pero el agente (pid ${pid}) no se detuvo: páralo a mano`, `renamed, but the agent (pid ${pid}) did not stop: stop it by hand`))
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
+  // Lo que dejó el agente viejo (su pid y su socket ya no atienden): el próximo arranca limpio.
+  fs.rmSync(path.join(target, 'agent.pid'), { force: true })
+  fs.rmSync(path.join(target, 'terminal.sock'), { force: true })
+  // La app de escritorio recuerda el último perfil elegido: si era este, pasa al nombre nuevo.
+  const last = lastProfileFile()
+  try { if (fs.readFileSync(last, 'utf8').trim() === from) fs.writeFileSync(last, to) } catch (_) { /* sin preferencia guardada */ }
+  console.log(t(`Perfil «${from}» → «${to}». Es el mismo aparato: no hace falta volver a enrolar.`, `Profile "${from}" → "${to}". Same device: no need to enroll again.`))
+}
+
+function samePath (a, b) {
+  try { return fs.realpathSync(a) === fs.realpathSync(b) } catch (_) { return path.resolve(a) === path.resolve(b) }
+}
+
+/** La preferencia de la app de escritorio: el último perfil elegido en su menú. */
+function lastProfileFile () {
+  const base = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config')
+  return path.join(base, 'dotrino-terminal', 'last-profile')
+}
+
 /** Una pregunta y su respuesta, para `ls` y `kill`. */
 function request (conn, msg, type) {
   return new Promise((resolve) => {
@@ -163,7 +248,7 @@ async function list (conn) {
 }
 
 /** La ventana: la TTY enganchada a una consola del agente. */
-function interactive (conn, first) {
+function interactive (conn, first, dir) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) die(t('dotrino-terminal necesita una terminal (TTY).', 'dotrino-terminal needs a terminal (TTY).'))
   const out = process.stdout
   let consoleId = null
@@ -206,7 +291,11 @@ function interactive (conn, first) {
     if (m.type === 'exit') { finish(m.code || 0); return }
     if (m.type === 'fail') { finish(1, `dotrino-terminal: ${m.message} (${m.code})`) }
   })
-  conn.on('close', () => finish(1, t('dotrino-terminal: el agente se detuvo.', 'dotrino-terminal: the agent stopped.')))
+  conn.on('close', () => {
+    // Si se fue porque el perfil cambió de nombre (`rename`), no es un error: se dice y se sale.
+    if (!fs.existsSync(dir)) return finish(0, t('Este perfil cambió de nombre.', 'This profile was renamed.'))
+    finish(1, t('dotrino-terminal: el agente se detuvo.', 'dotrino-terminal: the agent stopped.'))
+  })
 
   process.stdin.setRawMode(true)
   process.stdin.resume()
@@ -240,6 +329,7 @@ function interactive (conn, first) {
 try {
   if (cmd === 'profiles') { await profiles(); process.exit(0) }
   if (cmd === 'link') { await link(); process.exit(0) }
+  if (cmd === 'rename') { await rename(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))
   const conn = await agent(dir)
   if (cmd === 'ls' || cmd === 'list') { await list(conn); conn.close() } else if (cmd === 'kill') {
@@ -250,10 +340,10 @@ try {
     conn.close()
   } else if (cmd === 'attach') {
     if (!args[1]) die(t('falta el id: dotrino-terminal attach <id>  (mira «dotrino-terminal ls»)', 'missing id: dotrino-terminal attach <id>  (see "dotrino-terminal ls")'))
-    interactive(conn, { type: 'attach', id: args[1] })
+    interactive(conn, { type: 'attach', id: args[1] }, dir)
   } else if (cmd === 'open') {
     // Como cualquier terminal: la consola abre en la carpeta donde estás (o en `--cwd`).
-    interactive(conn, { type: 'open', cwd: path.resolve(opt('--cwd') || process.cwd()) })
+    interactive(conn, { type: 'open', cwd: path.resolve(opt('--cwd') || process.cwd()) }, dir)
   } else die(t(`orden desconocida: ${cmd} (mira --help)`, `unknown command: ${cmd} (see --help)`))
 } catch (e) {
   if (e !== HOLD) { try { die(`dotrino-terminal: ${e.message}`) } catch (_) {} }

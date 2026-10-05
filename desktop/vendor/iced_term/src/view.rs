@@ -367,8 +367,8 @@ impl<'a> TerminalView<'a> {
             },
             BindingAction::Paste => {
                 if let Some(data) = clipboard.read(ClipboardKind::Standard) {
-                    let input: Vec<u8> = data.bytes().collect();
-                    return Some(Command::Write(input));
+                    // Parche de Dotrino: pegado entre corchetes si el programa lo pidió.
+                    return Some(Command::Write(self.term.paste_bytes(&data)));
                 }
             },
             BindingAction::Copy => {

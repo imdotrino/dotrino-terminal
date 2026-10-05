@@ -51,7 +51,10 @@ export function makeHub (pty, opts = {}) {
   return new ConsoleHub({
     spawn: ({ cols, rows, cwd }) => pty.spawn(shell, [], {
       name: 'xterm-256color', cols, rows,
-      cwd: cwd || os.homedir(), env: { ...process.env, TERM: 'xterm-256color' }
+      cwd: cwd || os.homedir(),
+      // La carpeta del perfil viaja a la shell: `dotrino-terminal rename` sabe así si corre
+      // dentro del mismo perfil que renombra (y que parar su agente cerraría su consola).
+      env: { ...process.env, TERM: 'xterm-256color', ...(opts.dir ? { DOTRINO_TERMINAL_PROFILE_DIR: opts.dir } : {}) }
     })
   })
 }
@@ -156,7 +159,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
  */
 export async function startAgent (opts = {}) {
   const dir = opts.dir || dataDir()
-  const hub = makeHub(loadPty(), opts)
+  const hub = makeHub(loadPty(), { ...opts, dir })
   const local = await listenLocal({ dir, serve: (session) => serveSession(session, hub, { origin: 'local' }) })
   let remote = null
   let stopped = false

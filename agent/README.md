@@ -29,6 +29,7 @@ dotrino-terminal attach <id>             # retomar una
 dotrino-terminal kill <id>
 dotrino-terminal profiles [--json]       # los perfiles (agentes con nombre) de esta máquina
 dotrino-terminal link [--name <n>]       # enlazar un perfil con tu bóveda
+dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para su agente; mismo aparato)
 ```
 
 Cerrar la ventana cierra su consola, como cualquier terminal; **Ctrl+] y luego d** la suelta

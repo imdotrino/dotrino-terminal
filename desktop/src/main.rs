@@ -23,8 +23,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use iced::keyboard::{self, Key, Modifiers};
-use iced::widget::{button, column, container, row, rule, space, text};
+use iced::widget::{button, column, container, keyed_column, row, rule, space, text};
 use iced::{Border, Color, Element, Event, Length, Size, Subscription, Task, Theme, window};
+use iced_aw::ContextMenu;
 use iced_aw::menu::{Item, Menu, MenuBar};
 use serde::Deserialize;
 
@@ -113,11 +114,16 @@ enum Message {
     /// `None`: sin perfil.
     SwitchProfile(window::Id, Option<String>),
     Enroll(window::Id),
+    /// Renombrar el perfil de la ventana.
+    Rename(window::Id),
     /// Escribe en la consola de la ventana la orden que instala (o actualiza) el cliente.
     InstallClient(window::Id),
     /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
     CheckClient,
     Copy(window::Id),
+    /// Copiar un texto ya tomado: el del clic derecho, leído al abrir el menú (el clic sobre
+    /// «Copiar» llega también a la terminal y empezaría una selección nueva, borrando esa).
+    CopyText(window::Id, String),
     Paste(window::Id),
     Pasted(window::Id, Option<String>),
     Help,
@@ -429,6 +435,14 @@ impl App {
         }
     }
 
+    /// El clic sobre una opción del menú contextual también le llega a la terminal de debajo,
+    /// que empieza una selección con él: se quita.
+    fn clear_stray_selection(&mut self, id: window::Id) {
+        if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
+            term.clear_selection();
+        }
+    }
+
     fn focus(&self, id: window::Id) -> Task<Message> {
         match self.windows.get(&id).and_then(|w| w.term.as_ref()) {
             Some(term) => iced_term::TerminalView::focus(term.widget_id().clone()),
@@ -451,7 +465,30 @@ impl App {
         let Some(win) = self.windows.get(&id) else { return Task::none() };
         match &win.mode {
             // La shell salió, o se soltó la consola: la ventana se va, como cualquier terminal.
-            Mode::Console => self.close(id),
+            // Salvo que su perfil haya cambiado de nombre (`dotrino-terminal rename` desde esta
+            // misma consola): entonces la ventana sigue, en el perfil con su nombre nuevo.
+            Mode::Console => {
+                let current = win.profile.clone();
+                let before: Vec<String> = self.profiles.iter().map(|p| p.name.clone()).collect();
+                let _ = self.reload_profiles();
+                let names: Vec<String> = self.profiles.iter().map(|p| p.name.clone()).collect();
+                let renamed = current.as_ref().filter(|p| !names.contains(p)).and_then(|_| {
+                    match names.iter().filter(|n| !before.contains(n)).collect::<Vec<_>>().as_slice() {
+                        [only] => Some((*only).clone()),
+                        _ => None,
+                    }
+                });
+                match renamed {
+                    Some(new) => {
+                        if let Some(win) = self.windows.get_mut(&id) {
+                            win.profile = Some(new);
+                        }
+                        self.start(id, Mode::Console);
+                        self.focus(id)
+                    }
+                    None => self.close(id),
+                }
+            }
             // Terminó el enlace: si quedó un perfil enlazado nuevo, la ventana pasa a él; si
             // no (se canceló, falló), vuelve al que tenía.
             Mode::Linking { linked_before } => {
@@ -520,6 +557,18 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Rename(id) => {
+                // Como «Instalar»: la orden queda escrita en TU consola, sin Enter, y el nombre
+                // nuevo lo completas tú. Al acabar, la ventana sigue en el perfil renombrado.
+                let _ = self.reload_profiles();
+                if let Some(win) = self.windows.get_mut(&id) {
+                    if let (Some(from), Some(term)) = (win.profile.clone(), win.term.as_mut()) {
+                        let order = format!("dotrino-terminal rename {from} ");
+                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
+                    }
+                }
+                self.focus(id)
+            }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
                 let linked_before = linked_names(&self.profiles);
@@ -530,10 +579,17 @@ impl App {
                 let selected = self.windows.get(&id).and_then(|w| w.term.as_ref()).map(|t| t.selected_text()).unwrap_or_default();
                 if selected.is_empty() { self.focus(id) } else { iced::clipboard::write(selected).chain(self.focus(id)) }
             }
+            Message::CopyText(id, selected) => {
+                self.clear_stray_selection(id);
+                if selected.is_empty() { self.focus(id) } else { iced::clipboard::write(selected).chain(self.focus(id)) }
+            }
             Message::Paste(id) => iced::clipboard::read().map(move |c| Message::Pasted(id, c)),
             Message::Pasted(id, content) => {
+                self.clear_stray_selection(id);
                 if let (Some(data), Some(term)) = (content, self.windows.get_mut(&id).and_then(|w| w.term.as_mut())) {
-                    term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(data.into_bytes())));
+                    // Entre corchetes si la shell lo pidió: lo pegado no se ejecuta solo.
+                    let bytes = term.paste_bytes(&data);
+                    term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(bytes)));
                 }
                 self.focus(id)
             }
@@ -586,6 +642,12 @@ impl App {
             Item::new(entry(format!("{}{p}", mark(on)), "", Some(Message::SwitchProfile(id, Some(p.name.clone())))))
         }));
         profiles.push(Item::new(separator()));
+        // Renombrar el perfil de ESTA ventana (sin perfil no hay nada que renombrar).
+        let rename_label = match &win.profile {
+            Some(p) => format!("{} «{p}»…", t("Renombrar", "Rename")),
+            None => t("Renombrar perfil…", "Rename profile…"),
+        };
+        profiles.push(Item::new(entry(rename_label, "", (!linking && self.launch.is_ok() && win.profile.is_some() && win.term.is_some()).then_some(Message::Rename(id)))));
         // Sin el cliente no hay perfiles ni enrolar: se ve deshabilitado, y la razón a la vista.
         profiles.push(Item::new(entry(t("Enrolar…", "Enroll…"), "", (!linking && self.launch.is_ok()).then_some(Message::Enroll(id)))));
         if let Err(why) = &self.launch {
@@ -616,7 +678,34 @@ impl App {
     fn view(&self, id: window::Id) -> Element<'_, Message> {
         let Some(win) = self.windows.get(&id) else { return text("").into() };
         let body: Element<'_, Message> = match (&win.term, &win.error) {
-            (Some(term), None) => iced_term::TerminalView::show(term).map(Message::Terminal),
+            // Con la clave del terminal: cada TTY nueva estrena el estado del widget. Sin ella, al
+            // cambiar de perfil (o enrolar, renombrar) el widget conservaba el tamaño de la
+            // anterior, no se lo decía al PTY nuevo, y este se quedaba en 80×50: desbordado.
+            (Some(term), None) => {
+                let view = keyed_column([(term.id, iced_term::TerminalView::show(term).map(Message::Terminal))])
+                    .width(Length::Fill)
+                    .height(Length::Fill);
+                // Clic derecho: Copiar y Pegar, lo mismo que el menú Editar.
+                ContextMenu::new(view, move || {
+                    let selected = term.selected_text();
+                    let (copy_key, paste_key) = if cfg!(target_os = "macos") { ("⌘C", "⌘V") } else { ("Ctrl+Shift+C", "Ctrl+Shift+V") };
+                    container(
+                        column![
+                            entry(t("Copiar", "Copy"), copy_key, (!selected.is_empty()).then(|| Message::CopyText(id, selected.clone()))),
+                            entry(t("Pegar", "Paste"), paste_key, Some(Message::Paste(id))),
+                        ]
+                        .width(220),
+                    )
+                    .padding(4)
+                    .style(|theme: &Theme| container::Style {
+                        background: Some(theme.extended_palette().background.weak.color.into()),
+                        border: Border::default().rounded(6.0),
+                        ..Default::default()
+                    })
+                    .into()
+                })
+                .into()
+            }
             (_, Some(err)) => column![text("Dotrino Terminal").size(22), text(err.clone()).font(iced::Font::MONOSPACE)]
                 .spacing(16)
                 .padding(24)
