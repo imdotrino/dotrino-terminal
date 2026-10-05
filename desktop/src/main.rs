@@ -187,6 +187,10 @@ enum Message {
     /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
     KillNow(window::Id, String),
     ToggleSidebar(window::Id),
+    /// La ventana ganó el foco: su consola pasa a su tamaño.
+    Focused(window::Id),
+    /// La barra de desplazamiento: llevar la vista a tantas líneas desde el final.
+    ScrollTo(window::Id, f32),
     /// Colapsar el panel a solo botones (o volver a abrirlo).
     CollapseSidebar(window::Id),
     Terminal(iced_term::Event),
@@ -844,6 +848,29 @@ impl App {
                 self.focus(id)
             }
             Message::MenuRoot => Task::none(),
+            Message::ScrollTo(id, target) => {
+                if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
+                    let (offset, _, _) = term.scroll_position();
+                    let delta = target.round() as i32 - offset as i32;
+                    if delta != 0 {
+                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Scroll(delta)));
+                    }
+                }
+                Task::none()
+            }
+            Message::Focused(id) => {
+                // Varias ventanas de distinto tamaño en la misma consola: manda la que tiene el
+                // foco. Se lo pide a su cliente con su atajo (Ctrl+] r); sin perfil no hay consola
+                // compartida y no hace falta.
+                if let Some(win) = self.windows.get_mut(&id) {
+                    if win.profile.is_some() && matches!(win.mode, Mode::Console) {
+                        if let Some(term) = win.term.as_mut() {
+                            term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(b"\x1dr".to_vec())));
+                        }
+                    }
+                }
+                Task::none()
+            }
             Message::ToggleSidebar(id) => {
                 if let Some(w) = self.windows.get_mut(&id) {
                     w.sidebar = !w.sidebar;
@@ -987,6 +1014,20 @@ impl App {
                 let view = keyed_column([(term.id, iced_term::TerminalView::show(term).map(Message::Terminal))])
                     .width(Length::Fill)
                     .height(Length::Fill);
+                // La barra de desplazamiento: solo si hay historial. Arriba es el principio.
+                let (offset, history, screen) = term.scroll_position();
+                let view: Element<'_, Message> = if history > 0 {
+                    // El asa mide lo que se ve frente al total (con un mínimo para poder agarrarla).
+                    let line_px = self.font.size * self.font.scale_factor;
+                    let track = screen as f32 * line_px;
+                    let handle = (track * screen as f32 / (history + screen) as f32).max(24.0) as u16;
+                    let bar = iced::widget::vertical_slider(0.0..=history as f32, offset as f32, move |v| Message::ScrollTo(id, v))
+                        .width(10)
+                        .style(move |theme: &Theme, status| scrollbar(theme, status, handle));
+                    row![view, container(bar).padding([2, 1])].into()
+                } else {
+                    view.into()
+                };
                 // Clic derecho: Copiar y Pegar, lo mismo que el menú Editar.
                 ContextMenu::new(view, move || {
                     let selected = term.selected_text();
@@ -1112,6 +1153,9 @@ impl App {
 /// Los atajos del menú Archivo: Ctrl+Shift+N / Ctrl+Shift+W (Cmd+N / Cmd+W en macOS).
 /// Copiar y pegar ya los atiende la propia terminal.
 fn shortcut(event: Event, _status: iced::event::Status, id: window::Id) -> Option<Message> {
+    if let Event::Window(window::Event::Focused) = event {
+        return Some(Message::Focused(id));
+    }
     let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else { return None };
     let chord = if cfg!(target_os = "macos") {
         modifiers == Modifiers::COMMAND
@@ -1175,6 +1219,20 @@ fn agent_send(dir: &Path, msg: &serde_json::Value) {
     use std::io::Write;
     if let Ok(mut sock) = std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")) {
         let _ = sock.write_all(format!("{msg}\n").as_bytes());
+    }
+}
+
+/// La barra de desplazamiento: un raíl tenue y un asa rectangular, como una barra de verdad.
+fn scrollbar(theme: &Theme, status: iced::widget::slider::Status, handle_len: u16) -> iced::widget::slider::Style {
+    use iced::widget::slider::{Handle, HandleShape, Rail, Style};
+    let p = theme.extended_palette();
+    let handle = match status {
+        iced::widget::slider::Status::Active => p.background.strong.color,
+        _ => p.primary.weak.color,
+    };
+    Style {
+        rail: Rail { backgrounds: (p.background.weak.color.into(), p.background.weak.color.into()), width: 6.0, border: Border::default().rounded(3.0) },
+        handle: Handle { shape: HandleShape::Rectangle { width: handle_len, border_radius: 3.0.into() }, background: handle.into(), border_width: 0.0, border_color: Color::TRANSPARENT },
     }
 }
 

@@ -23,3 +23,6 @@ Cuarto cambio: `Terminal::layout_size()` y `Terminal::resize_to()`. El widget so
 al PTY con el primer evento que le llega; una terminal que reemplaza a otra en la misma ventana se
 quedaba hasta entonces en el tamaño de arranque del backend (80×50 píxeles: ~11×3 celdas), y el
 programa que arrancaba dentro lo leía así. La app pasa el tamaño de la vieja a la nueva al crearla.
+
+Quinto cambio: `Terminal::scroll_position()` (para la barra de desplazamiento de la app) y la
+rueda a 3 líneas por golpe (traía 1).

@@ -286,7 +286,8 @@ impl<'a> TerminalView<'a> {
     ) {
         match delta {
             ScrollDelta::Lines { y, .. } => {
-                let lines = y.signum() * y.abs().round();
+                // Parche de Dotrino: 3 líneas por golpe de rueda, como las demás terminales.
+                let lines = y.signum() * y.abs().round() * 3.0;
                 commands.push(Command::Scroll(lines as i32));
             },
             ScrollDelta::Pixels { y, .. } => {

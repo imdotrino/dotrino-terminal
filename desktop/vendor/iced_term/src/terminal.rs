@@ -82,6 +82,14 @@ impl Terminal {
         self.redraw();
     }
 
+    /// Dónde está la vista: (líneas desplazadas hacia arriba, líneas de historial, líneas de
+    /// pantalla). Parche de Dotrino: para dibujar una barra de desplazamiento.
+    pub fn scroll_position(&self) -> (usize, usize, usize) {
+        use alacritty_terminal::grid::Dimensions;
+        let grid = &self.backend.renderable_content().grid;
+        (grid.display_offset(), grid.history_size(), grid.screen_lines())
+    }
+
     /// Quita la selección. Parche de Dotrino: el clic sobre una opción de un menú contextual
     /// llega también a la terminal de debajo y empieza una selección que nadie pidió.
     pub fn clear_selection(&mut self) {
