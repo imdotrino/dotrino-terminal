@@ -50,6 +50,24 @@ fn main() -> iced::Result {
 struct Launch {
     program: PathBuf,
     path: String,
+    /// La versión del cliente instalado (de su package.json), si se pudo leer.
+    version: Option<(u32, u32, u32)>,
+}
+
+/// Desde qué versión de `dotrino-terminal` entiende el cliente los atajos con los que la app
+/// maneja sus consolas: Ctrl+] a<id>⏎ (pasar a otra), Ctrl+] n (nueva), Ctrl+] r (tamaño), y
+/// `--tag`. A uno anterior NO se le mandan: los pasaría a la shell, que los ejecutaría como texto
+/// (el id acababa como «command not found»).
+const PANEL_CLIENT: (u32, u32, u32) = (0, 11, 0);
+
+/// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
+/// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
+fn client_version(program: &Path) -> Option<(u32, u32, u32)> {
+    let real = std::fs::canonicalize(program).ok()?;
+    let pkg = real.parent()?.parent()?.join("package.json");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(pkg).ok()?).ok()?;
+    let mut it = v["version"].as_str()?.split(['.', '-']).map(|n| n.parse::<u32>().ok());
+    Some((it.next()??, it.next()??, it.next()??))
 }
 
 /// Un perfil, tal como lo cuenta `dotrino-terminal profiles --json`.
@@ -280,7 +298,8 @@ fn resolve() -> Result<Launch, String> {
             )
         })?,
     };
-    Ok(Launch { program, path })
+    let version = client_version(&program);
+    Ok(Launch { program, path, version })
 }
 
 fn load_profiles(launch: &Launch) -> Result<Vec<Profile>, String> {
@@ -434,6 +453,11 @@ impl Cli {
         }
         Ok(cli)
     }
+}
+
+/// Un texto como UN argumento de `sh`, entre comillas simples (y las suyas escapadas).
+fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// Dónde se recuerda el último perfil elegido en la app (una preferencia, nada más).
@@ -622,6 +646,11 @@ impl App {
         }
     }
 
+    /// ¿Entiende el cliente instalado los atajos del panel? Si no se sabe su versión, no.
+    fn panel_ready(&self) -> bool {
+        self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= PANEL_CLIENT)
+    }
+
     fn profile_dir(&self, name: &str) -> Option<PathBuf> {
         self.profiles.iter().find(|p| p.name == name).map(|p| PathBuf::from(&p.dir))
     }
@@ -665,6 +694,9 @@ impl App {
     /// cambia por la misma conexión con sus atajos (Ctrl+] a<id>⏎ / Ctrl+] n). Antes se soltaba
     /// la consola, salía el cliente y arrancaba otro: varios cientos de ms de espera.
     fn switch_to(&mut self, id: window::Id, next: Pending) -> Task<Message> {
+        if !self.panel_ready() {
+            return Task::none();
+        }
         let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
         if !matches!(win.mode, Mode::Console) || win.profile.is_none() {
             return Task::none();
@@ -793,23 +825,41 @@ impl App {
                 self.focus(id)
             }
             Message::InstallClient(id) => {
-                // Se escribe en TU consola, sin Enter: la orden queda a la vista en el prompt, la
-                // lanza la persona (§15) y su salida se queda donde está. Si faltaba el cliente,
-                // la app lo busca cada poco y, al aparecer, el menú Perfil se activa.
-                let order = format!("npm install -g {CLIENT_PKG}@latest");
-                if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
-                    term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
-                    if self.launch.is_err() {
-                        self.awaiting_client = true;
+                // En una ventana APARTE y en marcha ya: la persona lo pidió desde el menú (§15), la
+                // salida queda a la vista hasta Enter, y su consola sigue donde estaba. Con el PATH
+                // de inicio de sesión: ahí está el npm de nvm o Homebrew.
+                let path = match login_path() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        if let Some(w) = self.windows.get_mut(&id) {
+                            w.error = Some(e);
+                        }
+                        return Task::none();
                     }
-                }
-                self.focus(id)
+                };
+                let ok = t("Listo: dotrino-terminal está al día. El agente que ya corría sigue con la versión anterior hasta que se reinicie.", "Done: dotrino-terminal is up to date. An agent that was already running keeps the old version until it restarts.");
+                let fail = t("No se pudo. Si dice EACCES, tu npm instala en una carpeta del sistema: usa nvm, o instálalo con sudo.", "It failed. If it says EACCES, your npm installs into a system folder: use nvm, or install it with sudo.");
+                let no_npm = t("No encuentro npm: instala Node 20 o más reciente (https://nodejs.org).", "Can't find npm: install Node 20 or newer (https://nodejs.org).");
+                let close = t("Pulsa Enter para cerrar.", "Press Enter to close.");
+                let script = format!(
+                    "PATH={}; export PATH; if command -v npm >/dev/null; then echo '$ npm install -g {CLIENT_PKG}@latest'; npm install -g {CLIENT_PKG}@latest && echo && echo {} || {{ echo; echo {}; }}; else echo {}; fi; echo; echo {}; read _",
+                    sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&close)
+                );
+                let cwd = self.windows.get(&id).map(|w| w.cwd.clone()).unwrap_or_default();
+                self.awaiting_client = true;
+                self.open_window(None, cwd, Some(vec!["/bin/sh".into(), "-c".into(), script])).1
             }
             Message::CheckClient => {
+                // Se mira hasta que haya un cliente que entienda el panel (o, si no había ninguno,
+                // hasta que aparezca): su versión cambia al actualizarlo, aunque ya estuviera.
                 if let Ok(launch) = resolve() {
+                    let had = self.launch.is_ok();
+                    let ready = launch.version.is_some_and(|v| v >= PANEL_CLIENT);
                     self.launch = Ok(launch);
-                    self.awaiting_client = false;
                     let _ = self.reload_profiles();
+                    if ready || !had {
+                        self.awaiting_client = false;
+                    }
                 }
                 Task::none()
             }
@@ -858,6 +908,10 @@ impl App {
                         term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Scroll(delta)));
                     }
                 }
+                Task::none()
+            }
+            Message::Focused(id) if !self.panel_ready() => {
+                let _ = id;
                 Task::none()
             }
             Message::Focused(id) => {
@@ -991,8 +1045,8 @@ impl App {
             profiles.push(Item::new(note(why.clone())));
         }
         let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
-        // Escribe la orden en la consola de esta ventana: hace falta que haya una.
-        profiles.push(Item::new(entry(install_label, "", (!linking && win.term.is_some()).then_some(Message::InstallClient(id)))));
+        // Corre en una ventana aparte.
+        profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
         let view_menu = Menu::new(vec![Item::new(entry(
             format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
             if cfg!(target_os = "macos") { "⌘B" } else { "Ctrl+Shift+B" },
@@ -1078,8 +1132,9 @@ impl App {
 
     /// Clic derecho sobre una consola del panel (colapsado o no): lo que se puede hacer con ella.
     fn console_menu<'a>(&self, id: window::Id, cid: String, is_mine: bool, under: Element<'a, Message>) -> Element<'a, Message> {
+        let ready = self.panel_ready();
         ContextMenu::new(under, move || {
-            let here = (!is_mine).then(|| Message::ShowConsole(id, cid.clone()));
+            let here = (!is_mine && ready).then(|| Message::ShowConsole(id, cid.clone()));
             container(
                 column![
                     entry(t("Abrir aquí", "Open here"), "", here),
@@ -1108,11 +1163,15 @@ impl App {
         let panel_style = |theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() };
         // Colapsado: una franja estrecha, un botón numerado por consola (el título, al pasar).
         let collapsed = self.windows.get(&id).is_some_and(|w| w.sidebar_collapsed);
+        // Con un cliente viejo, nada de lo que cambia de consola funciona: deshabilitado, y por qué.
+        let ready = self.panel_ready();
+        let why = t("Actualiza dotrino-terminal (Perfil → Actualizar) para usar el panel", "Update dotrino-terminal (Profile → Update) to use the panel");
+        let act = |m: Message| ready.then_some(m);
         let centered = |s: String, size: u32| text(s).size(size).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
         if collapsed {
             let mut strip = column![
                 button(centered("»".into(), 13)).width(30).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
-                button(centered("+".into(), 14)).width(30).padding([2, 0]).style(menu_button).on_press(Message::NewConsole(id)),
+                button(centered("+".into(), 14)).width(30).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
             ]
             .spacing(4)
             .align_x(iced::Alignment::Center);
@@ -1123,8 +1182,9 @@ impl App {
                     .width(30)
                     .padding([4, 0])
                     .style(if is_mine { side_selected } else { menu_button })
-                    .on_press(Message::ShowConsole(id, c.id.clone()));
+                    .on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
                 let b = self.console_menu(id, c.id.clone(), is_mine, container(b).center_x(Length::Fill).into());
+                let tip = if ready { tip } else { format!("{tip}\n{why}") };
                 strip = strip.push(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right));
             }
             return container(iced::widget::scrollable(strip)).width(40).height(Length::Fill).padding([4, 2]).style(panel_style).into();
@@ -1141,12 +1201,15 @@ impl App {
             // El «+» en la misma columna que las «×» de abajo.
             row![
                 text(t("Nueva consola", "New console")).size(12).width(Length::Fill),
-                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press(Message::NewConsole(id)),
+                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
             ]
             .align_y(iced::Alignment::Center)
             .padding(iced::Padding { left: 8.0, ..Default::default() }),
         ]
         .spacing(2);
+        if !ready {
+            items = items.push(note(why.clone()));
+        }
         for (n, c) in list.iter().enumerate() {
             let is_mine = mine.as_deref() == Some(c.id.as_str());
             let others = c.watchers.iter().filter(|w| w.tag.as_deref() != Some(my_tag.as_str())).collect::<Vec<_>>();
@@ -1165,7 +1228,7 @@ impl App {
                 text(format!("{}{name}", if is_mine { "● " } else { "" })).size(12),
                 text(where_).size(11).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) }),
             ];
-            let pick = button(label).width(Length::Fill).padding([4, 8]).style(if is_mine { side_selected } else { menu_button }).on_press(Message::ShowConsole(id, c.id.clone()));
+            let pick = button(label).width(Length::Fill).padding([4, 8]).style(if is_mine { side_selected } else { menu_button }).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             items = items.push(self.console_menu(id, c.id.clone(), is_mine, entry_row));
@@ -1293,7 +1356,7 @@ fn side_selected(theme: &Theme, status: button::Status) -> button::Style {
 
 /// Una línea de texto en un menú que no es una opción: la razón de que algo esté deshabilitado.
 fn note(msg: String) -> Element<'static, Message> {
-    container(text(msg).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.strong.color) }))
+    container(text(msg).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.7)) }))
         .padding([4, 10])
         .into()
 }
