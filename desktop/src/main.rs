@@ -1091,15 +1091,21 @@ impl App {
             }
             return container(iced::widget::scrollable(strip)).width(40).height(Length::Fill).padding([4, 2]).style(panel_style).into();
         }
-        let mut items = column![row![
-            button(text("«").size(13)).padding([0, 6]).style(menu_button).on_press(Message::CollapseSidebar(id)),
-            text(t("Consolas", "Consoles")).size(13),
-            space::horizontal(),
-            button(text("+").size(14)).padding([0, 8]).style(menu_button).on_press(Message::NewConsole(id)),
+        // Como en la franja colapsada: «« » arriba y «+» en su propia fila, debajo.
+        let mut items = column![
+            row![
+                button(text("«").size(13)).padding([0, 6]).style(menu_button).on_press(Message::CollapseSidebar(id)),
+                text(t("Consolas", "Consoles")).size(13),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center)
+            .padding([4, 2]),
+            button(row![text("+").size(14), text(t("Nueva consola", "New console")).size(12)].spacing(6).align_y(iced::Alignment::Center))
+                .width(Length::Fill)
+                .padding([2, 8])
+                .style(menu_button)
+                .on_press(Message::NewConsole(id)),
         ]
-        .spacing(4)
-        .align_y(iced::Alignment::Center)
-        .padding([4, 6])]
         .spacing(2);
         for (n, c) in list.iter().enumerate() {
             let is_mine = mine.as_deref() == Some(c.id.as_str());
