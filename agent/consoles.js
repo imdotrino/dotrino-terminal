@@ -93,10 +93,11 @@ class Console {
 
   /**
    * `watchers` dice QUIÉN mira: una ventana de esta máquina o un aparato de la cuenta (con
-   * su pubkey). Es lo que deja a la ventana local avisar de que alguien entró desde fuera.
+   * su pubkey), y la etiqueta con la que se presentó (`tag`): así una ventana de la app de
+   * escritorio reconoce, en la lista, cuál es la consola que está mostrando ella. Es lo que deja a la ventana local avisar de que alguien entró desde fuera.
    */
   info () {
-    const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null }))
+    const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
     return { id: this.id, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }

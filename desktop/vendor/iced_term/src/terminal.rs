@@ -67,6 +67,21 @@ impl Terminal {
         self.backend.selectable_content()
     }
 
+    /// El tamaño (en píxeles) del área que ocupa la terminal. Parche de Dotrino: para pasárselo
+    /// a la terminal que la reemplaza en la misma ventana.
+    pub fn layout_size(&self) -> iced::Size<f32> {
+        crate::backend::layout_size(&self.backend)
+    }
+
+    /// Fija el tamaño del PTY para un área de `size` píxeles. Parche de Dotrino: el widget solo
+    /// avisa del tamaño con el primer evento que le llega; una terminal que reemplaza a otra en
+    /// la misma ventana se quedaba mientras tanto en el tamaño de arranque (80×50 PÍXELES: ~11×3
+    /// celdas), y el programa que arranca dentro lo leía así.
+    pub fn resize_to(&mut self, size: iced::Size<f32>) {
+        self.backend.handle(backend::Command::Resize(Some(size), Some(self.font.measure)));
+        self.redraw();
+    }
+
     /// Quita la selección. Parche de Dotrino: el clic sobre una opción de un menú contextual
     /// llega también a la terminal de debajo y empieza una selección que nadie pidió.
     pub fn clear_selection(&mut self) {

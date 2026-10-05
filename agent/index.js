@@ -10,7 +10,7 @@
  * el navegador solo las suelta, y cualquier aparato de la cuenta puede volver a ellas.
  *
  * Payloads de dominio (van cifrados dentro de la sesión, el proxio no los ve):
- *   cliente → agente: { type:'list' } · { type:'open', cols, rows, cwd? } ·
+ *   cliente → agente: { type:'list' } · { type:'open', cols, rows, cwd?, tag? } ·
  *                     { type:'attach', id, cols, rows } · { type:'detach' } ·
  *                     { type:'input', data } · { type:'resize', cols, rows } ·
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id }
@@ -91,6 +91,8 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
   const release = () => { if (current) { current.detach(viewer); current = null } }
   const fail = (code, message) => session.send({ type: 'fail', code, message })
   const takeSize = (msg) => { if (msg.cols && msg.rows) size = { cols: msg.cols, rows: msg.rows } }
+  // La etiqueta con la que se presenta quien mira (una ventana de la app de escritorio).
+  const takeTag = (msg) => { if (typeof msg.tag === 'string') viewer.tag = msg.tag.slice(0, 64) }
 
   async function attachTo (c, { fresh }) {
     release()
@@ -108,6 +110,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
     if (msg.type === 'list') { session.send({ type: 'consoles', list: hub.list() }); return }
     if (msg.type === 'open') {
       takeSize(msg)
+      takeTag(msg)
       // `cwd`: dónde abre la shell (la carpeta de la ventana que la pide). Si no existe, se
       // dice: abrir en otra carpeta sin avisar haría que un comando corra donde no toca.
       if (msg.cwd != null && !isDir(msg.cwd)) return fail('bad-cwd', `not a directory: ${msg.cwd}`)
@@ -120,6 +123,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
       const c = hub.get(msg.id)
       if (!c) return fail('no-console', 'that console no longer exists')
       takeSize(msg)
+      takeTag(msg)
       c.resize(size.cols, size.rows)
       attachTo(c, { fresh: false })
       return

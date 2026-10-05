@@ -54,7 +54,8 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente: cierra sus consolas)
 
-Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla.
+Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla; Ctrl+] n abre otra
+(y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola.
 Cerrar la ventana cierra la consola que abrió.`, `usage:
   dotrino-terminal [--name <n>] [--cwd <dir>] open a new console in this window, in the current folder
   dotrino-terminal attach <id> [--name <n>]  attach to an open console
@@ -64,7 +65,8 @@ Cerrar la ventana cierra la consola que abrió.`, `usage:
   dotrino-terminal link [--name <n>]         link a profile with your vault
   dotrino-terminal rename <profile> [new]    rename a profile (stops its agent: closes its consoles)
 
-Inside a console: Ctrl+] then d detaches without closing it.
+Inside a console: Ctrl+] then d detaches without closing it; Ctrl+] n opens another
+(detaching the current one); Ctrl+] a <id> Enter switches to that console.
 Closing the window closes the console it opened.`))
   process.exit(0)
 }
@@ -130,6 +132,9 @@ async function agent (dir) {
   }
   throw new Error(t(`el agente no arrancó; mira ${log}`, `the agent did not start; see ${log}`))
 }
+
+/** `--tag <t>`: cómo se presenta esta ventana en la lista de quién mira (la app de escritorio). */
+const tag = () => (opt('--tag') ? { tag: opt('--tag') } : {})
 
 function alive (pid) {
   try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
@@ -332,17 +337,42 @@ function interactive (conn, first, dir) {
   process.stdin.off('data', earlyTap)
   const decoder = new StringDecoder('utf8')
   let prefixed = false
+  let collecting = null                // tras Ctrl+] a: el id de la consola, hasta Enter
+  // Cambiar de consola SIN salir: por la misma conexión, y con la pantalla en limpio para que la
+  // repetición de la otra consola no se pinte encima. Lo tecleado mientras tanto se guarda.
+  const switchTo = (msg) => {
+    ready = false
+    out.write('\x1bc')                 // RIS: pantalla, historial y modos, de cero
+    conn.send({ ...msg, ...size(), ...tag() })
+  }
   const onKeys = (buf) => {
-    // Ctrl+] abre el atajo: «d» suelta la consola, otro Ctrl+] manda uno literal, y cualquier
-    // otra tecla pasa tal cual, con su Ctrl+] delante. Las dos teclas pueden llegar juntas.
+    // Ctrl+] abre el atajo: «d» suelta la consola, «n» abre otra nueva, «a<id>⏎» pasa a esa
+    // consola (lo usa el panel de la app de escritorio), otro Ctrl+] manda uno literal, y
+    // cualquier otra tecla pasa tal cual, con su Ctrl+] delante. Pueden llegar todas juntas.
     let send = ''
     for (const ch of decoder.write(buf)) {
+      if (collecting !== null) {
+        if (ch === '\r' || ch === '\n') {
+          const id = collecting
+          collecting = null
+          if (send) { input(send); send = '' }
+          if (id) switchTo({ type: 'attach', id })
+        } else if (/[0-9a-f]/i.test(ch) && collecting.length < 64) collecting += ch
+        else collecting = null             // no era un id: se descarta el atajo
+        continue
+      }
       if (prefixed) {
         prefixed = false
         if (ch === 'd') {
           if (send) input(send)
           conn.send({ type: 'detach' })
           return finish(0, t(`Consola soltada. Para volver: dotrino-terminal attach ${consoleId}`, `Console detached. To return: dotrino-terminal attach ${consoleId}`))
+        }
+        if (ch === 'a') { collecting = ''; continue }
+        if (ch === 'n') {
+          if (send) { input(send); send = '' }
+          switchTo({ type: 'open', cwd: first.cwd || path.resolve(process.cwd()) })
+          continue
         }
         send += ch === DETACH_PREFIX ? ch : DETACH_PREFIX + ch
       } else if (ch === DETACH_PREFIX) prefixed = true
@@ -375,10 +405,10 @@ try {
     conn.close()
   } else if (cmd === 'attach') {
     if (!args[1]) die(t('falta el id: dotrino-terminal attach <id>  (mira «dotrino-terminal ls»)', 'missing id: dotrino-terminal attach <id>  (see "dotrino-terminal ls")'))
-    interactive(conn, { type: 'attach', id: args[1] }, dir)
+    interactive(conn, { type: 'attach', id: args[1], ...tag() }, dir)
   } else if (cmd === 'open') {
     // Como cualquier terminal: la consola abre en la carpeta donde estás (o en `--cwd`).
-    interactive(conn, { type: 'open', cwd: path.resolve(opt('--cwd') || process.cwd()) }, dir)
+    interactive(conn, { type: 'open', cwd: path.resolve(opt('--cwd') || process.cwd()), ...tag() }, dir)
   } else die(t(`orden desconocida: ${cmd} (mira --help)`, `unknown command: ${cmd} (see --help)`))
 } catch (e) {
   if (e !== HOLD) { try { die(`dotrino-terminal: ${e.message}`) } catch (_) {} }

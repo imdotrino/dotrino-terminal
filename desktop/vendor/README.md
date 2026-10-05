@@ -18,3 +18,8 @@ shell hubiera pedido el pegado entre corchetes (`ESC[?2004h`). Ahora va entre `E
 Tercer cambio: `Terminal::clear_selection()`. El clic sobre una opción del menú contextual (clic
 derecho → Copiar/Pegar) llega también a la terminal de debajo y empieza una selección; la app la
 quita después de cada acción del menú.
+
+Cuarto cambio: `Terminal::layout_size()` y `Terminal::resize_to()`. El widget solo avisa del tamaño
+al PTY con el primer evento que le llega; una terminal que reemplaza a otra en la misma ventana se
+quedaba hasta entonces en el tamaño de arranque del backend (80×50 píxeles: ~11×3 celdas), y el
+programa que arrancaba dentro lo leía así. La app pasa el tamaño de la vieja a la nueva al crearla.

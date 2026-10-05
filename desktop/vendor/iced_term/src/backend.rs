@@ -547,6 +547,12 @@ fn visible_regex_match_iter<'a>(
         .take_while(move |rm| rm.start().line <= viewport_end)
 }
 
+/// Ver `Terminal::layout_size` (parche de Dotrino).
+pub(crate) fn layout_size(backend: &Backend) -> iced::Size<f32> {
+    let s = &backend.renderable_content().terminal_size;
+    iced::Size::new(s.layout_width, s.layout_height)
+}
+
 /// Ver `Terminal::clear_selection` (parche de Dotrino).
 pub(crate) fn clear_selection(backend: &mut Backend) {
     backend.term.lock().selection = None;

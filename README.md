@@ -42,11 +42,12 @@ sesión cifrada).
 
 | Sentido | Payload |
 |---|---|
-| cliente → máquina | `list` · `open {cols,rows,cwd?}` · `attach {id,cols,rows}` · `detach` · `input {data}` · `resize {cols,rows}` · `close` (mata la enganchada) · `kill {id}` |
+| cliente → máquina | `list` · `open {cols,rows,cwd?,tag?}` · `attach {id,cols,rows}` · `detach` · `input {data}` · `resize {cols,rows}` · `close` (mata la enganchada) · `kill {id}` |
 | máquina → cliente | `consoles {list}` · `replay {id,data,last}` · `attached {id,fresh,console}` · `out {data}` · `meta {console}` · `exit {code}` · `fail {code,message}` |
 
 Cada consola dice su `origin` (`local`/`remote`), su `title` (el de la shell) y `watchers`
-(quién la mira: ventana local o aparato, con su llave). Con varios mirando, el tamaño lo pone
+(quién la mira: ventana local o aparato, con su llave, y la `tag` con la que se presentó; la app
+de escritorio la usa para saber qué consola muestra cada ventana). Con varios mirando, el tamaño lo pone
 el último que se enganchó o escribió. Una ventana local que abrió su consola la mata al
 cerrarse; una que solo se enganchó, no.
 
@@ -85,7 +86,9 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   instala `usr/share/xfce4/helpers/dotrino-terminal.desktop`, para elegirla en «Aplicaciones
   preferidas». La carpeta viaja al agente en `open {cwd}` (agente ≥ 0.7.0); una que no existe
   se rechaza (`bad-cwd`), no se abre en otra. El menú Perfil cambia de perfil (cierra la TTY y abre
-  otra) o enrola uno nuevo dentro de la ventana. `vendor/iced_term`
+  otra) o enrola uno nuevo dentro de la ventana. El **panel de consolas** (a la izquierda) lista
+  las del perfil leyendo el socket del agente cada 1,5 s, y cambia de consola sin reiniciar nada:
+  le manda al cliente de la ventana `Ctrl+] a<id>⏎` o `Ctrl+] n`. `vendor/iced_term`
   es el crate con un método público más (ver su README).
 
 ## Desarrollo

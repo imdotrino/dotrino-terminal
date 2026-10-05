@@ -33,7 +33,8 @@ dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para 
 ```
 
 Cerrar la ventana cierra su consola, como cualquier terminal; **Ctrl+] y luego d** la suelta
-viva. Si un aparato remoto entra en una ventana local, esa ventana suena y lo dice en el
+viva, **Ctrl+] n** abre otra (soltando la actual) y **Ctrl+] a<id> Enter** pasa a otra consola,
+por la misma conexión. `--tag <t>` presenta la ventana en la lista de quién mira. Si un aparato remoto entra en una ventana local, esa ventana suena y lo dice en el
 título. Sin enlace el agente atiende solo a las ventanas locales; al enlazarlo
 (`dotrino-terminal link`) enciende la parte remota sin reiniciarse. La app de escritorio
 (`desktop/` del repo) es una ventana nativa que corre este mismo cliente.

@@ -71,6 +71,32 @@ impl std::fmt::Display for Profile {
     }
 }
 
+/// Una consola del agente, tal como la cuenta `list` (ver agent/consoles.js `info()`).
+#[derive(Debug, Clone, Deserialize)]
+struct ConsoleInfo {
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    watchers: Vec<Watcher>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Watcher {
+    origin: String,
+    #[serde(default)]
+    tag: Option<String>,
+}
+
+/// Lo que la ventana hace cuando su cliente termine de soltar la consola actual.
+#[derive(Debug, Clone)]
+enum Pending {
+    /// Engancharse a esta consola.
+    Attach(String),
+    /// Abrir una nueva.
+    New,
+}
+
 /// Qué corre en la TTY de la ventana.
 enum Mode {
     /// Con perfil, una consola del agente de `Win::profile`; sin perfil, la shell del usuario.
@@ -92,6 +118,16 @@ struct Win {
     term: Option<iced_term::Terminal>,
     title: String,
     error: Option<String>,
+    /// Cómo se presenta esta ventana ante el agente (`--tag`): así reconoce en la lista cuál es
+    /// la consola que está mostrando.
+    tag: String,
+    /// La consola a la que engancharse en el próximo arranque (`None`: abrir una nueva).
+    attach: Option<String>,
+    /// Lo que toca cuando el cliente termine de soltar la consola (panel lateral).
+    pending: Option<Pending>,
+    /// La consola recién elegida en el panel, marcada YA, antes de que la próxima lectura de la
+    /// lista lo confirme (si no, durante un momento salían dos marcadas, o ninguna).
+    showing: Option<String>,
 }
 
 struct App {
@@ -106,6 +142,11 @@ struct App {
     font: iced_term::settings::FontSettings,
     /// Los colores: los de XFCE Terminal si los tiene (ver `terminal_palette`).
     palette: iced_term::ColorPalette,
+    /// Las consolas abiertas, por perfil, leídas del socket de su agente cada poco.
+    consoles: HashMap<String, Vec<ConsoleInfo>>,
+    /// ¿Se ve el panel lateral de consolas?
+    sidebar: bool,
+    next_tag: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +174,17 @@ enum Message {
     Help,
     /// El título de un menú de la barra: abrirlo lo hace el propio menú, no hay nada que hacer.
     MenuRoot,
+    /// Leer otra vez las consolas abiertas (panel lateral).
+    Poll,
+    /// Panel lateral: ver esta consola en la ventana.
+    ShowConsole(window::Id, String),
+    /// Panel lateral: abrir una consola nueva en la ventana.
+    NewConsole(window::Id),
+    /// Panel lateral: cerrar esa consola.
+    KillConsole(window::Id, String),
+    /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
+    KillNow(window::Id, String),
+    ToggleSidebar,
     Terminal(iced_term::Event),
 }
 
@@ -402,7 +454,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), sidebar: true, next_tag: 0 };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -454,7 +506,9 @@ impl App {
             platform_specific: window::settings::PlatformSpecific { application_id: "dotrino-terminal".into(), ..Default::default() },
             ..Default::default()
         });
-        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None });
+        self.next_tag += 1;
+        let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
+        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: None, pending: None, showing: None });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -466,7 +520,10 @@ impl App {
         let term_id = self.next_term;
         self.next_term += 1;
         let Some(win) = self.windows.get_mut(&id) else { return };
+        // El tamaño del área de la terminal que se va: la nueva lo hereda al nacer (ver abajo).
+        let mut inherited = None;
         if let Some(old) = win.term.take() {
+            inherited = Some(old.layout_size());
             self.by_term.remove(&old.id);
         }
         win.error = None;
@@ -494,12 +551,15 @@ impl App {
             self.launch.clone().map(|launch| {
                 let args = match &mode {
                     Mode::Linking { .. } => vec!["link".to_string()],
-                    Mode::Console => vec![
-                        "--name".to_string(),
-                        win.profile.clone().unwrap_or_default(),
-                        "--cwd".to_string(),
-                        win.cwd.to_string_lossy().into_owned(),
-                    ],
+                    // Engancharse a una consola que ya existe (panel lateral) o abrir una nueva.
+                    Mode::Console => {
+                        let mut a = match win.attach.take() {
+                            Some(cid) => vec!["attach".to_string(), cid],
+                            None => vec!["--cwd".to_string(), win.cwd.to_string_lossy().into_owned()],
+                        };
+                        a.extend(["--name".to_string(), win.profile.clone().unwrap_or_default(), "--tag".to_string(), win.tag.clone()]);
+                        a
+                    }
                 };
                 let env = HashMap::from([
                     ("PATH".to_string(), launch.path.clone()),
@@ -530,7 +590,13 @@ impl App {
             ..Default::default()
         };
         match iced_term::Terminal::new(term_id, settings) {
-            Ok(term) => {
+            Ok(mut term) => {
+                // En el mismo instante de crearla, antes de que el programa de dentro arranque y lea
+                // su tamaño: si no, nace en 80×50 píxeles (~11×3) hasta el primer evento, y al
+                // engancharse a una consola compartida la encogía también en las otras ventanas.
+                if let Some(size) = inherited.filter(|s| s.width > 100.0 && s.height > 50.0) {
+                    term.resize_to(size);
+                }
                 self.by_term.insert(term_id, id);
                 win.term = Some(term);
             }
@@ -544,6 +610,73 @@ impl App {
         if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
             term.clear_selection();
         }
+    }
+
+    fn profile_dir(&self, name: &str) -> Option<PathBuf> {
+        self.profiles.iter().find(|p| p.name == name).map(|p| PathBuf::from(&p.dir))
+    }
+
+    /// Las consolas de los perfiles que tienen ventanas abiertas, preguntadas al socket de su
+    /// agente. Un agente que no corre no tiene consolas.
+    fn poll_consoles(&mut self) {
+        let profiles: std::collections::BTreeSet<String> = self.windows.values().filter_map(|w| w.profile.clone()).collect();
+        let mut fresh = HashMap::new();
+        for p in profiles {
+            let list = self.profile_dir(&p).and_then(|dir| agent_list(&dir)).unwrap_or_default();
+            fresh.insert(p, list);
+        }
+        self.consoles = fresh;
+        // Lo marcado a mano se suelta en cuanto la lista lo dice (o la consola ya no está).
+        let tags: Vec<(window::Id, String, Option<String>, Option<String>)> =
+            self.windows.iter().map(|(id, w)| (*id, w.tag.clone(), w.profile.clone(), w.showing.clone())).collect();
+        for (id, tag, profile, showing) in tags {
+            let Some(want) = showing else { continue };
+            let list = profile.and_then(|p| self.consoles.get(&p).cloned()).unwrap_or_default();
+            let confirmed = list.iter().any(|c| c.id == want && c.watchers.iter().any(|w| w.tag.as_deref() == Some(tag.as_str())));
+            if confirmed || !list.iter().any(|c| c.id == want) {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.showing = None;
+                }
+            }
+        }
+    }
+
+    /// La consola que muestra la ventana: la que la tiene entre quienes miran, por su etiqueta.
+    fn mine(&self, id: window::Id) -> Option<String> {
+        let win = self.windows.get(&id)?;
+        if let Some(s) = &win.showing {
+            return Some(s.clone());
+        }
+        let list = self.consoles.get(win.profile.as_ref()?)?;
+        list.iter().find(|c| c.watchers.iter().any(|w| w.tag.as_deref() == Some(win.tag.as_str()))).map(|c| c.id.clone())
+    }
+
+    /// Cambiar de consola SIN cerrar la actual y SIN reiniciar nada: el cliente de la ventana
+    /// cambia por la misma conexión con sus atajos (Ctrl+] a<id>⏎ / Ctrl+] n). Antes se soltaba
+    /// la consola, salía el cliente y arrancaba otro: varios cientos de ms de espera.
+    fn switch_to(&mut self, id: window::Id, next: Pending) -> Task<Message> {
+        let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
+        if !matches!(win.mode, Mode::Console) || win.profile.is_none() {
+            return Task::none();
+        }
+        let keys = match &next {
+            Pending::Attach(cid) => format!("\x1da{cid}\r"),
+            Pending::New => "\x1dn".to_string(),
+        };
+        win.showing = match &next {
+            Pending::Attach(cid) => Some(cid.clone()),
+            Pending::New => None,
+        };
+        match win.term.as_mut() {
+            Some(term) => term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(keys.into_bytes()))),
+            // Sin TTY (un error a la vista): se arranca directamente.
+            None => {
+                win.pending = Some(next);
+                return self.ended(id);
+            }
+        };
+        // La lista, enseguida y otra vez al poco (lo que tarda el agente en repintar).
+        Task::batch([later(150, Message::Poll), later(700, Message::Poll), self.focus(id)])
     }
 
     fn focus(&self, id: window::Id) -> Task<Message> {
@@ -570,6 +703,16 @@ impl App {
             // La shell salió, o se soltó la consola: la ventana se va, como cualquier terminal.
             // Salvo que su perfil haya cambiado de nombre (`dotrino-terminal rename` desde esta
             // misma consola): entonces la ventana sigue, en el perfil con su nombre nuevo.
+            // La ventana soltó su consola para pasar a otra (panel lateral): sigue, en esa.
+            Mode::Console if win.pending.is_some() => {
+                let win = self.windows.get_mut(&id).expect("window");
+                match win.pending.take() {
+                    Some(Pending::Attach(cid)) => win.attach = Some(cid),
+                    _ => win.attach = None,
+                }
+                self.start(id, Mode::Console);
+                self.focus(id)
+            }
             Mode::Console => {
                 let current = win.profile.clone();
                 let before: Vec<String> = self.profiles.iter().map(|p| p.name.clone()).collect();
@@ -697,6 +840,44 @@ impl App {
                 self.focus(id)
             }
             Message::MenuRoot => Task::none(),
+            Message::ToggleSidebar => {
+                self.sidebar = !self.sidebar;
+                Task::none()
+            }
+            Message::Poll => {
+                self.poll_consoles();
+                Task::none()
+            }
+            Message::ShowConsole(id, cid) => {
+                if self.mine(id).as_deref() == Some(cid.as_str()) {
+                    return self.focus(id);
+                }
+                self.switch_to(id, Pending::Attach(cid))
+            }
+            Message::NewConsole(id) => self.switch_to(id, Pending::New),
+            Message::KillConsole(id, cid) => {
+                // Si es la de esta ventana, la ventana no se cierra: PRIMERO pasa a otra consola
+                // abierta (o a una nueva) y luego se mata la vieja; al revés, el cliente vería
+                // terminar su consola y la ventana se cerraría.
+                if self.mine(id).as_deref() == Some(cid.as_str()) {
+                    let other = self
+                        .windows
+                        .get(&id)
+                        .and_then(|w| w.profile.clone())
+                        .and_then(|p| self.consoles.get(&p))
+                        .and_then(|list| list.iter().find(|c| c.id != cid).map(|c| c.id.clone()));
+                    let switch = self.switch_to(id, other.map(Pending::Attach).unwrap_or(Pending::New));
+                    return switch.chain(later(400, Message::KillNow(id, cid)));
+                }
+                self.update(Message::KillNow(id, cid))
+            }
+            Message::KillNow(id, cid) => {
+                if let Some(dir) = self.windows.get(&id).and_then(|w| w.profile.clone()).and_then(|p| self.profile_dir(&p)) {
+                    agent_send(&dir, &serde_json::json!({ "type": "kill", "id": cid }));
+                }
+                self.poll_consoles();
+                self.focus(id)
+            }
             Message::Help => {
                 let _ = open::that_detached(help_url());
                 Task::none()
@@ -759,6 +940,11 @@ impl App {
         let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
         // Escribe la orden en la consola de esta ventana: hace falta que haya una.
         profiles.push(Item::new(entry(install_label, "", (!linking && win.term.is_some()).then_some(Message::InstallClient(id)))));
+        let view_menu = Menu::new(vec![Item::new(entry(
+            format!("{}{}", if self.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
+            if cfg!(target_os = "macos") { "⌘B" } else { "Ctrl+Shift+B" },
+            Some(Message::ToggleSidebar),
+        ))]);
         let help = Menu::new(vec![
             Item::new(entry(t("Cómo se usa", "How to use it"), "", Some(Message::Help))),
             Item::new(entry(format!("Dotrino Terminal {VERSION}"), "", None)),
@@ -767,6 +953,7 @@ impl App {
         let bar = MenuBar::new(vec![
             root(t("Archivo", "File"), file),
             root(t("Editar", "Edit"), edit),
+            root(t("Ver", "View"), view_menu),
             root(t("Perfil", "Profile"), Menu::new(profiles)),
             root(t("Ayuda", "Help"), help),
         ])
@@ -815,7 +1002,54 @@ impl App {
                 .into(),
             (None, None) => text("").into(),
         };
-        column![self.menu(id, win), container(body).width(Length::Fill).height(Length::Fill)].into()
+        let main: Element<'_, Message> = match (self.sidebar, &win.profile) {
+            (true, Some(profile)) => row![self.side(id, profile), container(body).width(Length::Fill).height(Length::Fill)].into(),
+            _ => container(body).width(Length::Fill).height(Length::Fill).into(),
+        };
+        column![self.menu(id, win), main].into()
+    }
+
+    /// El panel lateral: un botón por cada consola abierta en el perfil de la ventana.
+    fn side(&self, id: window::Id, profile: &str) -> Element<'_, Message> {
+        let mine = self.mine(id);
+        let list = self.consoles.get(profile).cloned().unwrap_or_default();
+        let my_tag = self.windows.get(&id).map(|w| w.tag.clone()).unwrap_or_default();
+        let mut items = column![row![
+            text(t("Consolas", "Consoles")).size(13),
+            space::horizontal(),
+            button(text("+").size(14)).padding([0, 8]).style(menu_button).on_press(Message::NewConsole(id)),
+        ]
+        .align_y(iced::Alignment::Center)
+        .padding([4, 6])]
+        .spacing(2);
+        for (n, c) in list.iter().enumerate() {
+            let is_mine = mine.as_deref() == Some(c.id.as_str());
+            let others = c.watchers.iter().filter(|w| w.tag.as_deref() != Some(my_tag.as_str())).collect::<Vec<_>>();
+            let where_ = if others.iter().any(|w| w.origin == "remote") {
+                t("abierta en otro aparato", "open on another device")
+            } else if !others.is_empty() {
+                t("abierta en otra ventana", "open in another window")
+            } else if is_mine {
+                t("en esta ventana", "in this window")
+            } else {
+                t("suelta", "detached")
+            };
+            // Con número: dos consolas con el mismo título (el prompt) se distinguen igual.
+            let name = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n + 1) } else { format!("{} · {}", n + 1, c.title) };
+            let label = column![
+                text(format!("{}{name}", if is_mine { "● " } else { "" })).size(12),
+                text(where_).size(11).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) }),
+            ];
+            let pick = button(label).width(Length::Fill).padding([4, 8]).style(if is_mine { side_selected } else { menu_button }).on_press(Message::ShowConsole(id, c.id.clone()));
+            let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
+            items = items.push(row![pick, kill].align_y(iced::Alignment::Center));
+        }
+        container(iced::widget::scrollable(items))
+            .width(210)
+            .height(Length::Fill)
+            .padding(4)
+            .style(|theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() })
+            .into()
     }
 
     fn title(&self, id: window::Id) -> String {
@@ -835,7 +1069,10 @@ impl App {
         let terms = self.windows.values().filter_map(|w| w.term.as_ref()).map(|term| term.subscription().map(Message::Terminal));
         // Tras «Instalar dotrino-terminal…», se mira cada poco si ya está.
         let waiting = self.awaiting_client.then(|| iced::time::every(std::time::Duration::from_secs(3)).map(|_| Message::CheckClient));
-        Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting))
+        // El panel lateral: las consolas abiertas se releen cada poco mientras se ve.
+        let polling = (self.sidebar && self.windows.values().any(|w| w.profile.is_some()))
+            .then(|| iced::time::every(std::time::Duration::from_millis(1500)).map(|_| Message::Poll));
+        Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting).chain(polling))
     }
 }
 
@@ -851,6 +1088,7 @@ fn shortcut(event: Event, _status: iced::event::Status, id: window::Id) -> Optio
     match key.as_ref() {
         Key::Character(c) if chord && c.eq_ignore_ascii_case("n") => Some(Message::NewWindow(Some(id))),
         Key::Character(c) if chord && c.eq_ignore_ascii_case("w") => Some(Message::Close(id)),
+        Key::Character(c) if chord && c.eq_ignore_ascii_case("b") => Some(Message::ToggleSidebar),
         _ => None,
     }
 }
@@ -869,6 +1107,50 @@ fn entry(label: String, keys: &str, msg: Option<Message>) -> Element<'static, Me
         .style(menu_button)
         .on_press_maybe(msg)
         .into()
+}
+
+/// Un mensaje dentro de `ms` milisegundos.
+fn later(ms: u64, msg: Message) -> Task<Message> {
+    Task::perform(tokio::time::sleep(std::time::Duration::from_millis(ms)), move |_| msg.clone())
+}
+
+/// Pregunta al agente de un perfil, por su socket local, qué consolas tiene. `None` si no hay
+/// agente escuchando (o no contesta a tiempo): entonces no tiene consolas.
+#[cfg(unix)]
+fn agent_list(dir: &Path) -> Option<Vec<ConsoleInfo>> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut sock = std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")).ok()?;
+    sock.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok()?;
+    sock.write_all(b"{\"type\":\"list\"}\n").ok()?;
+    let mut reader = BufReader::new(sock);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+        if v["type"] == "consoles" {
+            return serde_json::from_value(v["list"].clone()).ok();
+        }
+    }
+}
+
+/// Le manda una orden al agente de un perfil, sin esperar respuesta.
+#[cfg(unix)]
+fn agent_send(dir: &Path, msg: &serde_json::Value) {
+    use std::io::Write;
+    if let Ok(mut sock) = std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")) {
+        let _ = sock.write_all(format!("{msg}\n").as_bytes());
+    }
+}
+
+fn side_selected(theme: &Theme, status: button::Status) -> button::Style {
+    let mut s = menu_button(theme, status);
+    if matches!(status, button::Status::Active) {
+        s.background = Some(theme.extended_palette().primary.weak.color.into());
+    }
+    s
 }
 
 /// Una línea de texto en un menú que no es una opción: la razón de que algo esté deshabilitado.

@@ -151,3 +151,15 @@ test('la consola abre en la carpeta que pide la ventana, y una que no existe se 
   assert.equal(x.got.find((m) => m.type === 'fail').code, 'bad-cwd')
   done()
 })
+
+test('quien mira dice su etiqueta: una ventana reconoce su consola en la lista', async () => {
+  const { dir, hub, done } = await setup()
+  const w = await win(dir)
+  w.c.send({ type: 'open', cols: 80, rows: 24, tag: 'ventana-1' })
+  await until(() => w.got.some((m) => m.type === 'attached'))
+  const x = await win(dir)
+  x.c.send({ type: 'attach', id: hub.list()[0].id, cols: 80, rows: 24, tag: 'ventana-2' })
+  await until(() => x.got.some((m) => m.type === 'attached'))
+  assert.deepEqual(hub.list()[0].watchers.map((v) => v.tag).sort(), ['ventana-1', 'ventana-2'])
+  done()
+})
