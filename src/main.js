@@ -46,22 +46,17 @@ const M = {
     still_not: 'Este dispositivo aún no está conectado a una bóveda.',
     machines_title: 'Tus máquinas',
     machines_loading: 'Buscando tus máquinas…',
-    machines_none: 'No hay ninguna máquina con el agente encendido. Si ya lo instalaste, comprueba que esté corriendo: aparecerá aquí sola.',
+    machines_none: 'No se puede conectar con ninguna de tus máquinas.',
+    conn_machine: (a) => `No se pudo conectar con ${a}.`,
+    how_link: 'Cómo ponerla en marcha',
     machines_err: 'No se pudo consultar tu bóveda (¿está encendida?).',
     machine_online: 'En línea',
     machine_offline: 'Desconectada',
     machine_checking: 'Comprobando…',
-    setup_title: 'Instala el agente en la máquina que quieres controlar',
-    setup_body: 'En esa máquina (servidor, otra PC…), pega esto y listo:',
-    install_alt: 'O, si ya tienes Node 20+:',
-    install_win: 'En Windows (PowerShell):',
-    setup_s1: 'Enlázala a tu bóveda: te pedirá el código de <code>dotrino-vault pair</code> (en el PC de tu bóveda) y su aprobación.',
-    setup_s2: 'Déjalo corriendo. La máquina aparecerá aquí sola, en "Tus máquinas".',
     linked_to: (dev) => `Dispositivo <code>${dev}</code> conectado a tu bóveda · abre una o varias consolas en tus máquinas.`,
     self_hint: 'Este navegador es tu bóveda · abre una o varias consolas en tus máquinas.',
     connecting: (a) => `Conectando a ${a}…`,
     connected: (a) => `Conectado a ${a}`,
-    conn_fail: 'No se pudo conectar: ',
     error: 'Error: ',
     close: 'Cerrar',
     exited: (c) => `[la consola terminó (${c})]`,
@@ -112,22 +107,17 @@ const M = {
     still_not: 'This device is not connected to a vault yet.',
     machines_title: 'Your machines',
     machines_loading: 'Looking for your machines…',
-    machines_none: 'No machine has the agent running. If you already installed it, check that it is running: it will show up here by itself.',
+    machines_none: "Can't connect to any of your machines.",
+    conn_machine: (a) => `Couldn't connect to ${a}.`,
+    how_link: 'How to get it running',
     machines_err: 'Could not reach your vault (is it on?).',
     machine_online: 'Online',
     machine_offline: 'Offline',
     machine_checking: 'Checking…',
-    setup_title: 'Install the agent on the machine you want to control',
-    setup_body: 'On that machine (a server, another PC…), paste this and you\'re set:',
-    install_alt: 'Or, if you already have Node 20+:',
-    install_win: 'On Windows (PowerShell):',
-    setup_s1: 'Link it to your vault: it will ask for the code from <code>dotrino-vault pair</code> (on your vault PC) and its approval.',
-    setup_s2: 'Leave it running. The machine will show up here by itself, under "Your machines".',
     linked_to: (dev) => `Device <code>${dev}</code> connected to your vault · open one or more consoles on your machines.`,
     self_hint: 'This browser is your vault · open one or more consoles on your machines.',
     connecting: (a) => `Connecting to ${a}…`,
     connected: (a) => `Connected to ${a}`,
-    conn_fail: 'Could not connect: ',
     error: 'Error: ',
     close: 'Close',
     exited: (c) => `[console ended (${c})]`,
@@ -170,24 +160,6 @@ const installEl = document.getElementById('install')
 
 function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return tpl.content.firstElementChild }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
-
-// Comandos para instalar/correr el agente en la máquina destino. El one-liner
-// curl/irm (instalador universal del ecosistema, en install.dotrino.com) baja Node si falta →
-// "pega y ya"; npx queda como alternativa si ya tienes Node. Mismo instalador
-// reutilizable por cualquier app del ecosistema (solo cambia el paquete).
-const AGENT_PKG = '@dotrino/terminal-agent'
-function installCmds (sub) {
-  const arg = sub ? ' ' + sub : ''
-  const sh = `curl -fsSL https://install.dotrino.com/install.sh | sh -s -- ${AGENT_PKG}${arg}`
-  const ps = `& ([scriptblock]::Create((irm https://install.dotrino.com/install.ps1))) ${AGENT_PKG}${arg}`
-  const npx = `npx ${AGENT_PKG}${arg}`
-  // Cada comando en su propio bloque copiable (mismo formato para los tres).
-  return `<pre><code>${esc(sh)}</code></pre>
-      <p class="status">${t('install_win')}</p>
-      <pre><code>${esc(ps)}</code></pre>
-      <p class="status">${t('install_alt')}</p>
-      <pre><code>${esc(npx)}</code></pre>`
-}
 
 // ---------- Mi perfil (§6.1) ----------
 // Le pasamos identity + reputation al topbar: con eso pinta el avatar del perfil activo y
@@ -535,6 +507,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     termsEl.appendChild(s.box)
     sessions.push(s)
     renderTab(s); setActive(s); setTabState(s, 'conn'); wireSide(s); renderSide(s)
+    s.side.hidden = true                // el panel, solo con la máquina conectada
     hint.textContent = t('connecting', s.alias)
     try {
       s.agent = new AgentClient(link, { agentPubkey: pub })
@@ -562,12 +535,16 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       s.status = 'conectado'; setTabState(s, 'ok')
       if (active === s) hint.textContent = t('connected', s.alias)
       setActive(s)
+      s.side.hidden = false
       refresh(s)
       s.poll = setInterval(() => { if (active === s) refresh(s) }, 2000)
     } catch (e) {
-      s.status = e.message; setTabState(s, 'err')
-      if (active === s) hint.textContent = t('conn_fail') + e.message
-      if (s.term) { try { s.term.write(`\r\n\x1b[31m${e.message}\x1b[0m\r\n`) } catch {} }
+      // Sin conexión no queda una pestaña vacía (ni al recargar, que las reabre): se quita y se
+      // dice, con el enlace a la guía.
+      try { s.agent?.disconnect() } catch {}
+      removeSession(s)
+      hint.innerHTML = `${esc(t('conn_machine', s.alias))} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('how_link')}</a>`
+      hint.title = e.message
     }
   }
 
@@ -617,16 +594,10 @@ function terminalScreen (link) {
       if (!holder) { box.innerHTML = `<b>${t('machines_title')}</b><div class="machine-list"></div>`; holder = box.querySelector('.machine-list') }
       return holder
     }
+    // Página administrativa (§5.1): dice lo que pasa y enlaza la guía; cómo se instala y se
+    // pone en marcha vive en el wiki (§9.2), no aquí.
     const showNone = () => {
-      box.innerHTML = `
-        <p class="status">${t('machines_none')}</p>
-        <div class="setup">
-          <b>${t('setup_title')}</b>
-          <p class="status">${t('setup_body')}</p>
-          ${installCmds()}
-          <p class="status">1 · ${t('setup_s1')}</p>
-          <p class="status">2 · ${t('setup_s2')}</p>
-        </div>`
+      box.innerHTML = `<p class="status" data-testid="no-machines">${t('machines_none')} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('how_link')}</a></p>`
     }
     const update = async () => {
       if (!_probeClient) return
