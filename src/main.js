@@ -387,6 +387,21 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** ⤢ «Usar el tamaño de esta pantalla»: una flecha diagonal doble, dibujada (no depende de fuentes). */
   const ICON_SIZE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5l-11 11"/></svg>'
 
+  /**
+   * El título de una consola para el panel. La shell lo pone como «usuario@máquina: ruta»; lo que
+   * importa es la carpeta final, así que se quita el «usuario@máquina:» (la máquina ya se sabe) y
+   * la ruta se recorta POR LA IZQUIERDA, por carpetas enteras, hasta `max` caracteres.
+   */
+  function shortTitle (title, max = 24) {
+    const m = /^[^\s:]+@[^\s:]+:\s*(.+)$/.exec(title)
+    const text = m ? m[1] : title
+    if (text.length <= max) return text
+    const parts = text.split('/')
+    let out = parts.pop()
+    while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 1) out = parts.pop() + '/' + out
+    return '…/' + (out.length > max - 2 ? '…' + out.slice(-(max - 3)) : out)
+  }
+
   /** Número fijo (lo da el agente ≥ 0.12); con uno anterior, la posición. */
   const numOf = (c, i) => c.n ?? i + 1
 
@@ -445,7 +460,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
         ${cur ? `<div class="srow"><span class="grow">${esc(t('size_row', cur.n, sizeWho(cur.c.sizeBy), cur.c.cols, cur.c.rows))}<small>${cur.c.sizeBy?.pinned ? t('size_pinned') : t('size_last')}</small></span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
         ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}">
-          <button class="pick" data-id="${esc(c.id)}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(c.title) : ''}</span><small>${esc(where(s, c))}</small></button>
+          <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(shortTitle(c.title)) : ''}</span><small>${esc(where(s, c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
         </div>`).join('')}`
     }
