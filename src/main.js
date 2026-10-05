@@ -66,6 +66,12 @@ const M = {
     panel_open: 'Abrir el panel',
     panel_close: 'Colapsar el panel',
     pin_here: 'Esta pantalla manda en el tamaño',
+    pin_title: (n, on) => on ? `Soltar el tamaño de la consola ${n}` : `Fijar el tamaño de la consola ${n} a esta pantalla`,
+    size_row: (n, who, cols, rows) => `Tamaño de la ${n}: ${who} (${cols}×${rows})`,
+    size_pinned: 'fijado 📌',
+    size_last: 'lo tiene la última pantalla que la abre',
+    pinned_now: (n, cols, rows) => `Consola ${n}: el tamaño queda fijado a esta pantalla (${cols}×${rows}). Las demás la ven con barras de desplazamiento.`,
+    unpinned_now: (n) => `Consola ${n}: tamaño suelto. Lo tiene la última pantalla que la abre.`,
     size_label: 'tamaño',
     size_here: 'esta pantalla',
     size_device: 'otro aparato',
@@ -127,6 +133,12 @@ const M = {
     panel_open: 'Open the panel',
     panel_close: 'Collapse the panel',
     pin_here: 'This screen sets the size',
+    pin_title: (n, on) => on ? `Release the size of console ${n}` : `Pin the size of console ${n} to this screen`,
+    size_row: (n, who, cols, rows) => `Size of ${n}: ${who} (${cols}×${rows})`,
+    size_pinned: 'pinned 📌',
+    size_last: 'set by the last screen that opens it',
+    pinned_now: (n, cols, rows) => `Console ${n}: its size is now pinned to this screen (${cols}×${rows}). Other screens see it with scrollbars.`,
+    unpinned_now: (n) => `Console ${n}: size released. The last screen that opens it sets it.`,
     size_label: 'size',
     size_here: 'this screen',
     size_device: 'another device',
@@ -374,8 +386,8 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     else if (c.id === s.agent?.consoleId) w = t('console_here')
     // Quién tiene el tamaño, si se comparte o está fijado.
     const b = c.sizeBy
-    if (b && ((c.watchers || []).length > 1 || b.pinned)) {
-      const who = b.device && b.device === myDevice() ? t('size_here') : b.origin === 'local' ? t('size_window') : t('size_device')
+    if (b && c.id !== s.agent?.consoleId && ((c.watchers || []).length > 1 || b.pinned)) {
+      const who = sizeWho(b)
       w += ` · ${b.pinned ? '📌 ' : ''}${t('size_label')}: ${who}`
     }
     return w
@@ -387,8 +399,22 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     return !!(c?.sizeBy?.pinned && c.sizeBy.device && c.sizeBy.device === myDevice())
   }
 
+  /** La consola de esta pestaña (con su número), tal como la cuenta el agente. */
+  function current (s) {
+    const list = s.list || []
+    const i = list.findIndex((x) => x.id === s.agent?.consoleId)
+    return i < 0 ? null : { c: list[i], n: numOf(list[i], i) }
+  }
+
+  function sizeWho (b) {
+    return b?.device && b.device === myDevice() ? t('size_here') : b?.origin === 'local' ? t('size_window') : t('size_device')
+  }
+
   function renderSide (s) {
     const list = s.list || []
+    const cur = current(s)
+    const pinOn = pinnedHere(s)
+    const pinTitle = cur ? t('pin_title', cur.n, pinOn) : t('pin_here')
     const mine = s.agent?.consoleId
     const side = s.side
     side.classList.toggle('collapsed', s.collapsed)
@@ -396,13 +422,13 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       side.innerHTML = `
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
-        <button class="sbtn${pinnedHere(s) ? ' on' : ''}" data-act="pin" title="${esc(t('pin_here'))}" aria-pressed="${pinnedHere(s)}">📌</button>
+        <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>📌</button>
         ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}" title="${esc(c.title || String(numOf(c, i)))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
-        <div class="srow"><span class="grow">${t('pin_here')}</span><button class="sbtn${pinnedHere(s) ? ' on' : ''}" data-act="pin" aria-pressed="${pinnedHere(s)}">📌</button></div>
+        ${cur ? `<div class="srow"><span class="grow">${esc(t('size_row', cur.n, sizeWho(cur.c.sizeBy), cur.c.cols, cur.c.rows))}<small>${cur.c.sizeBy?.pinned ? t('size_pinned') : t('size_last')}</small></span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">📌</button></div>` : ''}
         ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}">
           <button class="pick" data-id="${esc(c.id)}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(c.title) : ''}</span><small>${esc(where(s, c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
@@ -447,13 +473,17 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * último que se enganchó.
    */
   function togglePin (s) {
+    const cur = current(s)
+    if (!cur) return
     const on = !pinnedHere(s)
+    const { cols, rows } = fitted(s)
     if (on) {
-      const { cols, rows } = fitted(s)
       try { s.term.resize(cols, rows) } catch {}
       s.agent.resize(cols, rows)
     }
     s.agent.pin(on)
+    // Dicho en la línea de estado: si esta pantalla ya tenía el tamaño, no se ve otro cambio.
+    hint.textContent = on ? t('pinned_now', cur.n, cols, rows) : t('unpinned_now', cur.n)
     setTimeout(() => refresh(s), 200)
     s.term.focus()
   }

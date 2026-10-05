@@ -108,6 +108,10 @@ struct ConsoleInfo {
     /// Quién tiene el tamaño: quien lo fijó (📌) o el último que se enganchó (agente ≥ 0.14).
     #[serde(default, rename = "sizeBy")]
     size_by: Option<SizeBy>,
+    #[serde(default)]
+    cols: u32,
+    #[serde(default)]
+    rows: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1384,10 +1388,25 @@ impl App {
         let why = t("Actualiza dotrino-terminal (Perfil → Actualizar) para usar el panel", "Update dotrino-terminal (Profile → Update) to use the panel");
         let act = |m: Message| ready.then_some(m);
         let centered = |s: String, size: u32| text(s).size(size).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
+        // 📌 actúa sobre la consola de ESTA ventana: fija su tamaño a esta ventana, o lo suelta.
+        let cur = list.iter().enumerate().find(|(_, c)| mine.as_deref() == Some(c.id.as_str())).map(|(i, c)| (c.n.map(|n| n as usize).unwrap_or(i + 1), c));
+        let pin_on = self.pinned_here(id);
+        let can_pin = self.pin_ready() && cur.is_some();
+        let pin_tip = match cur {
+            _ if !self.pin_ready() => t("Actualiza dotrino-terminal (Perfil → Actualizar) para fijar el tamaño", "Update dotrino-terminal (Profile → Update) to pin the size"),
+            Some((n, _)) if pin_on => format!("{} {n}", t("Soltar el tamaño de la consola", "Release the size of console")),
+            Some((n, _)) => format!("{} {n} {}", t("Fijar el tamaño de la consola", "Pin the size of console"), t("a esta ventana", "to this window")),
+            None => t("Fijar el tamaño a esta ventana", "Pin the size to this window"),
+        };
+        let pin_btn = |w: f32| -> Element<'_, Message> {
+            let b = button(centered("📌".into(), 12)).width(w).padding([2, 0]).style(if pin_on { side_selected } else { menu_button }).on_press_maybe(can_pin.then_some(Message::TogglePin(id)));
+            iced::widget::tooltip(b, container(text(pin_tip.clone()).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into()
+        };
         if collapsed {
             let mut strip = column![
                 button(centered("»".into(), 13)).width(24).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
                 button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
+                pin_btn(24.0),
             ]
             .spacing(4)
             .align_x(iced::Alignment::Center);
@@ -1425,6 +1444,29 @@ impl App {
             .padding(iced::Padding { left: 8.0, ..Default::default() }),
         ]
         .spacing(2);
+        // Quién tiene el tamaño de la consola de esta ventana, y el 📌 para quedárselo.
+        if let Some((n, c)) = cur {
+            let who = match c.size_by.as_ref() {
+                Some(b) if b.tag.is_some() && b.tag.as_deref() == Some(my_tag.as_str()) => t("esta ventana", "this window"),
+                Some(b) if b.origin.as_deref() == Some("remote") => t("otro aparato", "another device"),
+                Some(_) => t("otra ventana", "another window"),
+                None => t("esta ventana", "this window"),
+            };
+            let how = if c.size_by.as_ref().is_some_and(|b| b.pinned) { t("fijado 📌", "pinned 📌") } else { t("lo tiene la última pantalla que la abre", "set by the last screen that opens it") };
+            let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
+            items = items.push(
+                row![
+                    column![
+                        text(format!("{} {n}: {who} ({}×{})", t("Tamaño de la", "Size of"), c.cols, c.rows)).size(12),
+                        text(how).size(11).style(dim),
+                    ]
+                    .width(Length::Fill),
+                    pin_btn(28.0),
+                ]
+                .align_y(iced::Alignment::Center)
+                .padding(iced::Padding { left: 8.0, ..Default::default() }),
+            );
+        }
         if !ready {
             items = items.push(note(why.clone()));
         }
@@ -1444,7 +1486,7 @@ impl App {
                 t("suelta", "detached")
             };
             let where_ = match self.size_owner_text(id, c) {
-                Some(size) if c.watchers.len() > 1 || c.size_by.as_ref().is_some_and(|b| b.pinned) => format!("{where_} · {size}"),
+                Some(size) if !is_mine && c.watchers.len() > 1 || c.size_by.as_ref().is_some_and(|b| b.pinned) => format!("{where_} · {size}"),
                 _ => where_,
             };
             // Con número: dos consolas con el mismo título (el prompt) se distinguen igual.

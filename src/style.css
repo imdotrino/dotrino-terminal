@@ -122,6 +122,11 @@ button.primary.danger { background: #e5484d; border-color: #e5484d; }
 .sbtn { background: transparent; border: 0; color: var(--text); padding: 3px 0; width: 24px; border-radius: 4px; font-size: 13px; cursor: pointer; }
 .sbtn:hover { background: var(--line); }
 .sbtn.num.on { background: var(--brand); color: #fff; }
+/* 📌 apagado se ve tenue; encendido, con el color de la marca: que se note el cambio. */
+.sbtn.pin { opacity: .45; filter: grayscale(1); }
+.sbtn.pin.on { opacity: 1; filter: none; background: var(--brand); }
+.sbtn:disabled { opacity: .25; cursor: default; }
+.srow .grow small { display: block; font-size: 11px; }
 .srow { display: flex; align-items: center; gap: 4px; padding: 2px 4px; font-size: 13px; }
 .srow .grow { flex: 1; color: var(--muted); font-size: 12px; }
 .srow.head b { font-weight: 500; }
