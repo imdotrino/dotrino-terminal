@@ -137,6 +137,9 @@ pub struct Backend {
     notifier: Notifier,
     last_content: RenderableContent,
     pub(crate) url_regex: RegexSearch,
+    /// Parche de Dotrino: ¿ya dijo el widget el tamaño real de su área? Hasta entonces el área es
+    /// la de arranque (80×50 PÍXELES) y redimensionar con ella dejaba el PTY en ~11×3.
+    layout_known: bool,
 }
 
 impl Backend {
@@ -183,6 +186,7 @@ impl Backend {
         Ok(Self {
             term: term.clone(),
             size: terminal_size,
+            layout_known: false,
             notifier,
             last_content: initial_content,
             url_regex: RegexSearch::new(URL_REGEX).expect("invalid url regexp"),
@@ -428,6 +432,7 @@ impl Backend {
         if let Some(size) = layout_size {
             self.size.layout_height = size.height;
             self.size.layout_width = size.width;
+            self.layout_known = true;
         };
 
         if let Some(size) = font_measure {
@@ -435,11 +440,19 @@ impl Backend {
             self.size.cell_width = size.width as u16;
         }
 
+        // Parche de Dotrino: sin el área real todavía, no se redimensiona (ver `layout_known`).
+        if !self.layout_known {
+            return;
+        }
         let lines = (self.size.layout_height / self.size.cell_height as f32)
             .floor() as u16;
         let cols = (self.size.layout_width / self.size.cell_width as f32)
             .floor() as u16;
-        if lines > 0 && cols > 0 {
+        // Parche de Dotrino: solo si CAMBIA. Esto se llamaba en cada evento (cada tecla, cada
+        // salida) y mandaba una señal de redimensionado al programa cada vez, aunque el tamaño
+        // fuera el mismo: readline repintaba la línea sin motivo.
+        let changed = lines != self.size.num_lines || cols != self.size.num_cols || layout_size.is_some();
+        if lines > 0 && cols > 0 && changed {
             self.size.num_lines = lines;
             self.size.num_cols = cols;
             self.notifier.on_resize(self.size.into());

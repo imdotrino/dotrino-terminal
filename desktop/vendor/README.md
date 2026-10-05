@@ -26,3 +26,8 @@ programa que arrancaba dentro lo leía así. La app pasa el tamaño de la vieja 
 
 Quinto cambio: `Terminal::scroll_position()` (para la barra de desplazamiento de la app) y la
 rueda a 3 líneas por golpe (traía 1).
+
+Sexto cambio: `Backend::resize` no redimensiona el PTY hasta que el widget dice el tamaño real de su
+área (antes, el primer evento lo dejaba en ~11×3 celdas, con el área de arranque de 80×50 píxeles,
+y readline acababa con el cursor fuera de sitio), y solo avisa al PTY cuando el tamaño cambia (se
+llamaba en cada evento, con una señal de redimensionado cada vez).

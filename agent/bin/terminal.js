@@ -314,7 +314,13 @@ function interactive (conn, first, dir) {
       .finally(() => process.exit(code))
   }
 
+  // La pantalla de la consola (`replay`) está hecha para pintarse sobre una pantalla LIMPIA con
+  // el cursor en el origen. Al arrancar, la TTY puede haber repetido algo de lo tecleado en los
+  // primeros milisegundos (antes de pasar a crudo), y entonces todo se pintaba corrido: el cursor
+  // acababa en la columna 0 o encima del prompt. Por eso, antes de la primera, en limpio.
+  let clean = false
   conn.on('message', (m) => {
+    if (m.type === 'replay' && !clean) { clean = true; out.write('\x1b[H\x1b[2J') }
     if (m.type === 'out' || m.type === 'replay') { out.write(filter(m.data)); return }
     if (m.type === 'attached') {
       consoleId = m.id
