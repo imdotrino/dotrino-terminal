@@ -322,7 +322,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   function removeSession (s) {
     clearInterval(s.poll)
-    if (s.onResize) window.removeEventListener('resize', s.onResize)
+    s.resizeObs?.disconnect()
     try { s.term?.dispose() } catch {}
     s.box.remove(); s.tab.remove()
     const i = sessions.indexOf(s); if (i >= 0) sessions.splice(i, 1)
@@ -364,10 +364,20 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s) }
     s.agent.onMeta = (info) => follow(s, info)
     s.term.onData((d) => s.agent.input(d))
-    // Cambió esta pantalla (girar el teléfono, redimensionar): se le dice al agente, que lo aplica
-    // solo si el tamaño es de esta pestaña; si no, la vista sigue al tamaño de la consola.
-    s.onResize = () => { if (active === s && s.agent?.consoleId) { const d = fitted(s); s.agent.resize(d.cols, d.rows) } }
-    window.addEventListener('resize', s.onResize)
+    // Cambió el espacio de la consola (girar el teléfono, redimensionar, aparecer o colapsar el
+    // panel): se le dice al agente, que lo aplica solo si el tamaño es de esta pestaña; si no, la
+    // vista sigue al tamaño de la consola.
+    let pending = false
+    s.onResize = () => {
+      if (pending) return
+      pending = true
+      requestAnimationFrame(() => {
+        pending = false
+        if (active === s && s.agent?.consoleId) { const d = fitted(s); s.agent.resize(d.cols, d.rows) }
+      })
+    }
+    s.resizeObs = new ResizeObserver(s.onResize)
+    s.resizeObs.observe(s.view)
   }
 
   // ---- El panel de consolas: el mismo de la app de escritorio ----
