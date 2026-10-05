@@ -151,20 +151,37 @@ fn user_shell() -> Result<String, String> {
     from_passwd.filter(|s| !s.is_empty()).ok_or_else(|| t("no sé cuál es tu shell: no está $SHELL ni en tu cuenta", "can't tell your shell: no $SHELL and none in your account"))
 }
 
-/// El PATH de una shell de inicio de sesión del usuario. Una app abierta desde el menú del
-/// escritorio (y en macOS, siempre) no hereda el PATH de la terminal, y ahí es donde viven
-/// `node` y `dotrino-terminal` (nvm, Homebrew, npm global).
+/// El PATH de una shell de inicio de sesión E INTERACTIVA del usuario. Una app abierta desde el
+/// menú del escritorio (y en macOS, siempre) no hereda el PATH de la terminal, y ahí es donde
+/// viven `node` y `dotrino-terminal`. Tiene que ser interactiva: nvm (y casi todo) se carga
+/// desde `~/.bashrc`, que en una shell no interactiva sale antes de llegar a él.
+///
+/// `.bashrc` puede imprimir cosas, así que el PATH va en una línea marcada. Sin entrada, para
+/// que no se quede esperando teclado, y con tope de tiempo: si la shell se cuelga, se dice.
 fn login_path() -> Result<String, String> {
+    const MARK: &str = "__DOTRINO_PATH__";
     let shell = user_shell()?;
-    let out = Command::new(&shell)
-        .args(["-l", "-c", "printf %s \"$PATH\""])
-        .output()
+    let mut child = Command::new(&shell)
+        .args(["-l", "-i", "-c", &format!("printf '\\n{MARK}%s\\n' \"$PATH\"")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .map_err(|e| format!("{shell}: {e}"))?;
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if !out.status.success() || path.is_empty() {
-        return Err(t(&format!("{shell} -l no devolvió el PATH"), &format!("{shell} -l did not return the PATH")));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().map_err(|e| format!("{shell}: {e}"))?.is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            return Err(t(&format!("{shell} -l -i tardó más de 10 s en arrancar"), &format!("{shell} -l -i took more than 10 s to start")));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
     }
-    Ok(path)
+    let out = child.wait_with_output().map_err(|e| format!("{shell}: {e}"))?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix(MARK).map(|p| p.trim().to_string()))
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| t(&format!("{shell} -l -i no devolvió el PATH"), &format!("{shell} -l -i did not return the PATH")))
 }
 
 fn find_in(path: &str, name: &str) -> Option<PathBuf> {
