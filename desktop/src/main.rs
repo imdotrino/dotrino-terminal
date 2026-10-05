@@ -128,6 +128,10 @@ struct Win {
     /// La consola recién elegida en el panel, marcada YA, antes de que la próxima lectura de la
     /// lista lo confirme (si no, durante un momento salían dos marcadas, o ninguna).
     showing: Option<String>,
+    /// ¿Se ve el panel lateral de consolas en ESTA ventana? (cada ventana el suyo)
+    sidebar: bool,
+    /// Panel colapsado: una franja con un botón numerado por consola, para que ocupe poco.
+    sidebar_collapsed: bool,
 }
 
 struct App {
@@ -144,8 +148,6 @@ struct App {
     palette: iced_term::ColorPalette,
     /// Las consolas abiertas, por perfil, leídas del socket de su agente cada poco.
     consoles: HashMap<String, Vec<ConsoleInfo>>,
-    /// ¿Se ve el panel lateral de consolas?
-    sidebar: bool,
     next_tag: u64,
 }
 
@@ -184,7 +186,9 @@ enum Message {
     KillConsole(window::Id, String),
     /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
     KillNow(window::Id, String),
-    ToggleSidebar,
+    ToggleSidebar(window::Id),
+    /// Colapsar el panel a solo botones (o volver a abrirlo).
+    CollapseSidebar(window::Id),
     Terminal(iced_term::Event),
 }
 
@@ -454,7 +458,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), sidebar: true, next_tag: 0 };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), next_tag: 0 };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -508,7 +512,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: None, pending: None, showing: None });
+        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: None, pending: None, showing: None, sidebar: true, sidebar_collapsed: true });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -840,8 +844,16 @@ impl App {
                 self.focus(id)
             }
             Message::MenuRoot => Task::none(),
-            Message::ToggleSidebar => {
-                self.sidebar = !self.sidebar;
+            Message::ToggleSidebar(id) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.sidebar = !w.sidebar;
+                }
+                Task::none()
+            }
+            Message::CollapseSidebar(id) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.sidebar_collapsed = !w.sidebar_collapsed;
+                }
                 Task::none()
             }
             Message::Poll => {
@@ -941,9 +953,9 @@ impl App {
         // Escribe la orden en la consola de esta ventana: hace falta que haya una.
         profiles.push(Item::new(entry(install_label, "", (!linking && win.term.is_some()).then_some(Message::InstallClient(id)))));
         let view_menu = Menu::new(vec![Item::new(entry(
-            format!("{}{}", if self.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
+            format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
             if cfg!(target_os = "macos") { "⌘B" } else { "Ctrl+Shift+B" },
-            Some(Message::ToggleSidebar),
+            Some(Message::ToggleSidebar(id)),
         ))]);
         let help = Menu::new(vec![
             Item::new(entry(t("Cómo se usa", "How to use it"), "", Some(Message::Help))),
@@ -1002,7 +1014,7 @@ impl App {
                 .into(),
             (None, None) => text("").into(),
         };
-        let main: Element<'_, Message> = match (self.sidebar, &win.profile) {
+        let main: Element<'_, Message> = match (win.sidebar, &win.profile) {
             (true, Some(profile)) => row![self.side(id, profile), container(body).width(Length::Fill).height(Length::Fill)].into(),
             _ => container(body).width(Length::Fill).height(Length::Fill).into(),
         };
@@ -1014,11 +1026,37 @@ impl App {
         let mine = self.mine(id);
         let list = self.consoles.get(profile).cloned().unwrap_or_default();
         let my_tag = self.windows.get(&id).map(|w| w.tag.clone()).unwrap_or_default();
+        let panel_style = |theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() };
+        // Colapsado: una franja estrecha, un botón numerado por consola (el título, al pasar).
+        let collapsed = self.windows.get(&id).is_some_and(|w| w.sidebar_collapsed);
+        let centered = |s: String, size: u32| text(s).size(size).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
+        if collapsed {
+            let mut strip = column![
+                button(centered("»".into(), 13)).width(30).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
+                button(centered("+".into(), 14)).width(30).padding([2, 0]).style(menu_button).on_press(Message::NewConsole(id)),
+            ]
+            .spacing(4)
+            .align_x(iced::Alignment::Center);
+            for (n, c) in list.iter().enumerate() {
+                let is_mine = mine.as_deref() == Some(c.id.as_str());
+                let tip = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n + 1) } else { c.title.clone() };
+                let b = button(centered(format!("{}", n + 1), 12))
+                    .width(30)
+                    .padding([4, 0])
+                    .style(if is_mine { side_selected } else { menu_button })
+                    .on_press(Message::ShowConsole(id, c.id.clone()));
+                let b = container(b).center_x(Length::Fill);
+                strip = strip.push(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right));
+            }
+            return container(iced::widget::scrollable(strip)).width(40).height(Length::Fill).padding([4, 2]).style(panel_style).into();
+        }
         let mut items = column![row![
+            button(text("«").size(13)).padding([0, 6]).style(menu_button).on_press(Message::CollapseSidebar(id)),
             text(t("Consolas", "Consoles")).size(13),
             space::horizontal(),
             button(text("+").size(14)).padding([0, 8]).style(menu_button).on_press(Message::NewConsole(id)),
         ]
+        .spacing(4)
         .align_y(iced::Alignment::Center)
         .padding([4, 6])]
         .spacing(2);
@@ -1044,12 +1082,7 @@ impl App {
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
             items = items.push(row![pick, kill].align_y(iced::Alignment::Center));
         }
-        container(iced::widget::scrollable(items))
-            .width(210)
-            .height(Length::Fill)
-            .padding(4)
-            .style(|theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() })
-            .into()
+        container(iced::widget::scrollable(items)).width(210).height(Length::Fill).padding(4).style(panel_style).into()
     }
 
     fn title(&self, id: window::Id) -> String {
@@ -1070,7 +1103,7 @@ impl App {
         // Tras «Instalar dotrino-terminal…», se mira cada poco si ya está.
         let waiting = self.awaiting_client.then(|| iced::time::every(std::time::Duration::from_secs(3)).map(|_| Message::CheckClient));
         // El panel lateral: las consolas abiertas se releen cada poco mientras se ve.
-        let polling = (self.sidebar && self.windows.values().any(|w| w.profile.is_some()))
+        let polling = self.windows.values().any(|w| w.sidebar && w.profile.is_some())
             .then(|| iced::time::every(std::time::Duration::from_millis(1500)).map(|_| Message::Poll));
         Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting).chain(polling))
     }
@@ -1088,7 +1121,7 @@ fn shortcut(event: Event, _status: iced::event::Status, id: window::Id) -> Optio
     match key.as_ref() {
         Key::Character(c) if chord && c.eq_ignore_ascii_case("n") => Some(Message::NewWindow(Some(id))),
         Key::Character(c) if chord && c.eq_ignore_ascii_case("w") => Some(Message::Close(id)),
-        Key::Character(c) if chord && c.eq_ignore_ascii_case("b") => Some(Message::ToggleSidebar),
+        Key::Character(c) if chord && c.eq_ignore_ascii_case("b") => Some(Message::ToggleSidebar(id)),
         _ => None,
     }
 }
