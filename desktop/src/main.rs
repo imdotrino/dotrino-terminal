@@ -184,6 +184,8 @@ enum Message {
     NewConsole(window::Id),
     /// Panel lateral: cerrar esa consola.
     KillConsole(window::Id, String),
+    /// Panel lateral (clic derecho): abrir esa consola en una ventana nueva.
+    OpenInNewWindow(window::Id, String),
     /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
     KillNow(window::Id, String),
     ToggleSidebar(window::Id),
@@ -894,6 +896,18 @@ impl App {
                 self.switch_to(id, Pending::Attach(cid))
             }
             Message::NewConsole(id) => self.switch_to(id, Pending::New),
+            Message::OpenInNewWindow(id, cid) => {
+                let Some(win) = self.windows.get(&id) else { return Task::none() };
+                let (profile, cwd) = (win.profile.clone(), win.cwd.clone());
+                let (new_id, task) = self.open_window(profile, cwd, None);
+                // Se engancha en cuanto arranca: la ventana nueva nace ya con esa consola.
+                if let Some(w) = self.windows.get_mut(&new_id) {
+                    w.attach = Some(cid);
+                    w.showing = w.attach.clone();
+                }
+                self.start(new_id, Mode::Console);
+                task
+            }
             Message::KillConsole(id, cid) => {
                 // Si es la de esta ventana, la ventana no se cierra: PRIMERO pasa a otra consola
                 // abierta (o a una nueva) y luego se mata la vieja; al revés, el cliente vería
@@ -1062,6 +1076,30 @@ impl App {
         column![self.menu(id, win), main].into()
     }
 
+    /// Clic derecho sobre una consola del panel (colapsado o no): lo que se puede hacer con ella.
+    fn console_menu<'a>(&self, id: window::Id, cid: String, is_mine: bool, under: Element<'a, Message>) -> Element<'a, Message> {
+        ContextMenu::new(under, move || {
+            let here = (!is_mine).then(|| Message::ShowConsole(id, cid.clone()));
+            container(
+                column![
+                    entry(t("Abrir aquí", "Open here"), "", here),
+                    entry(t("Abrir en otra ventana", "Open in another window"), "", Some(Message::OpenInNewWindow(id, cid.clone()))),
+                    separator(),
+                    entry(t("Cerrar consola", "Close console"), "", Some(Message::KillConsole(id, cid.clone()))),
+                ]
+                .width(220),
+            )
+            .padding(4)
+            .style(|theme: &Theme| container::Style {
+                background: Some(theme.extended_palette().background.weak.color.into()),
+                border: Border::default().rounded(6.0),
+                ..Default::default()
+            })
+            .into()
+        })
+        .into()
+    }
+
     /// El panel lateral: un botón por cada consola abierta en el perfil de la ventana.
     fn side(&self, id: window::Id, profile: &str) -> Element<'_, Message> {
         let mine = self.mine(id);
@@ -1086,7 +1124,7 @@ impl App {
                     .padding([4, 0])
                     .style(if is_mine { side_selected } else { menu_button })
                     .on_press(Message::ShowConsole(id, c.id.clone()));
-                let b = container(b).center_x(Length::Fill);
+                let b = self.console_menu(id, c.id.clone(), is_mine, container(b).center_x(Length::Fill).into());
                 strip = strip.push(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right));
             }
             return container(iced::widget::scrollable(strip)).width(40).height(Length::Fill).padding([4, 2]).style(panel_style).into();
@@ -1100,11 +1138,13 @@ impl App {
             .spacing(4)
             .align_y(iced::Alignment::Center)
             .padding([4, 2]),
-            button(row![text("+").size(14), text(t("Nueva consola", "New console")).size(12)].spacing(6).align_y(iced::Alignment::Center))
-                .width(Length::Fill)
-                .padding([2, 8])
-                .style(menu_button)
-                .on_press(Message::NewConsole(id)),
+            // El «+» en la misma columna que las «×» de abajo.
+            row![
+                text(t("Nueva consola", "New console")).size(12).width(Length::Fill),
+                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press(Message::NewConsole(id)),
+            ]
+            .align_y(iced::Alignment::Center)
+            .padding(iced::Padding { left: 8.0, ..Default::default() }),
         ]
         .spacing(2);
         for (n, c) in list.iter().enumerate() {
@@ -1127,7 +1167,8 @@ impl App {
             ];
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(if is_mine { side_selected } else { menu_button }).on_press(Message::ShowConsole(id, c.id.clone()));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
-            items = items.push(row![pick, kill].align_y(iced::Alignment::Center));
+            let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
+            items = items.push(self.console_menu(id, c.id.clone(), is_mine, entry_row));
         }
         container(iced::widget::scrollable(items)).width(210).height(Length::Fill).padding(4).style(panel_style).into()
     }
