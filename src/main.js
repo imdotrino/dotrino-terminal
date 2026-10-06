@@ -553,6 +553,23 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
   /**
+   * Se engancha a la consola `target`, o abre una nueva si no hay `target` o ya no existe (lo
+   * dice en la pantalla).
+   */
+  async function attachOrOpen (s, target) {
+    const { cols, rows } = fitted(s)
+    try {
+      const p = target ? await s.agent.attach(target, cols, rows) : await s.agent.open(cols, rows)
+      follow(s, p.console)
+    } catch (e) {
+      if (e.code !== 'no-console') throw e
+      // Ya no existe: se dice y se abre una nueva.
+      s.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
+      follow(s, (await s.agent.open(cols, rows)).console)
+    }
+  }
+
+  /**
    * Abre una pestaña con la máquina `pub`. Con `consoleId` se engancha a esa consola (al
    * recargar); sin él, a una consola libre de la máquina, o a una nueva si no hay.
    * @param {string} pub
@@ -572,6 +589,15 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     try {
       s.agent = new AgentClient(link, { agentPubkey: pub })
       s.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
+      // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
+      // a la misma consola si sigue viva, o a una nueva diciéndolo.
+      s.agent.onResumed = () => {
+        attachOrOpen(s, s.agent.consoleId).then(() => {
+          persist()
+          s.status = 'conectado'; setTabState(s, 'ok')
+          if (active === s) hint.textContent = t('connected', s.alias)
+        }).catch((e) => s.agent.onError(e))
+      }
       await s.agent.connect()
       mountTerm(s)
       // Como en la app de escritorio: una consola que no esté abierta en ninguna parte, antes
@@ -581,16 +607,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         const open = new Set(sessions.map((x) => x.agent?.consoleId).filter(Boolean))
         target = (await s.agent.list()).find((c) => !(c.watchers || []).length && !open.has(c.id))?.id
       }
-      const { cols, rows } = fitted(s)
-      try {
-        const p = target ? await s.agent.attach(target, cols, rows) : await s.agent.open(cols, rows)
-        follow(s, p.console)
-      } catch (e) {
-        if (e.code !== 'no-console') throw e
-        // Ya no existe: se dice y se abre una nueva.
-        s.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
-        follow(s, (await s.agent.open(cols, rows)).console)
-      }
+      await attachOrOpen(s, target)
       persist()
       s.status = 'conectado'; setTabState(s, 'ok')
       if (active === s) hint.textContent = t('connected', s.alias)

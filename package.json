@@ -1,7 +1,7 @@
 {
   "name": "dotrino-terminal",
   "private": true,
-  "version": "0.8.6",
+  "version": "0.8.7",
   "type": "module",
   "description": "Terminal del ecosistema Dotrino: abre una shell en tu máquina (la del vault) desde el navegador; solo tu dispositivo enlazado puede, cifrado punto a punto.",
   "scripts": {
@@ -16,7 +16,7 @@
     "@dotrino/install": "0.3.2",
     "@dotrino/nav": "0.3.0",
     "@dotrino/proxy-client": "0.28.0",
-    "@dotrino/remote-agent": "0.13.0",
+    "@dotrino/remote-agent": "0.14.0",
     "@dotrino/reputation": "0.12.0",
     "@dotrino/store": "0.11.0",
     "@dotrino/topbar": "0.14.1",

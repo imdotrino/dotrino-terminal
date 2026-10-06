@@ -22,6 +22,8 @@ export class AgentClient {
     /** @type {(data:string)=>void} */ this.onData = () => {}
     /** @type {(code:number)=>void} */ this.onExit = () => {}
     /** @type {(e:Error)=>void} */ this.onError = () => {}
+    /** La máquina se reinició y la sesión se volvió a abrir sola: hay que volver a engancharse. */
+    /** @type {()=>void} */ this.onResumed = () => {}
     /** La consola enganchada cambió (quién mira, título, TAMAÑO): `info` como en `list`. */
     /** @type {(info:object)=>void} */ this.onMeta = () => {}
     this._waiting = null   // { type, resolve, reject }: la respuesta que se espera
@@ -42,6 +44,13 @@ export class AgentClient {
       if (w && p.type === w.type) { this._waiting = null; w.resolve(p) }
     })
     this.rc.on('error', (e) => this.onError(e))
+    // Lo que se esperaba de la sesión vieja ya no va a llegar: se suelta, y la app se vuelve a
+    // enganchar (a su consola si sigue viva; si la máquina se reinició, ya no existe).
+    this.rc.on('resumed', () => {
+      const w = this._waiting
+      if (w) { this._waiting = null; w.reject(Object.assign(new Error('the machine restarted'), { code: 'resumed' })) }
+      this.onResumed()
+    })
     await this.rc.connect()
     return this
   }
