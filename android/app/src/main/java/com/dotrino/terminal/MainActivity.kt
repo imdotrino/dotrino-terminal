@@ -61,11 +61,12 @@ class MainActivity : Activity() {
         boot()
     }
 
-    override fun onResume() { super.onResume(); if (Consoles.profile == null) boot() }
+    override fun onResume() { super.onResume(); if (Consoles.profile == null && !Consoles.demo) boot() }
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
 
     @Deprecated("Activity without AndroidX: the back button still comes here")
     override fun onBackPressed() {
+        if (drawer != null) { openDrawer(false); return }
         if (active != null) { active = null; render(); return }
         @Suppress("DEPRECATION") super.onBackPressed()
     }
@@ -87,6 +88,7 @@ class MainActivity : Activity() {
     }
 
     private fun boot() {
+        if (Consoles.demo) { setContentView(shell()); active = Consoles.tabs.lastOrNull(); render(); return }
         if (!IdentityRequired.check(this)) { showProblem(t("boot.noIdentityApp")); return }
         scope.launch {
             try {
@@ -132,11 +134,11 @@ class MainActivity : Activity() {
         }
         val a = active
         if (a != null && a !in Consoles.tabs) { active = Consoles.tabs.lastOrNull(); render(); return }
-        if (a != null) { renderTabs(); renderNote() } else if (Consoles.profile != null && problem == null) renderMachines()
+        if (a != null) { renderTabs(); renderNote(); renderPanel() } else if (Consoles.profile != null && problem == null) renderMachines()
     }
 
     private fun render() {
-        if (Consoles.profile == null) return
+        if (Consoles.profile == null && !Consoles.demo) return
         if (active != null) renderTerminal() else renderMachines()
     }
 
@@ -153,7 +155,7 @@ class MainActivity : Activity() {
 
     private fun renderMachines() {
         val c = content ?: return
-        view = null; tabStrip = null; tabNote = null
+        view = null; tabStrip = null; tabNote = null; panel = null; drawer = null; poll?.cancel()
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(16), px(16), px(16), px(24)) }
         if (Consoles.tabs.isNotEmpty()) {
             body.add(pill(t("machines.open", "n" to Consoles.tabs.size), filled = true) { active = Consoles.tabs.last(); render() }.apply { tag = "open-consoles" })
@@ -194,79 +196,68 @@ class MainActivity : Activity() {
         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$WIKI$lang/herramientas/$page/")))
     }
 
-    /** Into a machine: its open consoles to pick up, or a new one right away if it has none. */
+    /** Into a machine: its tab if it is open; if not, a new one on a free console (or a new console). */
     private fun enter(m: Machine) {
         status?.apply { visibility = View.VISIBLE; text = t("machine.connecting", "name" to m.label) }
         scope.launch {
             try {
-                val (session, consoles) = Consoles.enter(m)
+                // The size the console will have: the one on screen if there is one, or a first guess the view corrects.
+                val tab = Consoles.enter(m, view?.cols ?: 80, view?.rows ?: 24)
                 status?.visibility = View.GONE
-                if (consoles.isEmpty()) { openTab(m, session, null); return@launch }
-                val (dialog, body) = sheet(t("resume.title"))
-                var picked = false
-                consoles.forEachIndexed { i, c ->
-                    body.add(card().apply {
-                        tag = "resume-console"; isClickable = true
-                        addView(label(c.title.ifBlank { t("resume.item", "n" to i + 1) }, 16f, bold = true))
-                        val notes = listOfNotNull(
-                            t("resume.ago", "when" to ago(c.lastActive)),
-                            t("resume.local").takeIf { c.local }, t("resume.inUse").takeIf { c.viewers > 0 },
-                        )
-                        addView(label(notes.joinToString(" · "), 13f, col(R.color.t_muted)))
-                        setOnClickListener { picked = true; dialog.dismiss(); openTab(m, session, c.id) }
-                    }, top = 10)
-                }
-                body.add(pill(t("resume.new"), filled = true) { picked = true; dialog.dismiss(); openTab(m, session, null) }.apply { tag = "new-console" }, top = 16)
-                // Closing the sheet without choosing opens nothing; the session is let go.
-                dialog.setOnDismissListener { if (!picked) session.close() }
-                dialog.show()
+                active = tab; render()
             } catch (e: Exception) {
                 status?.apply { visibility = View.VISIBLE; text = t("machine.failed", "why" to (e.message ?: e.toString())) }
             }
         }
     }
 
-    private fun ago(ts: Long): String {
-        val m = (System.currentTimeMillis() - ts) / 60_000
-        return when { m < 1 -> t("ago.now"); m < 60 -> t("ago.min", "n" to m); else -> t("ago.h", "n" to m / 60) }
-    }
-
-    private fun openTab(m: Machine, session: com.dotrino.sdk.RemoteAgent.Session, resume: String?) {
-        // The size the terminal will have: the one on screen if there is one, or a first guess the view corrects.
-        val v = view
-        active = Consoles.open(m, session, resume, v?.cols ?: 80, v?.rows ?: 24)
-        render()
-    }
-
     // ---------- a console ----------
+
+    private var panel: LinearLayout? = null
+    private var drawer: View? = null
+    private var panelOpen = false
+    private var poll: kotlinx.coroutines.Job? = null
 
     private fun renderTerminal() {
         val c = content ?: return
         val tab = active ?: return
         val tv = TerminalView(this).apply {
             tag = "terminal"
-            terminal = tab.terminal
             onInput = { active?.input(it) }
-            onResize = { cols, rows -> active?.resize(cols, rows) }
+            onResize = { cols, rows -> active?.screen(cols, rows) }
             onLongPress = { consoleMenu() }
             onModifiersChanged = { renderModifiers() }
+            terminal = tab.terminal
         }
         view = tv
         bindOutput()
-        val strip = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(px(8), px(6), px(8), px(6)) }
+        val strip = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(px(6), px(4), px(6), px(4)) }
         tabStrip = strip
         val note = label("", 13f, col(R.color.t_muted)).apply { setPadding(px(16), px(8), px(16), px(8)); setBackgroundColor(col(R.color.t_panel2)); visibility = View.GONE }
         tabNote = note
+        // The consoles panel, as in the PWA: a strip on the left; open, it slides over the console
+        // (on a phone, pushing the console aside would change its size).
+        val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, px(4), 0, px(4)) }
+        panel = side
+        val stage = FrameLayout(this).apply { addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
+        val body = LinearLayout(this).apply {
+            addView(ScrollView(context).apply { isVerticalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(side) }, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(stage, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        }
         c.removeAllViews()
         c.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(strip) })
             addView(note)
-            addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
             addView(extraKeys())
         })
-        renderTabs(); renderNote()
+        drawer = null
+        renderTabs(); renderNote(); renderPanel()
         tv.showKeyboard()
+        // The panel says what happens on the machine (other screens, titles): ask every 2 s while on screen.
+        poll?.cancel()
+        poll = scope.launch { while (true) { kotlinx.coroutines.delay(2_000); if (view === tv) active?.list() else break } }
     }
 
     private fun bindOutput() {
@@ -274,6 +265,7 @@ class MainActivity : Activity() {
         active?.onOutput = { view?.onOutput() }
     }
 
+    /** The tabs: one per machine. */
     private fun renderTabs() {
         val strip = tabStrip ?: return
         strip.removeAllViews()
@@ -281,22 +273,151 @@ class MainActivity : Activity() {
             val on = tab === active
             strip.addView(LinearLayout(this).apply {
                 tag = "tab"; gravity = Gravity.CENTER_VERTICAL
-                background = rounded(col(if (on) R.color.t_accent else R.color.t_panel2), px(16))
-                setPadding(px(12), px(6), px(4), px(6))
+                background = rounded(col(if (on) R.color.t_panel2 else R.color.t_panel), px(10), px(1), col(if (on) R.color.t_accent else R.color.t_line))
+                setPadding(px(10), px(3), px(2), px(3))
                 val dot = when (tab.state) { Consoles.Tab.State.OPEN -> R.color.t_online; Consoles.Tab.State.CONNECTING, Consoles.Tab.State.LOST -> R.color.t_muted; else -> R.color.t_danger }
-                addView(View(context).apply { background = rounded(col(dot), px(4)) }, LinearLayout.LayoutParams(px(8), px(8)).apply { marginEnd = px(8) })
-                addView(label(tab.label.take(24), 14f, col(if (on) R.color.t_on_accent else R.color.t_text), bold = on))
-                addView(label("×", 18f, col(if (on) R.color.t_on_accent else R.color.t_muted)).apply {
-                    tag = "tab-close"; contentDescription = t("tab.close"); setPadding(px(10), 0, px(8), 0)
+                addView(View(context).apply { background = rounded(col(dot), px(4)) }, LinearLayout.LayoutParams(px(7), px(7)).apply { marginEnd = px(6) })
+                addView(label(tab.label.take(20), 12f, col(R.color.t_text), bold = true))
+                addView(label("×", 15f, col(R.color.t_muted)).apply {
+                    tag = "tab-close"; contentDescription = t("tab.close"); setPadding(px(8), 0, px(6), 0)
                     setOnClickListener { tab.kill() }
                 })
-                setOnClickListener { if (active !== tab) { active = tab; view?.terminal = tab.terminal; bindOutput(); renderTabs(); renderNote(); view?.let { tab.resize(it.cols, it.rows) } } }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(6) })
+                setOnClickListener { if (active !== tab) { active = tab; render() } }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(4) })
         }
-        strip.addView(label("＋", 20f, col(R.color.t_text)).apply {
-            tag = "tab-new"; contentDescription = t("tab.new"); setPadding(px(12), px(2), px(12), px(2))
+        strip.addView(label("＋", 16f, col(R.color.t_text)).apply {
+            tag = "tab-new"; contentDescription = t("tab.new"); setPadding(px(10), px(2), px(10), px(2))
             setOnClickListener { active = null; render(); loadMachines() }
         })
+    }
+
+    private fun sizeWho(tab: Consoles.Tab, c: ConsoleInfo): String = when {
+        tab.sizeIsMine(c) -> t("size.here")
+        c.sizeBy?.origin == "local" -> t("size.window")
+        else -> t("size.device")
+    }
+
+    /** Where a console is, said for this screen (the same words as the PWA's panel). */
+    private fun where(tab: Consoles.Tab, c: ConsoleInfo): String {
+        val mine = c.id == tab.consoleId
+        val others = c.watchers - if (mine) 1 else 0
+        var w = when {
+            c.watchedLocally -> t("where.local")
+            others > 0 -> t("where.other")
+            mine -> t("where.here")
+            else -> t("where.free")
+        }
+        if (!mine && c.sizeBy != null && (c.watchers > 1 || c.sizeBy.pinned)) w += " · ${t("size.label")}: ${sizeWho(tab, c)}"
+        return w
+    }
+
+    /** ⤢ as a small button: dim when off; lit, with the accent, when this screen chose the size. */
+    private fun sizeButton(tab: Consoles.Tab): View {
+        val on = tab.sizeHere
+        val n = tab.number
+        return android.widget.ImageView(this).apply {
+            tag = "size"; setImageResource(R.drawable.ic_size)
+            setColorFilter(col(if (on) R.color.t_accent else R.color.t_muted))
+            imageAlpha = if (n == null) 70 else 255
+            background = if (on) rounded(col(R.color.t_accent_soft), px(6)) else null
+            setPadding(px(7), px(7), px(7), px(7))
+            contentDescription = if (n == null) t("size.use", "n" to "") else if (on) t("size.release", "n" to n) else t("size.use", "n" to n)
+            isEnabled = n != null
+            setOnClickListener { toggleSize(tab) }
+        }
+    }
+
+    private fun toggleSize(tab: Consoles.Tab) {
+        val n = tab.number ?: return
+        val on = !tab.sizeHere
+        tab.useMySize(on)
+        // Said out loud: if this screen already had the size, nothing else changes on screen.
+        toast(if (on) t("size.usedNow", "n" to n, "cols" to tab.screenCols, "rows" to tab.screenRows) else t("size.releasedNow", "n" to n))
+        scope.launch { kotlinx.coroutines.delay(300); tab.list() }
+    }
+
+    private fun renderPanel() {
+        val side = panel ?: return
+        val tab = active ?: return
+        side.removeAllViews()
+        fun btn(text: String, tagName: String, desc: String, onClick: () -> Unit) = label(text, 15f, col(R.color.t_text)).apply {
+            tag = tagName; contentDescription = desc; gravity = Gravity.CENTER
+            setPadding(0, px(6), 0, px(6)); isClickable = true
+            setOnClickListener { onClick() }
+        }
+        val full = ViewGroup.LayoutParams.MATCH_PARENT
+        side.addView(btn("»", "panel-open", t("panel.open")) { openDrawer(true) }, LinearLayout.LayoutParams(full, ViewGroup.LayoutParams.WRAP_CONTENT))
+        side.addView(btn("+", "console-new", t("console.new")) { tab.switchTo(null) }, LinearLayout.LayoutParams(full, ViewGroup.LayoutParams.WRAP_CONTENT))
+        side.addView(sizeButton(tab), LinearLayout.LayoutParams(px(30), px(30)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = px(2); bottomMargin = px(4) })
+        for (c in tab.consoles) {
+            val on = c.id == tab.consoleId
+            side.addView(label("${c.n}", 13f, col(if (on) R.color.t_on_accent else R.color.t_text), bold = on).apply {
+                tag = "console-${c.n}"; contentDescription = c.title.ifBlank { t("console.n", "n" to c.n) }
+                gravity = Gravity.CENTER; setPadding(0, px(5), 0, px(5))
+                background = if (on) rounded(col(R.color.t_accent), px(6)) else null
+                setOnClickListener { tab.switchTo(c.id) }
+                setOnLongClickListener { consoleActions(tab, c); true }
+            }, LinearLayout.LayoutParams(px(30), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(3) })
+        }
+        if (panelOpen) openDrawer(true)
+    }
+
+    /** The open panel: over the console, with the titles, where each one is, and who has the size. */
+    private fun openDrawer(open: Boolean) {
+        val stage = (view?.parent as? FrameLayout) ?: return
+        drawer?.let { stage.removeView(it) }; drawer = null
+        panelOpen = open
+        if (!open) return
+        val tab = active ?: return
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(8), px(6), px(8), px(10)) }
+        list.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(label("«", 16f, col(R.color.t_text)).apply { tag = "panel-close"; contentDescription = t("panel.close"); setPadding(px(6), px(4), px(10), px(4)); setOnClickListener { openDrawer(false) } })
+            addView(label(t("panel.title"), 14f, bold = true))
+        })
+        list.addView(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(px(6), px(6), 0, px(6))
+            addView(label(t("console.new"), 13f, col(R.color.t_muted)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(label("+", 17f).apply { tag = "drawer-new"; setPadding(px(12), 0, px(12), 0); setOnClickListener { tab.switchTo(null); openDrawer(false) } })
+        })
+        tab.current?.let { cur ->
+            list.addView(LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL; setPadding(px(6), px(4), 0, px(8))
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(label(t("size.row", "n" to cur.n, "who" to sizeWho(tab, cur), "cols" to cur.cols, "rows" to cur.rows), 12f, col(R.color.t_muted)))
+                    addView(label(if (cur.sizeBy?.pinned == true) t("size.pinned") else t("size.last"), 11f, col(R.color.t_muted)))
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(sizeButton(tab), LinearLayout.LayoutParams(px(32), px(32)))
+            })
+        }
+        for (c in tab.consoles) {
+            val on = c.id == tab.consoleId
+            list.addView(LinearLayout(this).apply {
+                tag = "drawer-console"; gravity = Gravity.CENTER_VERTICAL
+                background = if (on) rounded(col(R.color.t_accent_soft), px(8)) else null
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL; setPadding(px(8), px(5), px(4), px(5))
+                    val name = (if (on) "● " else "") + "${c.n}" + if (c.title.isNotBlank()) " · " + shortTitle(c.title) else ""
+                    addView(label(name, 13f).apply { maxLines = 1 })
+                    addView(label(where(tab, c), 11f, col(R.color.t_muted)))
+                    setOnClickListener { tab.switchTo(c.id); openDrawer(false) }
+                    setOnLongClickListener { consoleActions(tab, c); true }
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(label("×", 16f, col(R.color.t_muted)).apply { tag = "console-kill"; contentDescription = t("console.kill"); setPadding(px(10), px(4), px(8), px(4)); setOnClickListener { tab.killConsole(c.id) } })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(2) })
+        }
+        val d = ScrollView(this).apply { tag = "drawer"; setBackgroundColor(col(R.color.t_panel)); elevation = px(8).toFloat(); addView(list) }
+        stage.addView(d, FrameLayout.LayoutParams(px(270), ViewGroup.LayoutParams.MATCH_PARENT))
+        drawer = d
+    }
+
+    /** Long press on a console of the panel: what can be done with it. */
+    private fun consoleActions(tab: Consoles.Tab, c: ConsoleInfo) {
+        val (dialog, body) = sheet(c.title.ifBlank { t("console.n", "n" to c.n) }.let { "${c.n} · " + shortTitle(it) })
+        if (c.id != tab.consoleId) body.add(pill(t("console.openHere"), filled = true) { dialog.dismiss(); tab.switchTo(c.id); openDrawer(false) }.apply { tag = "open-here" }, top = 8)
+        body.add(pill(t("console.kill")) { dialog.dismiss(); tab.killConsole(c.id) }.apply { tag = "kill" }, top = 10)
+        dialog.show()
     }
 
     /** What the active tab has to say when it is not simply open. */

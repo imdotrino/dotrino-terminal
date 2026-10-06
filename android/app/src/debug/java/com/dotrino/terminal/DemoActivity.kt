@@ -31,6 +31,6 @@ class DemoActivity : Activity() {
             append("$ ")
         }
         term.feed(sample)
-        setContentView(LinearLayout(this).apply { fitsSystemWindows = true; setBackgroundColor(0xFF0E0B1A.toInt()); addView(view, LinearLayout.LayoutParams(-1, -1)) })
+        setContentView(LinearLayout(this).apply { fitsSystemWindows = true; setBackgroundColor(0xFF0F1416.toInt()); addView(view, LinearLayout.LayoutParams(-1, -1)) })
     }
 }

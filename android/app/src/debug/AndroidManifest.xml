@@ -6,5 +6,8 @@
         <activity android:name=".DemoActivity" android:exported="true"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden" />
+        <!-- SOLO en depuración: la pantalla de consolas con un agente de muestra (panel, ⤢, tamaños).
+             adb shell am start -n com.dotrino.terminal/.DemoConsolesActivity -->
+        <activity android:name=".DemoConsolesActivity" android:exported="true" />
     </application>
 </manifest>

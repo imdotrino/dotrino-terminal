@@ -1,20 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- El tema oscuro de la PWA (src/style.css :root): una terminal es oscura. -->
+<!-- «Cool & Cozy» oscuro, el mismo de la PWA (src/style.css :root): una terminal es oscura. -->
 <resources>
-    <color name="t_bg">#0E0B1A</color>
-    <color name="t_panel">#171331</color>
-    <color name="t_panel2">#1E1940</color>
-    <color name="t_line">#2A2350</color>
-    <color name="t_text">#E7E3FF</color>
-    <color name="t_muted">#9A92C4</color>
-    <color name="t_accent">#7C3AED</color>
-    <color name="t_on_accent">#FFFFFF</color>
-    <color name="t_online">#34D399</color>
-    <color name="t_danger">#F87171</color>
+    <color name="t_bg">#0F1416</color>          <!-- surface -->
+    <color name="t_panel">#1C2022</color>       <!-- surface-container -->
+    <color name="t_panel2">#262A2D</color>      <!-- surface-container-high -->
+    <color name="t_line">#3F484E</color>        <!-- outline-variant -->
+    <color name="t_text">#DFE3E6</color>        <!-- on-surface -->
+    <color name="t_muted">#BFC8CF</color>       <!-- on-surface-variant -->
+    <color name="t_accent">#81CFFF</color>      <!-- primary -->
+    <color name="t_accent_soft">#004C6B</color> <!-- primary-container -->
+    <color name="t_on_accent">#003549</color>   <!-- on-primary -->
+    <color name="t_online">#7AD7C2</color>      <!-- secondary -->
+    <color name="t_danger">#FFB4AB</color>      <!-- error -->
     <!-- Los componentes del ecosistema (dotrino-native) con la misma paleta. -->
-    <color name="dotrino_bg">#171331</color>
-    <color name="dotrino_card">#1E1940</color>
-    <color name="dotrino_fg">#E7E3FF</color>
-    <color name="dotrino_muted">#9A92C4</color>
-    <color name="dotrino_accent">#7C3AED</color>
+    <color name="dotrino_bg">#1C2022</color>
+    <color name="dotrino_card">#262A2D</color>
+    <color name="dotrino_fg">#DFE3E6</color>
+    <color name="dotrino_muted">#BFC8CF</color>
+    <color name="dotrino_accent">#81CFFF</color>
 </resources>

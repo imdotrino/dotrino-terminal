@@ -39,8 +39,8 @@ android {
         applicationId = "com.dotrino.terminal"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.5.0"
+        versionCode = 2
+        versionName = "0.8.6"
     }
 
     // La MISMA llave que la app de identidad (Play App Signing «misma llave que otra app»): su
@@ -68,6 +68,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true }
+    // Las pruebas de la lógica de consolas corren en la JVM: lo de Android que toquen devuelve valores vacíos.
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {

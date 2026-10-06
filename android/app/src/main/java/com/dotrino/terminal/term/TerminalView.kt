@@ -28,10 +28,14 @@ import kotlin.math.roundToInt
  *
  * It owns nothing of the console: whoever puts it on screen gives it the [terminal] to show and
  * listens to [onInput] (what was typed) and [onResize] (how many columns and rows fit now).
+ *
+ * The emulator has the CONSOLE's size, which another screen may decide: it is drawn at that size,
+ * and the rest of the view is left in another colour (as the PWA does). A console wider than the
+ * view is panned sideways with the finger.
  */
 class TerminalView(context: Context) : View(context) {
     var terminal: Terminal? = null
-        set(value) { field = value; scrollBack = 0; fit(); invalidate() }
+        set(value) { field = value; scrollBack = 0; panX = 0; refit(); invalidate() }
 
     /** What was typed, already as the bytes a shell reads. */
     var onInput: (String) -> Unit = {}
@@ -55,6 +59,9 @@ class TerminalView(context: Context) : View(context) {
     /** Lines scrolled back into the history (0 = the live screen). */
     private var scrollBack = 0
     private var scrollRemainder = 0f
+    /** Columns panned sideways, when the console is wider than the view. */
+    private var panX = 0
+    private var panRemainder = 0f
     private val scroller = OverScroller(context)
 
     var cols = 80; private set
@@ -82,20 +89,30 @@ class TerminalView(context: Context) : View(context) {
     private fun fit() {
         if (width == 0 || height == 0) return
         val c = max(2, (width / cellW).toInt()); val r = max(2, (height / cellH).toInt())
-        if (c == cols && r == rows && terminal?.cols == c && terminal?.rows == r) return
+        if (c == cols && r == rows) return
         cols = c; rows = r
         onResize(c, r)
+    }
+
+    /** Say again what fits (a new terminal on screen must hear it). */
+    fun refit() {
+        if (width == 0 || height == 0) return
+        cols = max(2, (width / cellW).toInt()); rows = max(2, (height / cellH).toInt())
+        onResize(cols, rows)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { super.onSizeChanged(w, h, oldw, oldh); fit() }
 
     // ---------- drawing ----------
 
-    private val defaultFg = 0xFFE7E3FF.toInt()
-    private val defaultBg = 0xFF0E0B1A.toInt()
-    private val cursorColor = 0xFFB69CFF.toInt()
+    // «Cool & Cozy», oscuro (CONVENCIONES y la PWA): fondo surface, texto on-surface, cursor primary.
+    private val defaultFg = 0xFFDFE3E6.toInt()
+    private val defaultBg = 0xFF0F1416.toInt()
+    /** The part of the view outside the console, when the console is smaller than the screen. */
+    private val outsideBg = 0xFF1C2022.toInt()
+    private val cursorColor = 0xFF81CFFF.toInt()
     private val ansi = intArrayOf(
-        0xFF1E1940.toInt(), 0xFFF87171.toInt(), 0xFF34D399.toInt(), 0xFFFBBF24.toInt(), 0xFF60A5FA.toInt(), 0xFFC084FC.toInt(), 0xFF22D3EE.toInt(), 0xFFD4D0EE.toInt(),
+        0xFF262A2D.toInt(), 0xFFF87171.toInt(), 0xFF34D399.toInt(), 0xFFFBBF24.toInt(), 0xFF60A5FA.toInt(), 0xFFC084FC.toInt(), 0xFF22D3EE.toInt(), 0xFFD4D0EE.toInt(),
         0xFF6B6494.toInt(), 0xFFFCA5A5.toInt(), 0xFF6EE7B7.toInt(), 0xFFFDE68A.toInt(), 0xFF93C5FD.toInt(), 0xFFD8B4FE.toInt(), 0xFF67E8F9.toInt(), 0xFFFFFFFF.toInt(),
     )
 
@@ -113,16 +130,23 @@ class TerminalView(context: Context) : View(context) {
     private val run = StringBuilder()
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(defaultBg)
-        val t = terminal ?: return
+        val t = terminal ?: run { canvas.drawColor(defaultBg); return }
+        canvas.drawColor(outsideBg)
+        panX = panX.coerceIn(0, max(0, t.cols - cols))
         val back = min(scrollBack, t.historySize)
         val visibleRows = min(rows, t.rows)
+        val shownCols = min(t.cols - panX, cols + 1)
+        bgPaint.color = defaultBg
+        canvas.drawRect(0f, 0f, shownCols * cellW, visibleRows * cellH, bgPaint)
+        canvas.save()
+        canvas.clipRect(0f, 0f, shownCols * cellW, visibleRows * cellH)
+        canvas.translate(-panX * cellW, 0f)
         for (y in 0 until visibleRows) {
             val line = y - back
             if (line >= t.rows) break
-            drawRow(canvas, t.row(line), y * cellH, min(cols, t.cols))
+            drawRow(canvas, t.row(line), y * cellH, min(panX + cols + 1, t.cols))
         }
-        if (t.cursorVisible && back == 0 && t.cursorY < visibleRows && t.cursorX < cols) {
+        if (t.cursorVisible && back == 0 && t.cursorY < visibleRows && t.cursorX < t.cols) {
             val x = t.cursorX * cellW; val y = t.cursorY * cellH
             bgPaint.color = cursorColor
             canvas.drawRect(x, y, x + cellW, y + cellH, bgPaint)
@@ -132,6 +156,7 @@ class TerminalView(context: Context) : View(context) {
                 canvas.drawText(String(Character.toChars(cp)), x, y + baseline, paint)
             }
         }
+        canvas.restore()
     }
 
     private fun drawRow(canvas: Canvas, r: Terminal.Row, top: Float, n: Int) {
@@ -177,7 +202,11 @@ class TerminalView(context: Context) : View(context) {
         override fun onDown(e: MotionEvent): Boolean { scroller.forceFinished(true); return true }
         override fun onSingleTapUp(e: MotionEvent): Boolean { showKeyboard(); return true }
         override fun onLongPress(e: MotionEvent) { this@TerminalView.onLongPress() }
-        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean { scrollBy(-dy); return true }
+        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+            // Sideways only pans a console wider than the view; up and down is the history.
+            if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) panBy(dx) else scrollBy(-dy)
+            return true
+        }
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
             val t = terminal ?: return true
             scroller.fling(0, (scrollBack * cellH).toInt(), 0, vy.toInt(), 0, 0, 0, (t.historySize * cellH).toInt())
@@ -202,6 +231,17 @@ class TerminalView(context: Context) : View(context) {
         if (lines == 0) return
         scrollRemainder -= lines * cellH
         scrollBack = (scrollBack + lines).coerceIn(0, t.historySize)
+        invalidate()
+    }
+
+    private fun panBy(pixels: Float) {
+        val t = terminal ?: return
+        if (t.cols <= cols) return
+        panRemainder += pixels
+        val n = (panRemainder / cellW).toInt()
+        if (n == 0) return
+        panRemainder -= n * cellW
+        panX = (panX + n).coerceIn(0, t.cols - cols)
         invalidate()
     }
 
