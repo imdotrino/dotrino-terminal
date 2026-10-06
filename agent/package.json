@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/terminal-agent",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Dotrino Terminal: las ventanas de esta máquina (dotrino-terminal) y su agente, que deja abrir esas mismas consolas desde los otros aparatos de tu cuenta, cifrado punto a punto.",
   "type": "module",
   "bin": {
@@ -26,7 +26,7 @@
   "dependencies": {
     "@dotrino/identity": "0.107.2",
     "@dotrino/proxy-client": "0.27.1",
-    "@dotrino/remote-agent": "0.12.1",
+    "@dotrino/remote-agent": "0.13.0",
     "@dotrino/update": "0.2.2",
     "@dotrino/vault": "0.79.0",
     "@xterm/addon-serialize": "0.13.0",
