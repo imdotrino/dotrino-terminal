@@ -26,7 +26,9 @@ final class ConsolesUITests: XCTestCase {
 
         app.buttons["panel-open"].tap()
         XCTAssertTrue(app.buttons["panel-close"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["panel-open"].isHittable, "the open panel covers the strip")
+        // The open panel covers the strip: its frame contains the strip's » button.
+        let drawer = app.descendants(matching: .any)["drawer"].firstMatch
+        XCTAssertTrue(drawer.frame.contains(app.buttons["panel-open"].frame), "the open panel covers the strip")
         shot("4-panel")
     }
 }
