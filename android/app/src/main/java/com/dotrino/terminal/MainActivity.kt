@@ -155,7 +155,7 @@ class MainActivity : Activity() {
 
     private fun renderMachines() {
         val c = content ?: return
-        view = null; tabStrip = null; tabNote = null; panel = null; drawer = null; poll?.cancel()
+        view = null; tabStrip = null; tabNote = null; panel = null; drawer = null; drawerHost = null; poll?.cancel()
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(16), px(16), px(16), px(24)) }
         if (Consoles.tabs.isNotEmpty()) {
             body.add(pill(t("machines.open", "n" to Consoles.tabs.size), filled = true) { active = Consoles.tabs.last(); render() }.apply { tag = "open-consoles" })
@@ -215,6 +215,7 @@ class MainActivity : Activity() {
 
     private var panel: LinearLayout? = null
     private var drawer: View? = null
+    private var drawerHost: FrameLayout? = null
     private var panelOpen = false
     private var poll: kotlinx.coroutines.Job? = null
 
@@ -244,12 +245,16 @@ class MainActivity : Activity() {
             addView(ScrollView(context).apply { isVerticalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(side) }, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(stage, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         }
+        // The open panel goes over the WHOLE row (strip included), so the strip and the panel are
+        // never seen at once; and over it, not beside it, so the console keeps its size.
+        val row = FrameLayout(this).apply { addView(body, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
+        drawerHost = row
         c.removeAllViews()
         c.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(strip) })
             addView(note)
-            addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
             addView(extraKeys())
         })
         drawer = null
@@ -364,7 +369,7 @@ class MainActivity : Activity() {
 
     /** The open panel: over the console, with the titles, where each one is, and who has the size. */
     private fun openDrawer(open: Boolean) {
-        val stage = (view?.parent as? FrameLayout) ?: return
+        val stage = drawerHost ?: return
         drawer?.let { stage.removeView(it) }; drawer = null
         panelOpen = open
         if (!open) return

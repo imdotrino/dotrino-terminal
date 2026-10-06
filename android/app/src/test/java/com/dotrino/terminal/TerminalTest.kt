@@ -137,6 +137,54 @@ class TerminalTest {
         val t = Terminal(10, 2, scrollback = 5); repeat(50) { t.feed("l$it\r\n") }
         assertEquals(5, t.historySize); assertEquals("l48", t.text(-1))
     }
+
+    // ---------- reflow: the console changes width (⤢, another screen) ----------
+
+    @Test fun widerJoinsWhatHadWrapped() {
+        val t = Terminal(10, 5)
+        t.feed("abcdefghijklmnopqrstuvwxyz\r\n$ ")
+        assertEquals("abcdefghij", t.text(0))                      // 26 letters in 10 columns: three rows
+        t.resize(40, 5)
+        assertEquals("abcdefghijklmnopqrstuvwxyz", t.text(0))      // one line again, as xterm does
+        assertEquals("$", t.text(1))
+        assertEquals(1, t.cursorY); assertEquals(2, t.cursorX)
+    }
+
+    @Test fun narrowerCutsTheLineAgainAndKeepsTheCursorAfterIt() {
+        val t = Terminal(40, 6)
+        t.feed("$ echo 0123456789abcdefghij")
+        t.resize(10, 6)
+        assertEquals("$ echo 012", t.text(0))
+        assertEquals("3456789abc", t.text(1))
+        assertEquals("defghij", t.text(2))
+        assertEquals(2, t.cursorY); assertEquals(7, t.cursorX)      // right after the last character
+        t.feed("K")
+        assertEquals("defghijK", t.text(2))
+    }
+
+    @Test fun whatDoesNotFitGoesToTheHistory() {
+        val t = Terminal(20, 3)
+        t.feed("1111111111111111\r\n2222222222222222\r\n$ ")
+        t.resize(8, 3)                                              // 2 lines × 2 rows + the prompt: 5 rows in 3
+        assertEquals("22222222", t.text(0)); assertEquals("22222222", t.text(1)); assertEquals("$", t.text(2))
+        assertEquals(2, t.historySize)
+        assertEquals("11111111", t.text(-2))
+    }
+
+    @Test fun aWideCharacterIsNeverSplit() {
+        val t = Terminal(10, 3)
+        t.feed("abcd日本語")                                         // 4 + 3×2 = 10 cells
+        t.resize(5, 3)
+        assertEquals("abcd", t.text(0))                             // 日 does not fit in the 5th cell: next row
+        assertEquals("日本", t.text(1))
+    }
+
+    @Test fun theAlternateScreenIsNotReflowed() {
+        val t = Terminal(10, 3)
+        t.feed("\u001b[?1049h0123456789")
+        t.resize(5, 3)
+        assertEquals("01234", t.text(0))                            // cut: the program redraws it
+    }
 }
 
 class I18nTest {

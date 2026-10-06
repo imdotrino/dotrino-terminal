@@ -496,12 +496,15 @@ class Terminal(cols: Int, rows: Int, private val scrollback: Int = 2000) {
     // ---------- the size ----------
 
     /**
-     * The screen changes size. Lines are cut or padded, not reflowed: the shell redraws its
-     * prompt on the size change, and a full-screen program redraws everything. On the main
-     * screen, losing rows pushes the top ones to the history and gaining rows brings them back.
+     * The screen changes size. When the WIDTH changes on the main screen, lines are REFLOWED as
+     * xterm.js does (the PWA): rows that wrapped are joined again and cut at the new width, so
+     * what was written fills the new space instead of staying cut at the old one. Only the rows
+     * changing, or the alternate screen (a full-screen program redraws itself): lines are cut or
+     * padded, losing rows pushes the top ones to the history and gaining rows brings them back.
      */
     fun resize(newCols: Int, newRows: Int) {
         if (newCols < 2 || newRows < 2 || (newCols == cols && newRows == rows)) return
+        if (newCols != cols && !altScreen) { reflow(newCols, newRows); return }
         if (newRows < rows) {
             // Where the main screen's cursor is (kept aside while the alternate screen is up).
             var mainY = if (altScreen) (savedMain?.y ?: 0) else cursorY
@@ -526,6 +529,85 @@ class Terminal(cols: Int, rows: Int, private val scrollback: Int = 2000) {
         cols = newCols; rows = newRows
         top = 0; bottom = rows - 1
         cursorX = cursorX.coerceIn(0, cols - 1); cursorY = cursorY.coerceIn(0, rows - 1)
+        wrapPending = false
+    }
+
+    private fun blank(r: Row, x: Int) = r.cp[x] == ' '.code && r.st[x] == Style.DEFAULT
+
+    /** Cells of [r] up to its last one with something in it (a coloured space counts). */
+    private fun contentLength(r: Row): Int {
+        var n = r.cp.size
+        while (n > 0 && blank(r, n - 1)) n--
+        return n
+    }
+
+    /**
+     * Reflow of the main screen and its history to [newCols] × [newRows]: logical lines (rows
+     * joined while `wrapped`) cut again at the new width, a wide character never split, and the
+     * cursor kept on the same cell of its line. The screen is the last rows, with the cursor in
+     * it; what does not fit goes to the history.
+     */
+    private fun reflow(newCols: Int, newRows: Int) {
+        val old = ArrayList<Row>(history.size + main.size).apply { addAll(history); addAll(main) }
+        val cursorAbs = history.size + cursorY
+        // Blank rows below the cursor are not content: they are where the next output goes.
+        var last = old.size - 1
+        while (last > cursorAbs && contentLength(old[last]) == 0) last--
+
+        val out = ArrayList<Row>()
+        var curRow = 0; var curX = 0
+        var i = 0
+        while (i <= last) {
+            // One logical line: its cells, and where the cursor is in it (or -1).
+            val cps = ArrayList<Int>(); val sts = ArrayList<Long>()
+            var cursorAt = -1
+            while (true) {
+                val r = old[i]
+                if (i == cursorAbs) cursorAt = cps.size + cursorX
+                val len = if (r.wrapped) r.cp.size else contentLength(r)
+                for (x in 0 until len) { cps.add(r.cp[x]); sts.add(r.st[x]) }
+                val more = r.wrapped && i < last
+                i++
+                if (!more) break
+            }
+            // The cursor past the end of the text (after a space the shell has not drawn yet).
+            while (cursorAt > cps.size) { cps.add(' '.code); sts.add(Style.DEFAULT) }
+            var row = Row(newCols); var x = 0
+            var k = 0
+            while (k < cps.size) {
+                val w = if (k + 1 < cps.size && cps[k + 1] == WIDE_TAIL) 2 else 1
+                if (cps[k] == WIDE_TAIL) { k++; continue }
+                if (x + w > newCols) { row.wrapped = true; out.add(row); row = Row(newCols); x = 0 }
+                if (k == cursorAt || (w == 2 && k + 1 == cursorAt)) { curRow = out.size; curX = x }
+                row.cp[x] = cps[k]; row.st[x] = sts[k]
+                if (w == 2) { row.cp[x + 1] = WIDE_TAIL; row.st[x + 1] = sts[k] }
+                x += w; k += w
+            }
+            if (cursorAt == cps.size) {
+                // At the end of the line: where the next character goes (the last column if it is full).
+                if (x >= newCols) { curRow = out.size; curX = newCols - 1 } else { curRow = out.size; curX = x }
+            }
+            out.add(row)
+        }
+        if (out.isEmpty()) out.add(Row(newCols))
+
+        val start = minOf(maxOf(0, out.size - newRows), curRow)
+        val screenRows = out.subList(start, minOf(out.size, start + newRows)).toMutableList()
+        while (screenRows.size < newRows) screenRows.add(Row(newCols))
+        history.clear()
+        for (r in out.subList(maxOf(0, start - scrollback), start)) history.addLast(r)
+        main = screenRows
+        screen = main
+
+        // The alternate screen is not on (a full-screen program would redraw it): cut or padded.
+        while (alt.size > newRows) alt.removeAt(alt.size - 1)
+        while (alt.size < newRows) alt.add(Row(newCols))
+        for (r in alt) r.resize(newCols)
+
+        tabs = BooleanArray(newCols) { if (it < tabs.size) tabs[it] else it % 8 == 0 }
+        cols = newCols; rows = newRows
+        top = 0; bottom = rows - 1
+        cursorY = (curRow - start).coerceIn(0, rows - 1); cursorX = curX.coerceIn(0, cols - 1)
         wrapPending = false
     }
 
