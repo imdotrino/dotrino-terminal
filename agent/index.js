@@ -52,6 +52,7 @@ const isDir = (p) => {
 export function makeHub (pty, opts = {}) {
   const shell = opts.shell || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
   return new ConsoleHub({
+    ...(opts.quietMs ? { quietMs: opts.quietMs } : {}),
     spawn: ({ cols, rows, cwd }) => pty.spawn(shell, [], {
       name: 'xterm-256color', cols, rows,
       cwd: cwd || os.homedir(),

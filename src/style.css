@@ -26,6 +26,7 @@
   --muted: #bfc8cf;       /* on-surface-variant */
   --line: #3f484e;        /* outline-variant */
   --ok: #7ad7c2;          /* secondary */
+  --busy: #f5c26b;        /* ámbar: una consola trabajando */
   --err: #ffb4ab;         /* error */
   color-scheme: dark;
 }
@@ -149,6 +150,18 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .sbtn { background: transparent; border: 0; color: var(--text); padding: 3px 0; width: 24px; border-radius: 4px; font-size: 13px; cursor: pointer; }
 .sbtn:hover { background: var(--line); }
 .sbtn.num.on { background: var(--brand); color: var(--on-brand); }
+/* Qué hace cada consola: trabajando (ámbar, latiendo) · terminó sin atender (verde, fijo). El
+   color va en un punto y en el borde, para que se lea también sobre la consola seleccionada. */
+.sbtn.num { position: relative; }
+.sbtn.num.busy { box-shadow: inset 0 0 0 1.5px var(--busy); }
+.sbtn.num.done { box-shadow: inset 0 0 0 1.5px var(--ok); }
+.sbtn.num.busy::after, .sbtn.num.done::after, .srow.item.busy .pick span::before, .srow.item.done .pick span::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+}
+.sbtn.num.busy::after, .sbtn.num.done::after { position: absolute; top: 1px; right: 1px; }
+.sbtn.num.busy::after, .srow.item.busy .pick span::before { background: var(--busy); animation: pulse 1s infinite; }
+.sbtn.num.done::after, .srow.item.done .pick span::before { background: var(--ok); }
+.srow.item.busy .pick span::before, .srow.item.done .pick span::before { display: inline-block; margin-right: 6px; vertical-align: middle; }
 /* ⤢ apagado se ve tenue; encendido, con el color de la marca: que se note el cambio. */
 .sbtn.pin { color: var(--muted); opacity: .7; display: inline-flex; align-items: center; justify-content: center; }
 .sbtn.pin.on { opacity: 1; color: var(--brand); background: var(--brand-soft); }

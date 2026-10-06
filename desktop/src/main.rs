@@ -119,6 +119,49 @@ struct ConsoleInfo {
     cols: u32,
     #[serde(default)]
     rows: u32,
+    /// `busy` (trabajando) o `idle`: lo dice el agente ≥ 0.17 (el título del programa, o su salida).
+    #[serde(default)]
+    activity: String,
+    /// Terminó, o pidió atención, y nadie ha entrado ni tecleado desde entonces (ms).
+    #[serde(default, rename = "doneAt")]
+    done_at: Option<u64>,
+}
+
+/// Qué hace una consola, para el color del panel.
+#[derive(Clone, Copy, PartialEq)]
+enum Act {
+    Idle,
+    Busy,
+    Done,
+}
+
+impl ConsoleInfo {
+    fn act(&self) -> Act {
+        if self.activity == "busy" {
+            Act::Busy
+        } else if self.done_at.is_some() {
+            Act::Done
+        } else {
+            Act::Idle
+        }
+    }
+}
+
+/// Ámbar = trabajando · verde = terminó sin atender. Los mismos de la PWA.
+const BUSY_COLOR: Color = Color::from_rgb(0.961, 0.761, 0.420);
+const DONE_COLOR: Color = Color::from_rgb(0.478, 0.843, 0.761);
+
+/// El botón de una consola en el panel, con el borde del color de lo que está haciendo.
+fn console_button(selected: bool, act: Act) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let mut s = if selected { side_selected(theme, status) } else { menu_button(theme, status) };
+        match act {
+            Act::Busy => s.border = Border::default().rounded(4.0).width(1.5).color(BUSY_COLOR),
+            Act::Done => s.border = Border::default().rounded(4.0).width(1.5).color(DONE_COLOR),
+            Act::Idle => {}
+        }
+        s
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1505,9 +1548,14 @@ impl App {
                 let b = button(centered(format!("{n}"), 12))
                     .width(24)
                     .padding([4, 0])
-                    .style(if is_mine { side_selected } else { menu_button })
+                    .style(console_button(is_mine, c.act()))
                     .on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
                 let b = self.console_menu(id, c.id.clone(), is_mine, container(b).center_x(Length::Fill).into());
+                let tip = match c.act() {
+                    Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
+                    Act::Done => format!("{tip} · {}", t("terminó", "finished")),
+                    Act::Idle => tip,
+                };
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
                 strip = strip.push(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right));
             }
@@ -1577,13 +1625,18 @@ impl App {
                 Some(size) if !is_mine && c.watchers.len() > 1 || c.size_by.as_ref().is_some_and(|b| b.pinned) => format!("{where_} · {size}"),
                 _ => where_,
             };
+            let where_ = match c.act() {
+                Act::Busy => format!("{where_} · {}", t("trabajando", "working")),
+                Act::Done => format!("{where_} · {}", t("terminó", "finished")),
+                Act::Idle => where_,
+            };
             // Con número: dos consolas con el mismo título (el prompt) se distinguen igual.
             let name = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { format!("{n} · {}", c.title) };
             let label = column![
                 text(format!("{}{name}", if is_mine { "● " } else { "" })).size(12),
                 text(where_).size(11).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) }),
             ];
-            let pick = button(label).width(Length::Fill).padding([4, 8]).style(if is_mine { side_selected } else { menu_button }).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
+            let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             items = items.push(self.console_menu(id, c.id.clone(), is_mine, entry_row));

@@ -71,6 +71,8 @@ const M = {
     size_row: (n, who, cols, rows) => `Tamaño de la ${n}: ${who} (${cols}×${rows})`,
     size_pinned: 'elegido a propósito',
     size_last: 'lo tiene la última pantalla que la abre',
+    act_busy: 'trabajando',
+    act_done: 'terminó',
     pinned_now: (n, cols, rows) => `Consola ${n}: usa el tamaño de esta pantalla (${cols}×${rows}). Las demás la ven a ese tamaño.`,
     unpinned_now: (n) => `Consola ${n}: ya no usa el tamaño de esta pantalla. Lo tiene la última pantalla que la abre.`,
     size_label: 'tamaño',
@@ -139,6 +141,8 @@ const M = {
     size_row: (n, who, cols, rows) => `Size of ${n}: ${who} (${cols}×${rows})`,
     size_pinned: 'chosen on purpose',
     size_last: 'set by the last screen that opens it',
+    act_busy: 'working',
+    act_done: 'finished',
     pinned_now: (n, cols, rows) => `Console ${n}: uses this screen's size (${cols}×${rows}). Other screens show it at that size.`,
     unpinned_now: (n) => `Console ${n}: no longer uses this screen's size. The last screen that opens it sets it.`,
     size_label: 'size',
@@ -440,6 +444,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     return b?.device && b.device === myDevice() ? t('size_here') : b?.origin === 'local' ? t('size_window') : t('size_device')
   }
 
+  /**
+   * El estado de una consola, que da el agente (≥ 0.17): `busy` = está trabajando (un agente de
+   * IA lo dice en su título; para lo demás, salida sostenida); `doneAt` = terminó, o pidió
+   * atención, y nadie ha entrado ni tecleado desde entonces.
+   */
+  const actClass = (c) => c.activity === 'busy' ? ' busy' : c.doneAt ? ' done' : ''
+  const actText = (c) => c.activity === 'busy' ? ` · ${t('act_busy')}` : c.doneAt ? ` · ${t('act_done')}` : ''
+
   function renderSide (s) {
     const list = s.list || []
     const cur = current(s)
@@ -453,14 +465,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}" title="${esc(c.title || String(numOf(c, i)))}">${numOf(c, i)}</button>`).join('')}`
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((c.title || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
         ${cur ? `<div class="srow"><span class="grow">${esc(t('size_row', cur.n, sizeWho(cur.c.sizeBy), cur.c.cols, cur.c.rows))}<small>${cur.c.sizeBy?.pinned ? t('size_pinned') : t('size_last')}</small></span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
-        ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}" data-id="${esc(c.id)}">
-          <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(shortTitle(c.title)) : ''}</span><small>${esc(where(s, c))}</small></button>
+        ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}">
+          <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(shortTitle(c.title)) : ''}</span><small>${esc(where(s, c) + actText(c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
         </div>`).join('')}`
     }

@@ -24,10 +24,37 @@ export const SCROLLBACK = 1000
 /** Tamaño máximo de cada trozo de la repetición: el proxio corta los mensajes a 1 MB. */
 export const REPLAY_CHUNK = 64 * 1024
 
+// ¿ESTÁ TRABAJANDO? Lo que el panel enseña con un color por consola.
+//  · Si el programa lo dice en el TÍTULO, manda eso. Claude Code lo hace (medido el 2026-10-06
+//    con la 2.1.291): «✳ tema» esperando, «◐ tema» / «◑ tema» alternando mientras trabaja.
+//  · Si no lo dice (otro agente, un comando): salida SOSTENIDA que no es eco de lo tecleado es
+//    trabajo, y el silencio es que terminó.
+// «Terminó» (`doneAt`) queda marcado hasta que alguien entra a la consola o teclea en ella: es
+// lo que avisa de que un agente acabó mientras mirabas otra cosa. Una campana (BEL) lo marca igual.
+const BUSY_GLYPHS = /^[\u25d0-\u25d3\u25f4-\u25f7\u2800-\u28ff]/      // ◐◑◒◓ ◴◵◶◷ y los girasoles braille
+const IDLE_GLYPHS = /^\u2733/                                           // ✳
+/** Lo que dice el título: true (trabajando), false (esperando) o null (el programa no lo dice). */
+export function titleSignal (title) {
+  const t = String(title || '')
+  if (BUSY_GLYPHS.test(t)) return true
+  if (IDLE_GLYPHS.test(t)) return false
+  return null
+}
+const ECHO_MS = 400        // salida tan pegada a una tecla es su eco, no trabajo
+const SUSTAIN_MS = 1500    // salida propia durante este rato = está trabajando
+const GAP_MS = 1000        // un hueco mayor que este corta la racha: no era salida seguida
+// EL RESPALDO, para quien no lo dice en el título (OpenCode, un comando cualquiera): si la
+// pantalla no cambia en este rato, la consola está quieta. Un minuto por defecto (dueño,
+// 2026-10-06): un programa que piensa en silencio unos segundos no debe darse por terminado.
+// `DOTRINO_TERMINAL_IDLE_SECONDS` lo cambia; quien lo dice en el título no espera a esto.
+export const QUIET_MS = Math.max(1, Number(process.env.DOTRINO_TERMINAL_IDLE_SECONDS) || 60) * 1000
+const MIN_TASK_MS = 3000   // menos que esto no fue «una tarea»: no se marca como terminada
+
 const randomId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
 
 class Console {
-  constructor ({ id, n, pty, cols, rows, origin }) {
+  constructor ({ id, n, pty, cols, rows, origin, quietMs = QUIET_MS }) {
+    this.quietMs = quietMs
     this.id = id
     this.n = n                        // su número, fijo mientras viva (ver ConsoleHub.create)
     this.pty = pty
@@ -49,7 +76,44 @@ class Console {
     this.screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
     this.serializer = new SerializeAddon()
     this.screen.loadAddon(this.serializer)
-    this.screen.onTitleChange((t) => { this.title = String(t).slice(0, 200); this._meta() })
+    this.busy = false                 // ¿trabajando ahora?
+    this.busySince = 0
+    this.doneAt = null                // terminó (o pidió atención) y nadie lo ha atendido
+    this.lastInput = 0
+    this._titleSays = null            // lo último que dijo el título (true/false), o null si no lo dice
+    this._outSince = 0                // desde cuándo hay salida propia seguida
+    this._lastOwnOut = 0
+    this._quiet = null
+    this.screen.onTitleChange((t) => {
+      this.title = String(t).slice(0, 200)
+      const says = titleSignal(this.title)
+      const before = this._titleSays
+      this._titleSays = says
+      // Cuando el programa lo dice, manda él; si DEJA de decirlo (salió), ya no está trabajando.
+      // Un título que nunca dijo nada (el de la shell) no toca lo que se dedujo de la salida.
+      let changed = false
+      if (says !== null) changed = this._setBusy(says)
+      else if (before !== null) changed = this._setBusy(false)
+      if (!changed) this._meta()
+    })
+    this.screen.onBell(() => { this.doneAt = Date.now(); this._meta() })
+  }
+
+  /** Cambia «trabajando». Al dejar de trabajar tras una tarea de verdad, queda como terminada. */
+  _setBusy (v) {
+    if (v === this.busy) return false
+    const now = Date.now()
+    this.busy = v
+    if (v) { this.busySince = now; this.doneAt = null } else if (now - this.busySince >= MIN_TASK_MS) this.doneAt = now
+    this._meta()
+    return true
+  }
+
+  /** Alguien atendió la consola (entró o tecleó): ya no está «terminada sin atender». */
+  _attended () {
+    if (this.doneAt == null) return
+    this.doneAt = null
+    this._meta()
   }
 
   /** Avisa a todos los que miran de que cambió quién mira o el título. */
@@ -60,12 +124,26 @@ class Console {
 
   /** Lo que sale de la shell: a la pantalla sin pantalla y a quien esté mirando. */
   _out (data) {
-    this.lastActive = Date.now()
+    const now = Date.now()
+    this.lastActive = now
+    // Sin señal en el título: salida propia y sostenida = trabajando; el silencio lo apaga.
+    if (this._titleSays === null) {
+      if (now - this.lastInput > ECHO_MS) {
+        // SOSTENIDA = seguida: dos ráfagas sueltas (el prompt que se redibuja al cambiar el
+        // tamaño, y otra cosa segundos después) no son un programa trabajando.
+        if (!this._outSince || now - this._lastOwnOut > GAP_MS) this._outSince = now
+        this._lastOwnOut = now
+        if (now - this._outSince >= SUSTAIN_MS) this._setBusy(true)
+      }
+      clearTimeout(this._quiet)
+      this._quiet = setTimeout(() => { this._outSince = 0; if (this._titleSays === null) this._setBusy(false) }, this.quietMs)
+      this._quiet.unref?.()
+    }
     this.screen.write(data)
     for (const v of this.viewers) v.onOut(data)
   }
 
-  write (data) { this.lastActive = Date.now(); this.pty.write(data) }
+  write (data) { this.lastActive = this.lastInput = Date.now(); this._attended(); this.pty.write(data) }
 
   resize (cols, rows) {
     if (!cols || !rows) return
@@ -95,6 +173,7 @@ class Console {
         const snapshot = this.serializer.serialize()
         this.viewers.delete(buffering)
         this.viewers.add(viewer)
+        this.doneAt = null                // quien entra, la atiende (el `_meta` de abajo lo cuenta)
         resolve(snapshot + pending.join(''))
         this._meta()
       })
@@ -151,7 +230,7 @@ class Console {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
     const d = this.decider()
     const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null, pinned: !!d && d === this.pinnedViewer() } : null
-    return { id: this.id, n: this.n, sizeBy, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 
@@ -164,8 +243,9 @@ export class ConsoleHub {
    * @param {{ spawn:(opts:{cols:number,rows:number,cwd:string|null})=>any }} opts
    *   `spawn` lanza la shell (un PTY con `onData`, `onExit`, `write`, `resize`, `kill`).
    */
-  constructor ({ spawn }) {
+  constructor ({ spawn, quietMs = QUIET_MS }) {
     this._spawn = spawn
+    this._quietMs = quietMs
     this.consoles = new Map()
   }
 
@@ -178,10 +258,11 @@ export class ConsoleHub {
     let n = 1
     while (used.has(n)) n++
     const pty = this._spawn({ cols, rows, cwd })
-    const c = new Console({ id, n, pty, cols, rows, origin })
+    const c = new Console({ id, n, pty, cols, rows, origin, quietMs: this._quietMs })
     pty.onData((d) => c._out(d))
     pty.onExit(({ exitCode }) => {
       c.exited = true
+      clearTimeout(c._quiet)
       this.consoles.delete(id)
       // A cada pantalla se le dice si la consola la cerró OTRA (`byOther`): la shell que termina
       // sola, o la que cierra la propia pantalla, no lo es. Quien mira decide con eso si se va
