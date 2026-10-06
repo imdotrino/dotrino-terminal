@@ -41,7 +41,14 @@ data class ConsoleInfo(
     /** A window of the machine itself is showing it. */
     val watchedLocally: Boolean,
     val sizeBy: SizeBy?, val lastActive: Long,
-)
+    /** Something is working in it now (the agent says it, ≥ 0.17: its title or screen keeps changing). */
+    val busy: Boolean = false,
+    /** It finished (or rang the bell) and nobody has looked at it yet. */
+    val doneAt: Long? = null,
+) {
+    enum class Activity { IDLE, BUSY, DONE }
+    val activity: Activity get() = if (busy) Activity.BUSY else if (doneAt != null) Activity.DONE else Activity.IDLE
+}
 
 /** What a [Consoles.Tab] needs from its session. An interface so the protocol can be tested without a network. */
 interface Channel {
@@ -71,6 +78,7 @@ fun consoleOf(o: JsonObject): ConsoleInfo? {
         (o["watchers"] as? JsonArray)?.size ?: 0,
         (o["watchers"] as? JsonArray).orEmpty().any { ((it as? JsonObject)?.get("origin") as? JsonPrimitive)?.content == "local" },
         by, (o["lastActive"] as? JsonPrimitive)?.longOrNull ?: 0,
+        str("activity") == "busy", (o["doneAt"] as? JsonPrimitive)?.longOrNull,
     )
 }
 
@@ -240,12 +248,15 @@ object Consoles {
         var onBell: () -> Unit = {}
         /** Something the panel or the tab strip shows changed. */
         var onChange: () -> Unit = {}
+        /** Coming back, its console was gone on the machine (it restarted): a new one was opened instead. */
+        var onGone: () -> Unit = {}
 
         private var channel: Channel? = null
         private var off: (() -> Unit)? = null
         private var offError: (() -> Unit)? = null
         private var fresh = true                                      // the next replay starts a clean screen
         private var choosing = false                                  // waiting for the list to pick a free console
+        private var resuming = false                                  // coming back to the console it had, over a new session
 
         init {
             // What the emulator answers by itself (a cursor report) goes back as typed input.
@@ -265,6 +276,7 @@ object Consoles {
             screenCols = cols; screenRows = rows
             off = ch.onMessage { m -> post { handle(m) } }
             offError = ch.onError { e -> post { if (state == State.OPEN || state == State.CONNECTING) lostWith(e.message) } }
+            resuming = resume != null
             if (resume != null) send("attach", resume)
             else { choosing = true; list() }                          // a free console if there is one
         }
@@ -298,7 +310,7 @@ object Consoles {
                 "attached" -> {
                     consoleId = (m["id"] as? JsonPrimitive)?.content
                     (m["console"] as? JsonObject)?.let(::consoleOf)?.let { upsert(it); follow(it) }
-                    state = State.OPEN; note = null
+                    state = State.OPEN; note = null; resuming = false
                     list(); onChange()
                 }
                 "meta" -> {
@@ -310,6 +322,8 @@ object Consoles {
                 "exit" -> { state = State.EXITED; note = (m["code"] as? JsonPrimitive)?.content; list(); onChange() }
                 "fail" -> {
                     val code = (m["code"] as? JsonPrimitive)?.content
+                    // Coming back after the machine restarted: its consoles died with it. A new one, and it is said (as the PWA).
+                    if (code == "no-console" && resuming) { resuming = false; consoleId = null; send("open", null); onGone(); return }
                     // The console is gone on the machine (it was closed there, or the agent restarted).
                     if (code == "no-console") { state = State.EXITED; note = code } else { state = State.FAILED; note = (m["message"] as? JsonPrimitive)?.content ?: code }
                     list(); onChange()

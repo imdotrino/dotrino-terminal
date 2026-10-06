@@ -62,6 +62,9 @@ class DemoConsolesActivity : Activity() {
         private fun info(c: C) = buildJsonObject {
             put("id", c.id); put("n", c.n); put("title", c.title); put("origin", "local")
             put("cols", c.cols); put("rows", c.rows); put("lastActive", System.currentTimeMillis())
+            // 2 is working and 3 finished without anyone looking, to see the panel's colours.
+            if (c.n == 2) put("activity", "busy") else put("activity", "idle")
+            if (c.n == 3 && current !== c) put("doneAt", System.currentTimeMillis())
             val watchers = buildJsonArray {
                 if (c.window) add(buildJsonObject { put("origin", "local"); put("tag", "desktop-1") })
                 if (current === c) add(buildJsonObject { put("origin", "remote"); put("device", ME) })

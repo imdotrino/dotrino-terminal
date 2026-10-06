@@ -125,4 +125,31 @@ class TabTest {
         assertEquals("vim main.rs", shortTitle("vim main.rs"))
         assertNull(consoleOf(buildJsonObject { put("n", 1) }))
     }
+
+    @Test fun activityIsWhatTheAgentSays() {
+        val base = console("a", 1, 50, 20)
+        assertEquals(ConsoleInfo.Activity.IDLE, consoleOf(base)!!.activity)
+        assertEquals(ConsoleInfo.Activity.BUSY, consoleOf(JsonObject(base + ("activity" to JsonPrimitive("busy"))))!!.activity)
+        assertEquals(ConsoleInfo.Activity.DONE, consoleOf(JsonObject(base + ("activity" to JsonPrimitive("idle")) + ("doneAt" to JsonPrimitive(1759700000000))))!!.activity)
+        // An agent older than 0.17 says nothing: idle, not an error.
+        assertNull(consoleOf(base)!!.doneAt)
+    }
+
+    @Test fun comingBackToAConsoleThatIsGoneOpensANewOneAndSaysIt() {
+        val t = Consoles.Tab(Machine(other, "PC"), me) { it() }
+        val ch = FakeChannel()
+        var gone = 0
+        t.onGone = { gone++ }
+        t.bind(ch, 50, 20, "old")                                     // over a new session, back to the console it had
+        assertEquals("old", (ch.last("attach")!!["id"] as JsonPrimitive).content)
+        ch.agent(buildJsonObject { put("type", "fail"); put("code", "no-console"); put("message", "no such console") })
+        assertEquals("open", ch.types().last())
+        assertEquals(1, gone)
+        ch.agent(attached(console("new", 1, 50, 20, watchers = 1, by = me)))
+        assertEquals(Consoles.Tab.State.OPEN, t.state); assertEquals("new", t.consoleId)
+        // Picking, by hand, a console that is gone is still said as gone: nothing is opened behind the user's back.
+        t.switchTo("stale")
+        ch.agent(buildJsonObject { put("type", "fail"); put("code", "no-console") })
+        assertEquals(Consoles.Tab.State.EXITED, t.state); assertEquals(1, gone)
+    }
 }

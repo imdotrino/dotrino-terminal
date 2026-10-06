@@ -11,6 +11,7 @@
     <color name="t_accent_soft">#004C6B</color> <!-- primary-container -->
     <color name="t_on_accent">#003549</color>   <!-- on-primary -->
     <color name="t_online">#7AD7C2</color>      <!-- secondary -->
+    <color name="t_busy">#F5C26B</color>        <!-- trabajando (el ámbar de la PWA) -->
     <color name="t_danger">#FFB4AB</color>      <!-- error -->
     <!-- Los componentes del ecosistema (dotrino-native) con la misma paleta. -->
     <color name="dotrino_bg">#1C2022</color>

@@ -266,7 +266,7 @@ class MainActivity : Activity() {
     }
 
     private fun bindOutput() {
-        for (tab in Consoles.tabs) { tab.onOutput = {}; tab.onBell = {} }
+        for (tab in Consoles.tabs) { tab.onOutput = {}; tab.onBell = {}; tab.onGone = { toast(t("tab.goneNew")) } }
         active?.onOutput = { view?.onOutput() }
     }
 
@@ -341,6 +341,18 @@ class MainActivity : Activity() {
         scope.launch { kotlinx.coroutines.delay(300); tab.list() }
     }
 
+    private fun actColor(c: ConsoleInfo): Int? = when (c.activity) {
+        ConsoleInfo.Activity.BUSY -> R.color.t_busy
+        ConsoleInfo.Activity.DONE -> R.color.t_online
+        ConsoleInfo.Activity.IDLE -> null
+    }
+
+    private fun actText(c: ConsoleInfo): String = when (c.activity) {
+        ConsoleInfo.Activity.BUSY -> " · " + t("act.busy")
+        ConsoleInfo.Activity.DONE -> " · " + t("act.done")
+        ConsoleInfo.Activity.IDLE -> ""
+    }
+
     private fun renderPanel() {
         val side = panel ?: return
         val tab = active ?: return
@@ -356,10 +368,17 @@ class MainActivity : Activity() {
         side.addView(sizeButton(tab), LinearLayout.LayoutParams(px(30), px(30)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = px(2); bottomMargin = px(4) })
         for (c in tab.consoles) {
             val on = c.id == tab.consoleId
-            side.addView(label("${c.n}", 13f, col(if (on) R.color.t_on_accent else R.color.t_text), bold = on).apply {
-                tag = "console-${c.n}"; contentDescription = c.title.ifBlank { t("console.n", "n" to c.n) }
+            // Amber while something works in it, green when it finished and nobody looked (as the PWA's panel).
+            val act = actColor(c)
+            side.addView(label("${c.n}", 13f, col(if (on) R.color.t_on_accent else act ?: R.color.t_text), bold = on || act != null).apply {
+                tag = "console-${c.n}"; contentDescription = c.title.ifBlank { t("console.n", "n" to c.n) } + actText(c)
                 gravity = Gravity.CENTER; setPadding(0, px(5), 0, px(5))
-                background = if (on) rounded(col(R.color.t_accent), px(6)) else null
+                background = when {
+                    on && act != null -> rounded(col(R.color.t_accent), px(6), px(2), col(act))
+                    on -> rounded(col(R.color.t_accent), px(6))
+                    act != null -> rounded(col(R.color.t_panel), px(6), px(1), col(act))
+                    else -> null
+                }
                 setOnClickListener { tab.switchTo(c.id) }
                 setOnLongClickListener { consoleActions(tab, c); true }
             }, LinearLayout.LayoutParams(px(30), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(3) })
@@ -405,7 +424,7 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.VERTICAL; setPadding(px(8), px(5), px(4), px(5))
                     val name = (if (on) "● " else "") + "${c.n}" + if (c.title.isNotBlank()) " · " + shortTitle(c.title) else ""
                     addView(label(name, 13f).apply { maxLines = 1 })
-                    addView(label(where(tab, c), 11f, col(R.color.t_muted)))
+                    addView(label(where(tab, c) + actText(c), 11f, col(actColor(c) ?: R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id); openDrawer(false) }
                     setOnLongClickListener { consoleActions(tab, c); true }
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
