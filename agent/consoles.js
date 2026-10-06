@@ -183,7 +183,10 @@ export class ConsoleHub {
     pty.onExit(({ exitCode }) => {
       c.exited = true
       this.consoles.delete(id)
-      for (const v of c.viewers) v.onExit(exitCode)
+      // A cada pantalla se le dice si la consola la cerró OTRA (`byOther`): la shell que termina
+      // sola, o la que cierra la propia pantalla, no lo es. Quien mira decide con eso si se va
+      // (una ventana cuya shell hizo `exit`) o si sigue (se la cerraron desde otro aparato).
+      for (const v of c.viewers) v.onExit(exitCode, { byOther: c.killed === true && c.killedBy !== v })
       c.viewers.clear()
       try { c.screen.dispose() } catch (_) {}
     })
@@ -195,9 +198,12 @@ export class ConsoleHub {
 
   list () { return [...this.consoles.values()].map((c) => c.info()).sort((a, b) => a.n - b.n) }
 
-  kill (id) {
+  /** Cierra una consola. `by`: la pantalla (viewer) que lo pide, para decirle a las DEMÁS que no fueron ellas. */
+  kill (id, by = null) {
     const c = this.consoles.get(id)
     if (!c) return false
+    c.killed = true
+    c.killedBy = by
     try { c.pty.kill() } catch (_) {}
     return true
   }

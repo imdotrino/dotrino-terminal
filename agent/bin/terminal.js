@@ -319,10 +319,13 @@ function interactive (conn, first, dir) {
   // primeros milisegundos (antes de pasar a crudo), y entonces todo se pintaba corrido: el cursor
   // acababa en la columna 0 o encima del prompt. Por eso, antes de la primera, en limpio.
   let clean = false
+  let switching = false                // se pidió pasar a otra consola y aún no contestó
+  let recovering = false               // falló el cambio: se está repintando la que había
   conn.on('message', (m) => {
     if (m.type === 'replay' && !clean) { clean = true; out.write('\x1b[H\x1b[2J') }
     if (m.type === 'out' || m.type === 'replay') { out.write(filter(m.data)); return }
     if (m.type === 'attached') {
+      switching = false; recovering = false
       consoleId = m.id
       onInfo(m.console)
       // Ya hay consola: va lo que se tecleó mientras tanto, en orden y de una vez.
@@ -331,8 +334,32 @@ function interactive (conn, first, dir) {
       return
     }
     if (m.type === 'meta') { onInfo(m.console); return }
-    if (m.type === 'exit') { finish(m.code || 0); return }
-    if (m.type === 'fail') { finish(1, `dotrino-terminal: ${m.message} (${m.code})`) }
+    if (m.type === 'exit') {
+      // LA CERRÓ OTRA PANTALLA (el teléfono, la web, el panel de otra ventana): esta ventana no
+      // se va — nadie aquí pidió cerrarla, y cerrarla dejaba al usuario sin ventana y sin forma
+      // de abrir otra consola. Se abre una nueva y se dice. Si la shell terminó sola (`exit`) o
+      // la cerró esta misma ventana, la ventana se cierra, como cualquier terminal.
+      if (m.closedBy === 'other') {
+        consoleId = null
+        switchTo({ type: 'open', cwd: first.cwd || path.resolve(process.cwd()) })
+        out.write(`\x1b[2m${t('Otra pantalla cerró esta consola. Esta es una nueva.', 'Another screen closed this console. This is a new one.')}\x1b[0m\r\n`)
+        return
+      }
+      finish(m.code || 0)
+      return
+    }
+    if (m.type === 'fail') {
+      // FALLÓ UN CAMBIO DE CONSOLA (la que se pidió ya no existe: el panel de la app iba un
+      // instante por detrás). El agente rechaza ANTES de soltar la actual, así que esta ventana
+      // sigue en la suya: se vuelve a pintar y se sigue. Terminar aquí cerraba la ventana entera
+      // por elegir una entrada caducada. Solo es fatal si falla al arrancar, o al repintar.
+      if (switching && consoleId && !recovering) {
+        switching = false; recovering = true
+        conn.send({ type: 'attach', id: consoleId, ...size(), ...tag() })
+        return
+      }
+      finish(1, `dotrino-terminal: ${m.message} (${m.code})`)
+    }
   })
   conn.on('close', () => {
     // Si se fue porque el perfil cambió de nombre (`rename`), no es un error: se dice y se sale.
@@ -350,6 +377,7 @@ function interactive (conn, first, dir) {
   // repetición de la otra consola no se pinte encima. Lo tecleado mientras tanto se guarda.
   const switchTo = (msg) => {
     ready = false
+    switching = true
     out.write('\x1bc')                 // RIS: pantalla, historial y modos, de cero
     conn.send({ ...msg, ...size(), ...tag() })
   }

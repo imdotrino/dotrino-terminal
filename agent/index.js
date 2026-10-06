@@ -16,7 +16,7 @@
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id }
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
- *                     { type:'exit', code } · { type:'fail', code, message }
+ *                     { type:'exit', code, closedBy? } · { type:'fail', code, message }
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -87,7 +87,8 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
     origin,
     device: session.device || null,
     onOut: (data) => { session.send({ type: 'out', data }) },
-    onExit: (code) => { current = null; owned = null; session.send({ type: 'exit', code }) },
+    // `closedBy: 'other'`: la cerró otra pantalla (no esta, ni la shell por su cuenta).
+    onExit: (code, why) => { current = null; owned = null; session.send({ type: 'exit', code, ...(why?.byOther ? { closedBy: 'other' } : {}) }) },
     onMeta: (info) => { session.send({ type: 'meta', console: info }) }
   }
   const release = () => { if (current) { current.detach(viewer); current = null } }
@@ -139,13 +140,13 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
     if (msg.type === 'resize') { takeSize(msg); current?.sizeFrom(viewer); return }
     // ⤢ «Esta pantalla manda en el tamaño» (on) o soltarlo (off).
     if (msg.type === 'pin') { current?.pin(viewer, !!msg.on); return }
-    if (msg.type === 'close') { if (current) hub.kill(current.id); return }
-    if (msg.type === 'kill') { if (!hub.kill(msg.id)) fail('no-console', 'that console no longer exists') }
+    if (msg.type === 'close') { if (current) hub.kill(current.id, viewer); return }
+    if (msg.type === 'kill') { if (!hub.kill(msg.id, viewer)) fail('no-console', 'that console no longer exists') }
   })
   session.on('close', () => {
     const mine = owned && owned === current ? owned : null
     release()
-    if (mine) hub.kill(mine.id)
+    if (mine) hub.kill(mine.id, viewer)
   })
 }
 

@@ -38,6 +38,13 @@ fn help_url() -> &'static str {
 }
 
 fn main() -> iced::Result {
+    // Lo que la app no dice en pantalla queda en su registro: por qué se cerró una ventana, y un
+    // fallo del programa con su sitio. Sin esto una ventana que desaparece no deja nada que leer.
+    std::panic::set_hook(Box::new(|info| {
+        log(&format!("panic: {info}"));
+        eprintln!("{info}");
+    }));
+    log(&format!("start {}", env!("CARGO_PKG_VERSION")));
     iced::daemon(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
@@ -202,6 +209,10 @@ struct App {
     tracked: std::collections::HashSet<(String, String)>,
     /// Las que la persona dejó en segundo plano (clic derecho en el panel): sobreviven a la app.
     background: std::collections::HashSet<(String, String)>,
+    /// Consolas que se mandaron CERRAR y el agente aún no confirma: fuera del panel y sin poder
+    /// elegirse. Entre pedir el cierre y que ocurra hay un instante (la ventana pasa antes a otra
+    /// consola); volver a entrar en ella en ese hueco hacía que el cierre se llevara la ventana.
+    dying: std::collections::HashSet<String>,
     next_tag: u64,
 }
 
@@ -522,6 +533,25 @@ fn save_background(set: &std::collections::HashSet<(String, String)>) {
     let _ = std::fs::write(file, text);
 }
 
+/// El registro de la app: `~/.config/dotrino-terminal/desktop.log`. Una línea por hecho, con la
+/// hora. Se recorta al pasar de 256 KB (se queda la mitad más reciente).
+fn log(msg: &str) {
+    use std::io::Write;
+    let Some(base) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))) else { return };
+    let dir = base.join("dotrino-terminal");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("desktop.log");
+    if std::fs::metadata(&file).map(|m| m.len() > 256 * 1024).unwrap_or(false) {
+        if let Ok(old) = std::fs::read(&file) {
+            let _ = std::fs::write(&file, &old[old.len() / 2..]);
+        }
+    }
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
+        let _ = writeln!(f, "{ts} {msg}");
+    }
+}
+
 /// Dónde se recuerda el último perfil elegido en la app (una preferencia, nada más).
 fn last_profile_file() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
@@ -550,7 +580,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), tracked: Default::default(), background: load_background(), next_tag: 0 };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), tracked: Default::default(), background: load_background(), dying: Default::default(), next_tag: 0 };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -770,7 +800,7 @@ impl App {
         }
         let list = self.profile_dir(profile).and_then(|dir| agent_list(&dir))?;
         // Las libres normales primero; si no hay, una de segundo plano (sigue siéndolo).
-        let free: Vec<ConsoleInfo> = list.into_iter().filter(|c| c.watchers.is_empty()).collect();
+        let free: Vec<ConsoleInfo> = list.into_iter().filter(|c| c.watchers.is_empty() && !self.dying.contains(&c.id)).collect();
         let bg = |c: &ConsoleInfo| self.background.contains(&(profile.to_string(), c.id.clone()));
         free.iter().find(|c| !bg(c)).or_else(|| free.first()).map(|c| c.id.clone())
     }
@@ -792,6 +822,12 @@ impl App {
         for p in profiles {
             let list = self.profile_dir(&p).and_then(|dir| agent_list(&dir)).unwrap_or_default();
             fresh.insert(p, list);
+        }
+        // Lo que se mandó cerrar no vuelve al panel; y cuando el agente ya no lo tiene, se olvida.
+        let alive_now: std::collections::HashSet<String> = fresh.values().flatten().map(|c| c.id.clone()).collect();
+        self.dying.retain(|id| alive_now.contains(id));
+        for list in fresh.values_mut() {
+            list.retain(|c| !self.dying.contains(&c.id));
         }
         self.consoles = fresh;
         // Lo que muestran las ventanas (abierto desde esta máquina) queda a cargo de la app; lo que
@@ -950,6 +986,7 @@ impl App {
     /// La TTY de la ventana terminó.
     fn ended(&mut self, id: window::Id) -> Task<Message> {
         let Some(win) = self.windows.get(&id) else { return Task::none() };
+        log(&format!("client ended: window {} profile {:?} pending {}", win.tag, win.profile, win.pending.is_some()));
         match &win.mode {
             // La shell salió, o se soltó la consola: la ventana se va, como cualquier terminal.
             // Salvo que su perfil haya cambiado de nombre (`dotrino-terminal rename` desde esta
@@ -1164,6 +1201,24 @@ impl App {
                 if self.mine(id).as_deref() == Some(cid.as_str()) {
                     return self.focus(id);
                 }
+                if self.dying.contains(&cid) {
+                    return self.focus(id);
+                }
+                // El panel puede ir un instante por detrás del agente (se acaba de cerrar esa
+                // consola): se le pregunta AHORA. Si ya no existe, no se cambia a nada: se
+                // refresca el panel y la ventana sigue en la suya.
+                let exists = self
+                    .windows
+                    .get(&id)
+                    .and_then(|w| w.profile.clone())
+                    .and_then(|p| self.profile_dir(&p))
+                    .and_then(|dir| agent_list(&dir))
+                    .is_some_and(|l| l.iter().any(|c| c.id == cid));
+                if !exists {
+                    log(&format!("show-console: {cid} is gone; panel refreshed"));
+                    self.poll_consoles();
+                    return self.focus(id);
+                }
                 self.switch_to(id, Pending::Attach(cid))
             }
             Message::NewConsole(id) => self.switch_to(id, Pending::New),
@@ -1174,10 +1229,17 @@ impl App {
                 self.open_window_on(profile, cwd, Some(cid)).1
             }
             Message::KillConsole(id, cid) => {
+                // ¿Es la de esta ventana? Se pregunta ANTES de sacarla del panel: «la mía» se
+                // lee de esa misma lista.
+                let is_mine = self.mine(id).as_deref() == Some(cid.as_str());
+                self.dying.insert(cid.clone());
+                for list in self.consoles.values_mut() {
+                    list.retain(|c| c.id != cid);
+                }
                 // Si es la de esta ventana, la ventana no se cierra: PRIMERO pasa a otra consola
                 // abierta (o a una nueva) y luego se mata la vieja; al revés, el cliente vería
                 // terminar su consola y la ventana se cerraría.
-                if self.mine(id).as_deref() == Some(cid.as_str()) {
+                if is_mine {
                     let other = self
                         .windows
                         .get(&id)
@@ -1193,8 +1255,12 @@ impl App {
                 if let Some(dir) = self.windows.get(&id).and_then(|w| w.profile.clone()).and_then(|p| self.profile_dir(&p)) {
                     agent_send(&dir, &serde_json::json!({ "type": "kill", "id": cid }));
                 }
-                self.poll_consoles();
-                self.focus(id)
+                // Fuera del panel YA: el agente tarda un instante en cerrarla, y preguntarle en
+                // este mismo momento la devolvía — quedaba una entrada de una consola muerta.
+                for list in self.consoles.values_mut() {
+                    list.retain(|c| c.id != cid);
+                }
+                Task::batch([later(300, Message::Poll), self.focus(id)])
             }
             Message::Help => {
                 let _ = open::that_detached(help_url());

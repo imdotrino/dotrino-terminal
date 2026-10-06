@@ -182,3 +182,31 @@ test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (⤢) o el último qu
     assert.equal(sizeOf(id), '130x40', 'y el teléfono no se lo quita')
   } finally { h.killAll() }
 })
+
+test('quien cierra una consola: las DEMÁS pantallas saben que no fueron ellas (closedBy)', async () => {
+  const h = hub()
+  try {
+    const exitOf = (s) => s.sent.find((p) => p.type === 'exit')
+    // La ventana del PC abre una consola; el teléfono la mira y la cierra.
+    const pc = fakeSession(); serveSession(pc, h, { origin: 'local' })
+    pc.deliver({ type: 'open', cols: 80, rows: 24 })
+    await until(() => pc.sent.some((p) => p.type === 'attached'))
+    const id = pc.sent.find((p) => p.type === 'attached').id
+    const tel = fakeSession(); tel.device = 'TEL'; serveSession(tel, h, { origin: 'remote' })
+    tel.deliver({ type: 'attach', id, cols: 40, rows: 20 })
+    await until(() => tel.sent.some((p) => p.type === 'attached'))
+    tel.deliver({ type: 'kill', id })
+    await until(() => exitOf(pc) && exitOf(tel))
+    assert.equal(exitOf(pc).closedBy, 'other', 'a la ventana se la cerró otra pantalla')
+    assert.equal(exitOf(tel).closedBy, undefined, 'el teléfono la cerró él mismo')
+
+    // La shell que termina sola (exit) no es «otra pantalla» para nadie.
+    const w = fakeSession(); serveSession(w, h, { origin: 'local' })
+    w.deliver({ type: 'open', cols: 80, rows: 24 })
+    await until(() => w.sent.some((p) => p.type === 'attached'))
+    w.deliver({ type: 'input', data: 'exit\r' })
+    await until(() => exitOf(w))
+    assert.equal(exitOf(w).closedBy, undefined)
+  } finally { h.killAll() }
+})
+
