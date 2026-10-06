@@ -24,30 +24,19 @@ export const SCROLLBACK = 1000
 /** Tamaño máximo de cada trozo de la repetición: el proxio corta los mensajes a 1 MB. */
 export const REPLAY_CHUNK = 64 * 1024
 
-// ¿ESTÁ TRABAJANDO? Lo que el panel enseña con un color por consola.
-//  · Si el programa lo dice en el TÍTULO, manda eso. Claude Code lo hace (medido el 2026-10-06
-//    con la 2.1.291): «✳ tema» esperando, «◐ tema» / «◑ tema» alternando mientras trabaja.
-//  · Si no lo dice (otro agente, un comando): salida SOSTENIDA que no es eco de lo tecleado es
-//    trabajo, y el silencio es que terminó.
+// ¿ESTÁ TRABAJANDO? Lo que el panel enseña con un color por consola. UNA regla, sin leer lo que
+// dice la pantalla ni el título (dueño, 2026-10-06): si el TÍTULO o el CONTENIDO cambian de
+// seguido, trabaja; si llevan un rato sin cambiar, está quieta. Sirve igual para cualquier
+// agente — medidos Claude Code y Codex (giran el título), y OpenCode (anima la pantalla): los
+// tres cambian algo al menos una vez por segundo mientras trabajan y se callan al terminar.
 // «Terminó» (`doneAt`) queda marcado hasta que alguien entra a la consola o teclea en ella: es
 // lo que avisa de que un agente acabó mientras mirabas otra cosa. Una campana (BEL) lo marca igual.
-const BUSY_GLYPHS = /^[\u25d0-\u25d3\u25f4-\u25f7\u2800-\u28ff]/      // ◐◑◒◓ ◴◵◶◷ y los girasoles braille
-const IDLE_GLYPHS = /^\u2733/                                           // ✳
-/** Lo que dice el título: true (trabajando), false (esperando) o null (el programa no lo dice). */
-export function titleSignal (title) {
-  const t = String(title || '')
-  if (BUSY_GLYPHS.test(t)) return true
-  if (IDLE_GLYPHS.test(t)) return false
-  return null
-}
-const ECHO_MS = 400        // salida tan pegada a una tecla es su eco, no trabajo
-const SUSTAIN_MS = 1500    // salida propia durante este rato = está trabajando
-const GAP_MS = 1000        // un hueco mayor que este corta la racha: no era salida seguida
-// EL RESPALDO, para quien no lo dice en el título (OpenCode, un comando cualquiera): si la
-// pantalla no cambia en este rato, la consola está quieta. Un minuto por defecto (dueño,
-// 2026-10-06): un programa que piensa en silencio unos segundos no debe darse por terminado.
-// `DOTRINO_TERMINAL_IDLE_SECONDS` lo cambia; quien lo dice en el título no espera a esto.
-export const QUIET_MS = Math.max(1, Number(process.env.DOTRINO_TERMINAL_IDLE_SECONDS) || 60) * 1000
+const ECHO_MS = 400        // un cambio tan pegado a una tecla es su eco, no trabajo
+const SUSTAIN_MS = 1500    // cambios seguidos durante este rato = está trabajando
+const GAP_MS = 2000        // un hueco mayor que este corta la racha: eran cambios sueltos
+// Sin cambios en este rato, la consola está quieta. `DOTRINO_TERMINAL_IDLE_SECONDS` lo cambia.
+// Diez segundos: de sobra para un agente, y un comando que calle más se da por terminado pronto.
+export const QUIET_MS = Math.max(1, Number(process.env.DOTRINO_TERMINAL_IDLE_SECONDS) || 10) * 1000
 const MIN_TASK_MS = 3000   // menos que esto no fue «una tarea»: no se marca como terminada
 
 const randomId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
@@ -80,31 +69,37 @@ class Console {
     this.busySince = 0
     this.doneAt = null                // terminó (o pidió atención) y nadie lo ha atendido
     this.lastInput = 0
-    this._titleSays = null            // lo último que dijo el título (true/false), o null si no lo dice
-    this._outSince = 0                // desde cuándo hay salida propia seguida
-    this._lastOwnOut = 0
+    this._changing = 0                // desde cuándo hay cambios seguidos
+    this._lastChange = 0
     this._quiet = null
     this.screen.onTitleChange((t) => {
       this.title = String(t).slice(0, 200)
-      const says = titleSignal(this.title)
-      const before = this._titleSays
-      this._titleSays = says
-      // Cuando el programa lo dice, manda él; si DEJA de decirlo (salió), ya no está trabajando.
-      // Un título que nunca dijo nada (el de la shell) no toca lo que se dedujo de la salida.
-      let changed = false
-      if (says !== null) changed = this._setBusy(says)
-      else if (before !== null) changed = this._setBusy(false)
-      if (!changed) this._meta()
+      if (!this._changed(Date.now())) this._meta()
     })
     this.screen.onBell(() => { this.doneAt = Date.now(); this._meta() })
+  }
+
+  /**
+   * Algo cambió (el título o el contenido). Cambios seguidos encienden «trabajando»; un rato sin
+   * ninguno lo apaga. Dos cambios sueltos (el prompt que se redibuja, un comando instantáneo) no
+   * son un programa trabajando. Devuelve si avisó a quien mira.
+   */
+  _changed (now) {
+    if (now - this.lastInput <= ECHO_MS) return false
+    if (!this._changing || now - this._lastChange > GAP_MS) this._changing = now
+    this._lastChange = now
+    clearTimeout(this._quiet)
+    this._quiet = setTimeout(() => { this._changing = 0; this._setBusy(false) }, this.quietMs)
+    this._quiet.unref?.()
+    return now - this._changing >= SUSTAIN_MS ? this._setBusy(true) : false
   }
 
   /** Cambia «trabajando». Al dejar de trabajar tras una tarea de verdad, queda como terminada. */
   _setBusy (v) {
     if (v === this.busy) return false
-    const now = Date.now()
     this.busy = v
-    if (v) { this.busySince = now; this.doneAt = null } else if (now - this.busySince >= MIN_TASK_MS) this.doneAt = now
+    // La tarea duró hasta el ÚLTIMO cambio, no hasta que se notó el silencio.
+    if (v) { this.busySince = this._changing; this.doneAt = null } else if (this._lastChange - this.busySince >= MIN_TASK_MS) this.doneAt = Date.now()
     this._meta()
     return true
   }
@@ -126,19 +121,7 @@ class Console {
   _out (data) {
     const now = Date.now()
     this.lastActive = now
-    // Sin señal en el título: salida propia y sostenida = trabajando; el silencio lo apaga.
-    if (this._titleSays === null) {
-      if (now - this.lastInput > ECHO_MS) {
-        // SOSTENIDA = seguida: dos ráfagas sueltas (el prompt que se redibuja al cambiar el
-        // tamaño, y otra cosa segundos después) no son un programa trabajando.
-        if (!this._outSince || now - this._lastOwnOut > GAP_MS) this._outSince = now
-        this._lastOwnOut = now
-        if (now - this._outSince >= SUSTAIN_MS) this._setBusy(true)
-      }
-      clearTimeout(this._quiet)
-      this._quiet = setTimeout(() => { this._outSince = 0; if (this._titleSays === null) this._setBusy(false) }, this.quietMs)
-      this._quiet.unref?.()
-    }
+    this._changed(now)
     this.screen.write(data)
     for (const v of this.viewers) v.onOut(data)
   }

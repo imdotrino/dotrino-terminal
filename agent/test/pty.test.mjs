@@ -210,8 +210,8 @@ test('quien cierra una consola: las DEMÁS pantallas saben que no fueron ellas (
   } finally { h.killAll() }
 })
 
-test('ACTIVIDAD: el título de Claude (◐ trabajando / ✳ esperando) manda, y «terminó» dura hasta que alguien la atiende', async () => {
-  const h = hub()
+test('ACTIVIDAD: un título que cambia de seguido es trabajo (así giran Claude y Codex), y «terminó» dura hasta que alguien la atiende', async () => {
+  const h = makeHub(loadPty(), { shell: '/bin/sh', quietMs: 2000 })
   try {
     const s = fakeSession(); serveSession(s, h, { origin: 'local' })
     s.deliver({ type: 'open', cols: 80, rows: 24 })
@@ -219,11 +219,11 @@ test('ACTIVIDAD: el título de Claude (◐ trabajando / ✳ esperando) manda, y 
     const id = s.sent.find((p) => p.type === 'attached').id
     const info = () => h.get(id).info()
     assert.equal(info().activity, 'idle')
-    // Como hace Claude: el título pasa a ◐ mientras trabaja y vuelve a ✳ al terminar.
-    s.deliver({ type: 'input', data: "printf '\\033]0;\\342\\227\\220 tarea\\007'; sleep 3.4; printf '\\033]0;\\342\\234\\263 tarea\\007'\r" })
-    await until(() => info().activity === 'busy', 3000)
+    // Solo cambia el título, una vez por segundo; en la pantalla no sale nada. No se lee QUÉ dice.
+    s.deliver({ type: 'input', data: "for i in 1 2 3 4 5; do printf '\\033]0;paso %s\\007' $i; sleep 1; done\r" })
+    await until(() => info().activity === 'busy', 4000)
     assert.equal(info().doneAt, null, 'trabajando no es terminado')
-    await until(() => info().activity === 'idle' && info().doneAt != null, 6000)
+    await until(() => info().activity === 'idle' && info().doneAt != null, 9000)
     assert.ok(s.sent.some((p) => p.type === 'meta' && p.console.activity === 'busy'), 'y quien mira se entera sin preguntar')
     // Atenderla (teclear en ella) apaga el «terminó».
     s.deliver({ type: 'input', data: ' ' })
@@ -231,8 +231,8 @@ test('ACTIVIDAD: el título de Claude (◐ trabajando / ✳ esperando) manda, y 
   } finally { h.killAll() }
 })
 
-test('ACTIVIDAD sin señal en el título: salida sostenida es trabajo, el eco de teclear no, y el silencio la termina', async () => {
-  // El respaldo es de un minuto por defecto; aquí, 2 s para no esperar.
+test('ACTIVIDAD: contenido que cambia de seguido es trabajo, el eco de teclear no, y el silencio la termina', async () => {
+  // Diez segundos sin cambios por defecto; aquí, 2 s para no esperar.
   const h = makeHub(loadPty(), { shell: '/bin/sh', quietMs: 2000 })
   try {
     const s = fakeSession(); serveSession(s, h, { origin: 'local' })
@@ -246,8 +246,8 @@ test('ACTIVIDAD sin señal en el título: salida sostenida es trabajo, el eco de
     await new Promise((r) => setTimeout(r, 700))
     assert.equal(info().activity, 'idle', 'un comando instantáneo no enciende nada')
     // Dos ráfagas sueltas, separadas por segundos, tampoco (el prompt al cambiar de tamaño…).
-    s.deliver({ type: 'input', data: 'sleep 0.6; echo uno; sleep 2; echo dos\r' })
-    await new Promise((r) => setTimeout(r, 3600))
+    s.deliver({ type: 'input', data: 'sleep 0.6; echo uno; sleep 2.6; echo dos\r' })
+    await new Promise((r) => setTimeout(r, 4200))
     assert.equal(info().activity, 'idle', 'ráfagas sueltas no son trabajo')
     // Un comando que va escribiendo durante un rato, sí.
     s.deliver({ type: 'input', data: 'for i in 1 2 3 4 5 6 7 8; do echo paso $i; sleep 0.5; done\r' })
@@ -256,28 +256,4 @@ test('ACTIVIDAD sin señal en el título: salida sostenida es trabajo, el eco de
   } finally { h.killAll() }
 })
 
-test('ACTIVIDAD: lo que cada agente dice en el título (medido: Claude 2.1.291, Codex 0.156.1, OpenCode 1.18.16)', async () => {
-  const { titleSignal } = await import('../consoles.js')
-  assert.equal(titleSignal('✳ Cuenta del 1 al 5'), false, 'Claude esperando')
-  assert.equal(titleSignal('◐ Cuenta del 1 al 5'), true, 'Claude trabajando')
-  assert.equal(titleSignal('◑ Cuenta del 1 al 5'), true)
-  assert.equal(titleSignal('⠋ carpeta'), true, 'Codex trabajando')
-  assert.equal(titleSignal('⠙ ⠙ | carpeta'), true)
-  assert.equal(titleSignal('Contar del 1 al 5 | carpeta'), null, 'Codex al terminar: sin signo')
-  assert.equal(titleSignal('OpenCode'), null, 'OpenCode no lo dice: va por el respaldo')
-  assert.equal(titleSignal('seyacat@loca: ~'), null)
-
-  // Codex: deja de decirlo al terminar, y eso es «terminó» (no hace falta un signo de espera).
-  const h = hub()
-  try {
-    const s = fakeSession(); serveSession(s, h, { origin: 'local' })
-    s.deliver({ type: 'open', cols: 80, rows: 24 })
-    await until(() => s.sent.some((p) => p.type === 'attached'))
-    const id = s.sent.find((p) => p.type === 'attached').id
-    const info = () => h.get(id).info()
-    s.deliver({ type: 'input', data: "printf '\\033]0;\\342\\240\\213 carpeta\\007'; sleep 3.4; printf '\\033]0;Contar | carpeta\\007'\r" })
-    await until(() => info().activity === 'busy', 3000)
-    await until(() => info().activity === 'idle' && info().doneAt != null, 6000)
-  } finally { h.killAll() }
-})
 
