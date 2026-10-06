@@ -184,17 +184,30 @@ object Consoles {
     suspend fun enter(machine: Machine, cols: Int, rows: Int): Tab {
         tabs.firstOrNull { it.machine == machine }?.let { return it }
         val p = profile ?: throw BootError("no profile", "no-profile")
-        val session = RemoteAgent.open(p, connection(), machine.pubkey)
+        val session = openSession(p, machine)
         val tab = Tab(machine, p.publickey) { ui.post(it) }.apply { onChange = { changed() } }
         ui.post { tabs.add(tab); tab.bind(session.channel(), cols, rows, null); changed() }
         return tab
+    }
+
+    /**
+     * A session with [machine]. If its paper names a record newer than the phone's (the vault
+     * changed it), the phone catches up from the vault once and keeps the new record for every
+     * app; until then this failed with `acta-vieja`.
+     */
+    private suspend fun openSession(p: Profile, machine: Machine): RemoteAgent.Session {
+        val c = connection()
+        return RemoteAgent.open(p, c, machine.pubkey, catchUp = {
+            val id = identity ?: throw BootError("no identity", "no-identity-app")
+            id.catchUp(p, c).also { profile = it }
+        })
     }
 
     /** Over a new session, the tab comes back to the console it had (the screen is replayed). */
     private suspend fun resume(tab: Tab) {
         try {
             val p = profile ?: return
-            val s = RemoteAgent.open(p, connection(), tab.machine.pubkey)
+            val s = openSession(p, tab.machine)
             ui.post { tab.bind(s.channel(), tab.screenCols, tab.screenRows, tab.consoleId); changed() }
         } catch (e: Exception) { tab.lostWith(e.message) }
     }
