@@ -108,6 +108,10 @@ textarea { width: 100%; min-height: 92px; margin: 12px 0; background: var(--well
 /* Tus máquinas (autodescubiertas del vault): chips pequeños en la misma barra que las pestañas. */
 .bar { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .machines { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-bottom: 3px; }
+/* Sin pestañas, «Tus máquinas» va a la IZQUIERDA del todo: es lo único que hay en la barra y a la
+   derecha quedaba suelta. Con la primera pestaña vuelve a la derecha. */
+.tabs:empty { display: none; }
+.tabs:empty + .machines { margin-left: 0; }
 .machines .mlabel { color: var(--muted); font-size: 12px; }
 .machine-list { display: flex; gap: 6px; flex-wrap: wrap; }
 .machine-row { display: inline-flex; align-items: stretch; }
