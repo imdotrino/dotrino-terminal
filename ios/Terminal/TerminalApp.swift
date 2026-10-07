@@ -37,6 +37,7 @@ enum Palette {
     static let accentSoft = Color(hex: 0x004C6B)  // primary-container
     static let onAccent = Color(hex: 0x003549)    // on-primary
     static let online = Color(hex: 0x7AD7C2)      // secondary
+    static let busy = Color(hex: 0xF5C26B)        // working (the PWA's amber)
     static let danger = Color(hex: 0xFFB4AB)      // error
 }
 

@@ -159,15 +159,16 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 /* Qué hace cada consola: trabajando (ámbar, latiendo) · terminó sin atender (verde, fijo). El
    color va en un punto y en el borde, para que se lea también sobre la consola seleccionada. */
 .sbtn.num { position: relative; }
-.sbtn.num.busy { box-shadow: inset 0 0 0 1.5px var(--busy); }
-.sbtn.num.done { box-shadow: inset 0 0 0 1.5px var(--ok); }
-.sbtn.num.busy::after, .sbtn.num.done::after, .srow.item.busy .pick span::before, .srow.item.done .pick span::before {
-  content: ''; width: 6px; height: 6px; border-radius: 50%;
+.sbtn.num.busy, .srow.item.busy { box-shadow: inset 0 0 0 1.5px var(--busy); }
+.sbtn.num.done, .srow.item.done { box-shadow: inset 0 0 0 1.5px var(--ok); }
+/* En el panel ABIERTO el estado es el mismo borde que en la tira (dueño, 2026-10-07: coherente en
+   todo lado). El punto que late queda solo en la tira, donde no hay texto que lo diga. */
+.srow.item.busy, .srow.item.done { border-radius: 6px; }
+.sbtn.num.busy::after, .sbtn.num.done::after {
+  content: ''; width: 6px; height: 6px; border-radius: 50%; position: absolute; top: 1px; right: 1px;
 }
-.sbtn.num.busy::after, .sbtn.num.done::after { position: absolute; top: 1px; right: 1px; }
-.sbtn.num.busy::after, .srow.item.busy .pick span::before { background: var(--busy); animation: pulse 1s infinite; }
-.sbtn.num.done::after, .srow.item.done .pick span::before { background: var(--ok); }
-.srow.item.busy .pick span::before, .srow.item.done .pick span::before { display: inline-block; margin-right: 6px; vertical-align: middle; }
+.sbtn.num.busy::after { background: var(--busy); animation: pulse 1s infinite; }
+.sbtn.num.done::after { background: var(--ok); }
 /* ⤢ apagado se ve tenue; encendido, con el color de la marca: que se note el cambio. */
 .sbtn.pin { color: var(--muted); opacity: .7; display: inline-flex; align-items: center; justify-content: center; }
 .sbtn.pin.on { opacity: 1; color: var(--brand); background: var(--brand-soft); }

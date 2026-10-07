@@ -29,6 +29,13 @@ struct ConsoleInfo: Equatable, Identifiable {
     let lastActive: Int64
     /// The folder its shell is in now (agent ≥ 0.22, Linux); nil when the machine does not say.
     var cwd: String? = nil
+    /// Something is working in it now (the agent says it, ≥ 0.17).
+    var busy = false
+    /// It finished and nobody has looked at it yet.
+    var doneAt: Int64? = nil
+
+    enum Activity { case idle, busy, done }
+    var activity: Activity { busy ? .busy : doneAt != nil ? .done : .idle }
 }
 
 /// What a `Tab` needs from its session. A protocol so the protocol can be tested without a network.
@@ -51,7 +58,8 @@ func consoleOf(_ o: JSON) -> ConsoleInfo? {
     func int(_ k: String) -> Int { Int(o[k]?.int ?? 0) }
     return ConsoleInfo(id: id, n: int("n"), title: o["title"]?.string ?? "", origin: o["origin"]?.string, cols: int("cols"), rows: int("rows"),
                        viewers: int("viewers"), watchers: watchers.count, watchedLocally: watchers.contains { $0["origin"]?.string == "local" },
-                       sizeBy: by, lastActive: o["lastActive"]?.int ?? 0, cwd: o["cwd"]?.string)
+                       sizeBy: by, lastActive: o["lastActive"]?.int ?? 0, cwd: o["cwd"]?.string,
+                       busy: o["activity"]?.string == "busy", doneAt: o["doneAt"]?.int)
 }
 
 /// What the open panel says of a console, in at most TWO lines: what it is, and where.

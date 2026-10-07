@@ -355,6 +355,7 @@ private struct ConsoleScreen: View {
                     let on = c.id == tab.consoleId
                     Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
                         .frame(width: 30, height: 28).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Color.clear))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
                         .onTapGesture { tab.switchTo(c.id) }
                         .onLongPressGesture { actions = c }
                         .accessibilityLabel(c.title.isEmpty ? t("console.n", ("n", c.n)) : c.title)
@@ -373,11 +374,18 @@ private struct ConsoleScreen: View {
     }
 
     /// Where a console is, said for this screen (the same words as the PWA's panel).
+    /// The status as a BORDER, the same on the strip and on the open panel, and the same as the
+    /// PWA, Android and the desktop app: amber = working, green = finished and not looked at yet.
+    private func actColor(_ c: ConsoleInfo) -> Color? {
+        switch c.activity { case .busy: return Palette.busy; case .done: return Palette.online; case .idle: return nil }
+    }
+
     private func whereIs(_ c: ConsoleInfo) -> String {
         let mine = c.id == tab.consoleId
         let others = c.watchers - (mine ? 1 : 0)
         var w = c.watchedLocally ? t("where.local") : others > 0 ? t("where.other") : mine ? t("where.here") : t("where.free")
         if !mine, let by = c.sizeBy, c.watchers > 1 || by.pinned { w += " · \(t("size.label")): \(sizeWho(c))" }
+        switch c.activity { case .busy: w += " · " + t("act.busy"); case .done: w += " · " + t("act.done"); case .idle: break }
         return w
     }
 
@@ -427,6 +435,7 @@ private struct ConsoleScreen: View {
                     }
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .background(RoundedRectangle(cornerRadius: 8).fill(on ? Palette.accentSoft : Color.clear))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
                     .accessibilityIdentifier("drawer-console")
                 }
             }
