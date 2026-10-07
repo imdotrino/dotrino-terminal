@@ -1416,7 +1416,19 @@ impl App {
             root(t("Ayuda", "Help"), help),
         ])
         .spacing(2.0)
-        .padding([2, 4]);
+        .padding([2, 4])
+        // La barra de iced_aw mide lo que sus entradas y pinta su propio fondo redondeado: se veía
+        // como una pastilla que acababa en «Ayuda». Con el fondo del contenedor y sin borde, la
+        // franja ocupa todo el ancho de la ventana.
+        .style(|theme: &Theme, status| {
+            let base = iced_aw::style::menu_bar::primary(theme, status);
+            iced_aw::style::menu_bar::Style {
+                bar_background: theme.extended_palette().background.weak.color.into(),
+                bar_border: iced::Border::default(),
+                bar_shadow: iced::Shadow::default(),
+                ..base
+            }
+        });
         container(bar)
             .width(Length::Fill)
             .style(|theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() })
