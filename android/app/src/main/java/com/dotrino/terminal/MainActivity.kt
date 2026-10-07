@@ -81,10 +81,18 @@ class MainActivity : Activity() {
             brand = DotrinoTopbar.Brand("Terminal", R.drawable.terminal_brand),
             profile = Consoles.profile?.topbar(),
         ) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dotrino.com/"))) }.view)
-        status = label("", 13f, col(R.color.t_muted)).apply { setPadding(px(16), px(6), px(16), px(6)); visibility = View.GONE; setBackgroundColor(col(R.color.t_panel2)) }
-        addView(status)
+        // The status («Conectando…», «Sin conexión») FLOATS over the content, at the top. As a row of
+        // the column it pushed everything down when it showed, and the console changed size.
+        // Rule (owner, 2026-10-07): nothing that comes and goes may change the console's size.
+        status = label("", 13f, col(R.color.t_text)).apply {
+            tag = "status"; setPadding(px(14), px(7), px(14), px(7)); visibility = View.GONE
+            background = rounded(col(R.color.t_panel2), px(14), px(1), col(R.color.t_line)); elevation = px(6).toFloat()
+        }
         content = FrameLayout(this@MainActivity)
-        addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        addView(FrameLayout(this@MainActivity).apply {
+            addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(status, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = px(8); marginStart = px(24); marginEnd = px(24) })
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
     private fun boot() {
@@ -234,13 +242,23 @@ class MainActivity : Activity() {
         bindOutput()
         val strip = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(px(6), px(4), px(6), px(4)) }
         tabStrip = strip
-        val note = label("", 13f, col(R.color.t_muted)).apply { setPadding(px(16), px(8), px(16), px(8)); setBackgroundColor(col(R.color.t_panel2)); visibility = View.GONE }
+        // What the tab has to say («Conectando…», «pide su clave»): a card floating OVER the console.
+        // In the column it pushed the console down each time it showed, and the whole screen jumped.
+        val note = label("", 14f, col(R.color.t_text)).apply {
+            tag = "tab-note"; gravity = Gravity.CENTER
+            setPadding(px(18), px(12), px(18), px(12))
+            background = rounded(col(R.color.t_panel2), px(14), px(1), col(R.color.t_line))
+            elevation = px(6).toFloat(); visibility = View.GONE
+        }
         tabNote = note
         // The consoles panel, as in the PWA: a strip on the left; open, it slides over the console
         // (on a phone, pushing the console aside would change its size).
         val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, px(4), 0, px(4)) }
         panel = side
-        val stage = FrameLayout(this).apply { addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
+        val stage = FrameLayout(this).apply {
+            addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(note, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { marginStart = px(24); marginEnd = px(24) })
+        }
         val body = LinearLayout(this).apply {
             addView(ScrollView(context).apply { isVerticalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(side) }, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(stage, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
@@ -253,7 +271,6 @@ class MainActivity : Activity() {
         c.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(strip) })
-            addView(note)
             addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
             addView(extraKeys())
         })

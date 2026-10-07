@@ -17,16 +17,18 @@ struct AppView: View {
 
     struct Problem: Equatable { let text: String; let profileActions: Bool; let vaultAction: Bool }
 
+    /// What the floating status says, or nil when there is nothing to say.
+    private var statusText: String? {
+        if let status { return status }
+        if consoles.link != "online", consoles.profile != nil { return consoles.link == "connecting" ? t("link.connecting") : t("link.offline") }
+        return nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             DotrinoTopbar(repo: "imdotrino/dotrino-terminal", brand: .init(name: "Terminal", image: Image("Brand")),
                           profile: consoles.profile.map { .init(name: $0.name, key: $0.avatarSeed, avatar: $0.avatar) },
                           onProfileChanged: { consoles.forget(); active = nil; boot() })
-            if let status { Text(status).font(.footnote).foregroundColor(Palette.muted).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 6).background(Palette.panel2) }
-            else if consoles.link != "online", consoles.profile != nil {
-                Text(consoles.link == "connecting" ? t("link.connecting") : t("link.offline")).font(.footnote).foregroundColor(Palette.muted)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 6).background(Palette.panel2)
-            }
             Group {
                 if let problem { ProblemView(problem: problem, open: { web = $0 }, retry: { consoles.forget(); boot() }) }
                 else if let active, consoles.tabs.contains(where: { $0 === active }) {
@@ -37,6 +39,18 @@ struct AppView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The status («Conectando…», «Sin conexión») FLOATS over the content, at the top. As a
+            // row of the column it pushed everything down when it showed, and the console changed
+            // size. Rule (owner, 2026-10-07): nothing that comes and goes may change the console's size.
+            .overlay(alignment: .top) {
+                if let text = statusText {
+                    Text(text).font(.footnote).foregroundColor(Palette.text).padding(.horizontal, 14).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Palette.panel2))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line, lineWidth: 1))
+                        .padding(.top, 8).padding(.horizontal, 24)
+                        .accessibilityIdentifier("status")
+                }
+            }
         }
         .background(Palette.bg.ignoresSafeArea())
         .sheet(item: Binding(get: { web.map(IdentURL.init) }, set: { web = $0?.url })) { u in
@@ -203,12 +217,6 @@ private struct ConsoleScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             tabStrip
-            if let note = noteText {
-                Button { if tab.state == .lost || tab.state == .failed { tab.retry() } else if tab.state == .locked { askingCode = true } } label: {
-                    Text(note).font(.footnote).foregroundColor(Palette.muted).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 8)
-                }
-                .background(Palette.panel2)
-            }
             ZStack(alignment: .topLeading) {
                 HStack(spacing: 0) {
                     strip
@@ -217,6 +225,17 @@ private struct ConsoleScreen: View {
                 // The open panel goes over the WHOLE row (strip included), so the strip and the panel
                 // are never seen at once; and over it, not beside it, so the console keeps its size.
                 if drawer { panel.transition(.move(edge: .leading)) }
+                // What the tab has to say («Conectando…», «pide su clave»): a card floating OVER the
+                // console. In the column it pushed the console down each time it showed.
+                if let note = noteText {
+                    Button { if tab.state == .lost || tab.state == .failed { tab.retry() } else if tab.state == .locked { askingCode = true } } label: {
+                        Text(note).font(.subheadline).foregroundColor(Palette.text).multilineTextAlignment(.center).padding(.horizontal, 18).padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 14).fill(Palette.panel2))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line, lineWidth: 1))
+                    }
+                    .accessibilityIdentifier("tab-note")
+                    .padding(.horizontal, 24).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
                 if let toast {
                     Text(toast).font(.footnote).foregroundColor(Palette.text).padding(12)
                         .background(RoundedRectangle(cornerRadius: 12).fill(Palette.panel2))
