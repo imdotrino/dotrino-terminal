@@ -191,6 +191,9 @@ enum Pending {
     /// Cerrar la ventana en cuanto el cliente haya soltado su consola (una de segundo plano: si
     /// la ventana la abrió, cerrarla sin soltarla la mataría).
     Close,
+    /// Actualizar el cliente en esta misma ventana: la consola se suelta (sigue viva en el
+    /// agente), corre `script` en una TTY nueva, y al acabar la ventana vuelve a `back`.
+    Update { script: String, back: Option<String> },
 }
 
 /// Qué corre en la TTY de la ventana.
@@ -199,6 +202,9 @@ enum Mode {
     Console,
     /// `dotrino-terminal link`: al terminar se mira qué perfil quedó enlazado.
     Linking { linked_before: Vec<String> },
+    /// «Actualizar dotrino-terminal…»: `script` corre en la TTY de esta ventana y, al acabar, la
+    /// ventana vuelve a la consola que tenía (`back`) o abre una.
+    Updating { script: String, back: Option<String> },
 }
 
 struct Win {
@@ -717,7 +723,9 @@ impl App {
             return;
         }
         let plain = matches!(mode, Mode::Console) && win.profile.is_none();
-        let spawn = if let (true, Some(cmd)) = (plain, win.command.clone()) {
+        let spawn = if let Mode::Updating { script, .. } = &mode {
+            Ok(("/bin/sh".to_string(), vec!["-c".to_string(), script.clone()], HashMap::from([("TERM".to_string(), "xterm-256color".to_string())])))
+        } else if let (true, Some(cmd)) = (plain, win.command.clone()) {
             // Una orden de `-x`/`-e`: tal cual, sin perfil. La ventana se cierra cuando acaba.
             let mut it = cmd.into_iter();
             let program = it.next().unwrap_or_default();
@@ -733,6 +741,7 @@ impl App {
             self.launch.clone().map(|launch| {
                 let args = match &mode {
                     Mode::Linking { .. } => vec!["link".to_string()],
+                    Mode::Updating { .. } => Vec::new(),   // ya resuelto arriba: no llega aquí
                     // Engancharse a una consola que ya existe (panel lateral) o abrir una nueva.
                     Mode::Console => {
                         let mut a = match win.attach.take() {
@@ -933,11 +942,11 @@ impl App {
         let keys = match &next {
             Pending::Attach(cid) => format!("\x1da{cid}\r"),
             Pending::New => "\x1dn".to_string(),
-            Pending::Close => "\x1dd".to_string(),
+            Pending::Close | Pending::Update { .. } => "\x1dd".to_string(),
         };
         win.showing = match &next {
             Pending::Attach(cid) => Some(cid.clone()),
-            Pending::New | Pending::Close => None,
+            Pending::New | Pending::Close | Pending::Update { .. } => None,
         };
         match win.term.as_mut() {
             Some(term) => term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(keys.into_bytes()))),
@@ -1041,6 +1050,11 @@ impl App {
             Mode::Console if win.pending.is_some() => {
                 let win = self.windows.get_mut(&id).expect("window");
                 match win.pending.take() {
+                    // La consola ya está suelta: ahora sí, la actualización en esta ventana.
+                    Some(Pending::Update { script, back }) => {
+                        self.start(id, Mode::Updating { script, back });
+                        return self.focus(id);
+                    }
                     Some(Pending::Attach(cid)) => win.attach = Some(cid),
                     _ => win.attach = None,
                 }
@@ -1068,6 +1082,16 @@ impl App {
                     }
                     None => self.close(id),
                 }
+            }
+            // Terminó la actualización: la ventana vuelve a su consola (o abre una).
+            Mode::Updating { back, .. } => {
+                let back = back.clone();
+                if let Some(win) = self.windows.get_mut(&id) {
+                    win.showing = back.clone();
+                    win.attach = back;
+                }
+                self.start(id, Mode::Console);
+                self.focus(id)
             }
             // Terminó el enlace: si quedó un perfil enlazado nuevo, la ventana pasa a él; si
             // no (se canceló, falló), vuelve al que tenía.
@@ -1132,9 +1156,9 @@ impl App {
                 self.focus(id)
             }
             Message::InstallClient(id) => {
-                // En una ventana APARTE y en marcha ya: la persona lo pidió desde el menú (§15), la
-                // salida queda a la vista hasta Enter, y su consola sigue donde estaba. Con el PATH
-                // de inicio de sesión: ahí está el npm de nvm o Homebrew.
+                // En ESTA ventana, en otra TTY (dueño, 2026-10-07): la consola se suelta sin cerrarla,
+                // la salida queda a la vista hasta Enter, y al acabar la ventana vuelve a su consola.
+                // Con el PATH de inicio de sesión: ahí está el npm de nvm o Homebrew.
                 let path = match login_path() {
                     Ok(p) => p,
                     Err(e) => {
@@ -1147,14 +1171,27 @@ impl App {
                 let ok = t("Listo: dotrino-terminal está al día. El agente que ya corría sigue con la versión anterior hasta que se reinicie.", "Done: dotrino-terminal is up to date. An agent that was already running keeps the old version until it restarts.");
                 let fail = t("No se pudo. Si dice EACCES, tu npm instala en una carpeta del sistema: usa nvm, o instálalo con sudo.", "It failed. If it says EACCES, your npm installs into a system folder: use nvm, or install it with sudo.");
                 let no_npm = t("No encuentro npm: instala Node 20 o más reciente (https://nodejs.org).", "Can't find npm: install Node 20 or newer (https://nodejs.org).");
-                let close = t("Pulsa Enter para cerrar.", "Press Enter to close.");
+                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
                 let script = format!(
                     "PATH={}; export PATH; if command -v npm >/dev/null; then echo '$ npm install -g {CLIENT_PKG}@latest'; npm install -g {CLIENT_PKG}@latest && echo && echo {} || {{ echo; echo {}; }}; else echo {}; fi; echo; echo {}; read _",
                     sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&close)
                 );
-                let cwd = self.windows.get(&id).map(|w| w.cwd.clone()).unwrap_or_default();
                 self.awaiting_client = true;
-                self.open_window(None, cwd, Some(vec!["/bin/sh".into(), "-c".into(), script])).1
+                let back = self.mine(id);
+                let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
+                // Con una consola del agente a la vista: se le pide al cliente que la suelte
+                // (Ctrl+] d) y, cuando sale, `ended` arranca la actualización. Así no se pierde.
+                let in_console = matches!(win.mode, Mode::Console) && win.profile.is_some() && win.term.is_some();
+                if in_console {
+                    win.pending = Some(Pending::Update { script, back });
+                    if let Some(term) = win.term.as_mut() {
+                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(b"\x1dd".to_vec())));
+                    }
+                    return self.focus(id);
+                }
+                // Sin consola del agente (sin perfil, o con un error a la vista): directo.
+                self.start(id, Mode::Updating { script, back: None });
+                self.focus(id)
             }
             Message::CheckClient => {
                 // Se mira hasta que haya un cliente que entienda el panel (o, si no había ninguno,
@@ -1341,7 +1378,7 @@ impl App {
     /// La barra de menú de la ventana: Archivo, Editar, Perfil, Ayuda.
     fn menu(&self, id: window::Id, win: &Win) -> Element<'_, Message> {
         // Mientras la ventana enrola o instala, no se ofrece otra cosa que la cambie.
-        let linking = matches!(win.mode, Mode::Linking { .. });
+        let linking = matches!(win.mode, Mode::Linking { .. } | Mode::Updating { .. });
         let (new_key, close_key, copy_key, paste_key) = if cfg!(target_os = "macos") {
             ("⌘N", "⌘W", "⌘C", "⌘V")
         } else {
@@ -1677,6 +1714,7 @@ impl App {
         let Some(win) = self.windows.get(&id) else { return String::new() };
         let what = match win.mode {
             Mode::Linking { .. } => t("Enrolar", "Enroll"),
+            Mode::Updating { .. } => t("Actualizar", "Update"),
             Mode::Console if win.title.is_empty() => "Dotrino Terminal".to_string(),
             Mode::Console => win.title.clone(),
         };
