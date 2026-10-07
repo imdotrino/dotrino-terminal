@@ -136,17 +136,37 @@ struct ConsoleInfo {
 /// (`usuario@máquina`), la carpeta, y el título que puso el programa. Una shell titula
 /// «usuario@máquina: carpeta», así que le salen las dos primeras; un programa que se nombra solo
 /// (Claude: su sesión) no trae máquina, y le salen la carpeta y el título.
-fn panel_lines(title: &str, cwd: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
+fn panel_lines(title: &str, cwd: Option<&str>, me: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
     let title = title.trim();
     let (host, rest) = match title.split_once(':') {
-        Some((h, r)) if h.contains('@') && !h.contains(char::is_whitespace) => (Some(h.to_string()), r.trim()),
+        Some((h, r)) if h.contains('@') && !h.contains(char::is_whitespace) => (Some(h), r.trim()),
         _ => (None, title),
     };
     let cwd = cwd.map(str::trim).filter(|d| !d.is_empty());
     // Sin carpeta del agente (uno viejo, o macOS), la de una shell es lo que sigue a la máquina.
-    let dir = cwd.or(host.as_ref().map(|_| rest).filter(|r| !r.is_empty()));
+    let dir = cwd.or(host.map(|_| rest).filter(|r| !r.is_empty()));
     let name = Some(rest).filter(|r| !r.is_empty() && Some(*r) != dir);
-    (host, dir.map(String::from), name.map(String::from))
+    // Un programa que se nombra solo no dice la máquina: es esta (las consolas del panel son de aquí).
+    (host.or(me).map(String::from), dir.map(String::from), name.map(String::from))
+}
+
+/// `usuario@máquina` de ESTA máquina, como lo pone el prompt de una shell (`\u@\h`: el nombre
+/// hasta el primer punto). Para la consola cuyo programa puso su propio título.
+fn user_at_host() -> Option<String> {
+    static ME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ME.get_or_init(|| {
+        let user = std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).ok().filter(|u| !u.is_empty())?;
+        let mut buf = [0u8; 256];
+        // SAFETY: `buf` vive toda la llamada y se le pasa su tamaño; se lee hasta el primer NUL.
+        if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|b| *b == 0)?;
+        let host = String::from_utf8_lossy(&buf[..end]);
+        let host = host.split('.').next().filter(|h| !h.is_empty())?;
+        Some(format!("{user}@{host}"))
+    })
+    .clone()
 }
 
 #[cfg(test)]
@@ -159,12 +179,14 @@ mod tests {
 
     #[test]
     fn the_panel_gives_host_folder_and_title_a_line_each() {
-        assert_eq!(panel_lines("seyacat@loca: ~", Some("~")), (s("seyacat@loca"), s("~"), None));
-        assert_eq!(panel_lines("seyacat@loca: ~/p/dotrino", None), (s("seyacat@loca"), s("~/p/dotrino"), None)); // an older agent
-        assert_eq!(panel_lines("✳ Sefjr improvement", Some("/mnt/sda1/Dotrino")), (None, s("/mnt/sda1/Dotrino"), s("✳ Sefjr improvement")));
-        assert_eq!(panel_lines("vim: notas.txt", Some("~")), (None, s("~"), s("vim: notas.txt")));
-        assert_eq!(panel_lines("", Some("~")), (None, s("~"), None));
-        assert_eq!(panel_lines("", None), (None, None, None));
+        let me = Some("yo@aqui");
+        assert_eq!(panel_lines("seyacat@loca: ~", Some("~"), me), (s("seyacat@loca"), s("~"), None));
+        assert_eq!(panel_lines("seyacat@loca: ~/p/dotrino", None, me), (s("seyacat@loca"), s("~/p/dotrino"), None)); // an older agent
+        // A program that names itself keeps the machine line: it is this one.
+        assert_eq!(panel_lines("✳ Sefjr improvement", Some("/mnt/sda1/Dotrino"), me), (s("yo@aqui"), s("/mnt/sda1/Dotrino"), s("✳ Sefjr improvement")));
+        assert_eq!(panel_lines("vim: notas.txt", Some("~"), me), (s("yo@aqui"), s("~"), s("vim: notas.txt")));
+        assert_eq!(panel_lines("", Some("~"), None), (None, s("~"), None));
+        assert_eq!(panel_lines("", None, None), (None, None, None));
     }
 }
 
@@ -1685,7 +1707,7 @@ impl App {
             for (i, c) in list.iter().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let is_mine = mine.as_deref() == Some(c.id.as_str());
-                let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref());
+                let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), user_at_host().as_deref());
                 let tip = [host, dir, name].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 let tip = if tip.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { tip };
                 let b = button(centered(format!("{n}"), 12))
@@ -1723,27 +1745,12 @@ impl App {
             .padding(iced::Padding { left: 8.0, ..Default::default() }),
         ]
         .spacing(2);
-        // Quién tiene el tamaño de la consola de esta ventana, y el ⤢ para quedárselo.
-        if let Some((n, c)) = cur {
-            let who = match c.size_by.as_ref() {
-                Some(b) if b.tag.is_some() && b.tag.as_deref() == Some(my_tag.as_str()) => t("esta ventana", "this window"),
-                Some(b) if b.origin.as_deref() == Some("remote") => t("otro aparato", "another device"),
-                Some(_) => t("otra ventana", "another window"),
-                None => t("esta ventana", "this window"),
-            };
-            let how = if c.size_by.as_ref().is_some_and(|b| b.pinned) { t("elegido a propósito", "chosen on purpose") } else { t("lo tiene la última pantalla que la abre", "set by the last screen that opens it") };
-            let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
+        // Solo el tamaño (dueño, 2026-10-07): quién lo tiene ya lo dice el ⤢ encendido y su aviso.
+        if let Some((_, c)) = cur {
             items = items.push(
-                row![
-                    column![
-                        text(format!("{} {n}: {who} ({}×{})", t("Tamaño de la", "Size of"), c.cols, c.rows)).size(12),
-                        text(how).size(11).style(dim),
-                    ]
-                    .width(Length::Fill),
-                    pin_btn(28.0),
-                ]
-                .align_y(iced::Alignment::Center)
-                .padding(iced::Padding { left: 8.0, ..Default::default() }),
+                row![text(format!("{}×{}", c.cols, c.rows)).size(12).width(Length::Fill), pin_btn(28.0)]
+                    .align_y(iced::Alignment::Center)
+                    .padding(iced::Padding { left: 8.0, ..Default::default() }),
             );
         }
         if !ready {
@@ -1775,7 +1782,7 @@ impl App {
             };
             // Con número: dos consolas con el mismo título (el prompt) se distinguen igual.
             let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
-            let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref());
+            let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), user_at_host().as_deref());
             let mut lines = [host, dir, name].into_iter().flatten();
             let first = lines.next().map(|l| format!("{n} · {l}")).unwrap_or_else(|| format!("{} {}", t("Consola", "Console"), n));
             let mut label = column![text(format!("{}{first}", if is_mine { "● " } else { "" })).size(12)];
