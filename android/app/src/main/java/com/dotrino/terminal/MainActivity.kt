@@ -428,7 +428,7 @@ class MainActivity : Activity() {
         list.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(px(6), px(6), 0, px(6))
             addView(label(t("console.new"), 13f, col(R.color.t_muted)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(label("+", 17f).apply { tag = "drawer-new"; setPadding(px(12), 0, px(12), 0); setOnClickListener { tab.switchTo(null); openDrawer(false) } })
+            addView(label("+", 17f).apply { tag = "drawer-new"; setPadding(px(12), 0, px(12), 0); setOnClickListener { tab.switchTo(null) } })
         })
         tab.current?.let { cur ->
             list.addView(LinearLayout(this).apply {
@@ -451,7 +451,7 @@ class MainActivity : Activity() {
                     val name = (if (on) "● " else "") + "${c.n}" + if (c.title.isNotBlank()) " · " + shortTitle(c.title) else ""
                     addView(label(name, 13f).apply { maxLines = 1 })
                     addView(label(where(tab, c) + actText(c), 11f, col(actColor(c) ?: R.color.t_muted)))
-                    setOnClickListener { tab.switchTo(c.id); openDrawer(false) }
+                    setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(label("×", 16f, col(R.color.t_muted)).apply { tag = "console-kill"; contentDescription = t("console.kill"); setPadding(px(10), px(4), px(8), px(4)); setOnClickListener { tab.killConsole(c.id) } })
@@ -465,7 +465,7 @@ class MainActivity : Activity() {
     /** Long press on a console of the panel: what can be done with it. */
     private fun consoleActions(tab: Consoles.Tab, c: ConsoleInfo) {
         val (dialog, body) = sheet(c.title.ifBlank { t("console.n", "n" to c.n) }.let { "${c.n} · " + shortTitle(it) })
-        if (c.id != tab.consoleId) body.add(pill(t("console.openHere"), filled = true) { dialog.dismiss(); tab.switchTo(c.id); openDrawer(false) }.apply { tag = "open-here" }, top = 8)
+        if (c.id != tab.consoleId) body.add(pill(t("console.openHere"), filled = true) { dialog.dismiss(); tab.switchTo(c.id) }.apply { tag = "open-here" }, top = 8)
         body.add(pill(t("console.kill")) { dialog.dismiss(); tab.killConsole(c.id) }.apply { tag = "kill" }, top = 10)
         dialog.show()
     }

@@ -263,7 +263,7 @@ private struct ConsoleScreen: View {
         .confirmationDialog(actions.map { "\($0.n) · " + shortTitle($0.title.isEmpty ? t("console.n", ("n", $0.n)) : $0.title) } ?? "",
                             isPresented: Binding(get: { actions != nil }, set: { if !$0 { actions = nil } }), titleVisibility: .visible) {
             if let c = actions {
-                if c.id != tab.consoleId { Button(t("console.openHere")) { tab.switchTo(c.id); drawer = false } }
+                if c.id != tab.consoleId { Button(t("console.openHere")) { tab.switchTo(c.id) } }
                 Button(t("console.kill"), role: .destructive) { tab.killConsole(c.id) }
             }
         }
@@ -393,7 +393,7 @@ private struct ConsoleScreen: View {
                 HStack {
                     Text(t("console.new")).font(.footnote).foregroundColor(Palette.muted)
                     Spacer()
-                    Button { tab.switchTo(nil); drawer = false } label: { Text("+").foregroundColor(Palette.text).padding(.horizontal, 12) }.accessibilityIdentifier("drawer-new")
+                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).padding(.horizontal, 12) }.accessibilityIdentifier("drawer-new")
                 }
                 .padding(.leading, 6)
                 if let cur = tab.current {
@@ -416,7 +416,7 @@ private struct ConsoleScreen: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
-                        .onTapGesture { tab.switchTo(c.id); drawer = false }
+                        .onTapGesture { tab.switchTo(c.id) }
                         .onLongPressGesture { actions = c }
                         Button { tab.killConsole(c.id) } label: { Text("×").foregroundColor(Palette.muted).padding(.horizontal, 8) }
                             .accessibilityLabel(t("console.kill")).accessibilityIdentifier("console-kill")
