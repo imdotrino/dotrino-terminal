@@ -442,7 +442,15 @@ class MainActivity : Activity() {
             val on = c.id == tab.consoleId
             list.addView(LinearLayout(this).apply {
                 tag = "drawer-console"; gravity = Gravity.CENTER_VERTICAL
-                background = if (on) rounded(col(R.color.t_accent_soft), px(8)) else null
+                // The status as in the collapsed strip: a BORDER in its colour (amber = working,
+                // green = finished), not only a coloured line of text.
+                val act = actColor(c)
+                background = when {
+                    on && act != null -> rounded(col(R.color.t_accent_soft), px(8), px(2), col(act))
+                    on -> rounded(col(R.color.t_accent_soft), px(8))
+                    act != null -> rounded(col(R.color.t_panel), px(8), px(1), col(act))
+                    else -> null
+                }
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL; setPadding(px(8), px(5), px(4), px(5))
                     // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
@@ -455,12 +463,12 @@ class MainActivity : Activity() {
                     val (what, where) = panelLines(c.title, c.cwd)
                     what?.let { addView(oneLine(it, "drawer-title", col(R.color.t_text))) }
                     where?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_muted))) }
-                    addView(label(where(tab, c) + actText(c), 11f, col(actColor(c) ?: R.color.t_muted)))
+                    addView(label(where(tab, c) + actText(c), 11f, col(R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(label("×", 16f, col(R.color.t_muted)).apply { tag = "console-kill"; contentDescription = t("console.kill"); setPadding(px(10), px(4), px(8), px(4)); setOnClickListener { tab.killConsole(c.id) } })
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(2) })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(5) })
         }
         val d = ScrollView(this).apply { tag = "drawer"; setBackgroundColor(col(R.color.t_panel)); addView(list) }
         stage.addView(d, 0, LinearLayout.LayoutParams(px(270), ViewGroup.LayoutParams.MATCH_PARENT))
