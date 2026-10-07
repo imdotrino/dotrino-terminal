@@ -8,8 +8,9 @@
  *   dotrino-terminal kill <id> [--name <n>]    cierra una consola
  *   dotrino-terminal profiles [--json]         los perfiles de esta máquina (enlazados o no)
  *   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
-  dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente: cierra sus consolas)
  *   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente si corre)
+ *   dotrino-terminal lock [--name <n>]         pone o cambia la clave que piden los otros aparatos
+ *   dotrino-terminal lock --off [--name <n>]   la quita
  *
  * Un PERFIL es un agente con nombre (`~/.dotrino/agent/terminal-agent/<nombre>/`), enlazado a
  * una bóveda o solo local. Cada consola vive en el agente de un perfil.
@@ -33,6 +34,7 @@ import { resolveInstance, isValidName } from '@dotrino/remote-agent/instances'
 import readline from 'node:readline'
 import { connectLocal } from '../local.js'
 import { titleFilter } from '../title.js'
+import { hasAccessCode, setAccessCode, clearAccessCode, MIN_LENGTH } from '../access.js'
 
 const { version: VERSION } = createRequire(import.meta.url)('../package.json')
 const args = process.argv.slice(2)
@@ -53,6 +55,10 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal profiles [--json]         los perfiles de esta máquina
   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente: cierra sus consolas)
+  dotrino-terminal lock [--name <n>]         pone o cambia la clave (PIN o contraseña) que tus otros
+                                             aparatos tienen que escribir para abrir consolas aquí
+  dotrino-terminal lock --off [--name <n>]   quita la clave
+  dotrino-terminal lock --status [--name <n>] dice si hay clave
 
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla; Ctrl+] n abre otra
 (y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola; Ctrl+] p fija el tamaño de la
@@ -65,6 +71,10 @@ Cerrar la ventana cierra la consola que abrió.`, `usage:
   dotrino-terminal profiles [--json]         this machine's profiles
   dotrino-terminal link [--name <n>]         link a profile with your vault
   dotrino-terminal rename <profile> [new]    rename a profile (stops its agent: closes its consoles)
+  dotrino-terminal lock [--name <n>]         set or change the code (PIN or password) your other
+                                             devices must type to open consoles here
+  dotrino-terminal lock --off [--name <n>]   remove the code
+  dotrino-terminal lock --status [--name <n>] say whether there is a code
 
 Inside a console: Ctrl+] then d detaches without closing it; Ctrl+] n opens another
 (detaching the current one); Ctrl+] a <id> Enter switches to that console; Ctrl+] p pins the
@@ -171,6 +181,60 @@ async function link () {
 function ask (q) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   return new Promise((resolve) => rl.question(q, (a) => { rl.close(); resolve(a.trim()) }))
+}
+
+/** Pregunta algo que no debe verse al teclearlo. Solo en una TTY: una clave no se pasa por una tubería. */
+function askHidden (q) {
+  if (!process.stdin.isTTY) die(t('la clave se teclea: hace falta una terminal', 'the code is typed: a terminal is needed'))
+  process.stdout.write(q)
+  process.stdin.setRawMode(true)
+  process.stdin.resume()
+  return new Promise((resolve) => {
+    let typed = ''
+    const onData = (b) => {
+      for (const ch of b.toString('utf8')) {
+        if (ch === '\r' || ch === '\n') {
+          process.stdin.off('data', onData); process.stdin.setRawMode(false); process.stdin.pause()
+          process.stdout.write('\n'); resolve(typed); return
+        }
+        if (ch === '\x03') { process.stdin.setRawMode(false); process.stdout.write('\n'); process.exit(130) }
+        if (ch === '\x7f' || ch === '\b') typed = typed.slice(0, -1)
+        else if (ch >= ' ') typed += ch
+      }
+    }
+    process.stdin.on('data', onData)
+  })
+}
+
+/**
+ * La clave de esta máquina (access.js). Se pone AQUÍ, en la máquina, y la piden solo los otros
+ * aparatos: quien está sentado delante ya es el usuario que puede leer y borrar el archivo, así
+ * que ni cambiarla ni quitarla piden la anterior. Vale al momento, sin reiniciar el agente.
+ */
+async function lock () {
+  const dir = opt('--dir') || dataDir(opt('--name'))
+  if (args.includes('--status')) {
+    console.log(hasAccessCode(dir)
+      ? t('Hay clave: tus otros aparatos la escriben para abrir consolas en esta máquina.', 'There is a code: your other devices type it to open consoles on this machine.')
+      : t('Sin clave: cualquier aparato de tu cuenta abre consolas en esta máquina.', 'No code: any device of your account opens consoles on this machine.'))
+    return
+  }
+  if (args.includes('--off')) {
+    if (!hasAccessCode(dir)) { console.log(t('Esta máquina no tenía clave.', 'This machine had no code.')); return }
+    clearAccessCode(dir)
+    console.log(t('Clave quitada. Cualquier aparato de tu cuenta vuelve a abrir consolas aquí.', 'Code removed. Any device of your account opens consoles here again.'))
+    return
+  }
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const changing = hasAccessCode(dir)
+  const first = await askHidden(t(`Clave nueva (PIN o contraseña, mínimo ${MIN_LENGTH}): `, `New code (PIN or password, at least ${MIN_LENGTH}): `))
+  if (first.length < MIN_LENGTH) die(t(`demasiado corta: mínimo ${MIN_LENGTH} caracteres`, `too short: at least ${MIN_LENGTH} characters`))
+  const again = await askHidden(t('Otra vez: ', 'Again: '))
+  if (again !== first) die(t('no coinciden. No se cambió nada.', 'they do not match. Nothing was changed.'))
+  setAccessCode(dir, first)
+  console.log(changing
+    ? t('Clave cambiada. Los aparatos que ya estaban dentro siguen hasta que se desconecten.', 'Code changed. Devices already in stay until they disconnect.')
+    : t('Clave puesta. Tus otros aparatos la escriben para abrir consolas en esta máquina; las ventanas de esta máquina no la piden.', 'Code set. Your other devices type it to open consoles on this machine; this machine\'s own windows do not ask for it.'))
 }
 
 /**
@@ -435,6 +499,7 @@ try {
   if (cmd === 'profiles') { await profiles(); process.exit(0) }
   if (cmd === 'link') { await link(); process.exit(0) }
   if (cmd === 'rename') { await rename(); process.exit(0) }
+  if (cmd === 'lock') { await lock(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))
   if (cmd === 'open' || cmd === 'attach') captureEarly()
   const conn = await agent(dir)

@@ -152,4 +152,36 @@ class TabTest {
         ch.agent(buildJsonObject { put("type", "fail"); put("code", "no-console") })
         assertEquals(Consoles.Tab.State.EXITED, t.state); assertEquals(1, gone)
     }
+
+    private fun fail(code: String, retryMs: Long? = null) = buildJsonObject { put("type", "fail"); put("code", code); if (retryMs != null) put("retryMs", retryMs) }
+
+    @Test fun aMachineWithACodeAsksForItAndGoesOnOnceTyped() {
+        Consoles.codes.clear()
+        val (tab, ch) = tab()
+        ch.agent(fail("locked"))                                    // the first `list` was refused
+        assertEquals(Consoles.Tab.State.LOCKED, tab.state)
+        assertNull(ch.last("unlock"))                               // nothing remembered: the screen asks
+        tab.unlock("0000")
+        ch.agent(fail("bad-code"))
+        assertEquals(Consoles.Tab.State.LOCKED, tab.state); assertEquals("bad-code", tab.codeProblem)
+        tab.unlock("4821")
+        ch.agent(buildJsonObject { put("type", "unlocked") })
+        assertEquals(Consoles.Tab.State.CONNECTING, tab.state)
+        assertEquals("list", ch.types().last())                     // it goes on where it was: picking a console
+        assertEquals("4821", Consoles.codes[tab.machine.pubkey])
+    }
+
+    @Test fun theRememberedCodeIsTriedOnceByItselfAndForgottenIfWrong() {
+        Consoles.codes.clear()
+        val (tab, ch) = tab()
+        Consoles.codes[tab.machine.pubkey] = "4821"
+        ch.agent(fail("locked"))
+        assertEquals("4821", (ch.last("unlock")!!["code"] as JsonPrimitive).content)
+        val sent = ch.sent.size
+        ch.agent(fail("locked"))                                    // another refusal meanwhile: not sent again
+        assertEquals(sent, ch.sent.size)
+        ch.agent(fail("wait", 90_000))
+        assertEquals("wait", tab.codeProblem); assertEquals(90_000L, tab.codeWaitMs)
+        assertNull(Consoles.codes[tab.machine.pubkey])
+    }
 }

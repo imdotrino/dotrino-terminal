@@ -194,6 +194,8 @@ private struct ConsoleScreen: View {
     @State private var toast: String?
     @State private var mods = (ctrl: false, alt: false)
     @State private var termMenu = false
+    @State private var askingCode = false
+    @State private var code = ""
 
     private static let keys = ["esc", "tab", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~"]
     private static let labels = ["esc": "Esc", "tab": "Tab", "up": "↑", "down": "↓", "left": "←", "right": "→", "home": "Home", "end": "End", "pgup": "PgUp", "pgdn": "PgDn"]
@@ -202,7 +204,7 @@ private struct ConsoleScreen: View {
         VStack(spacing: 0) {
             tabStrip
             if let note = noteText {
-                Button { if tab.state == .lost || tab.state == .failed { tab.retry() } } label: {
+                Button { if tab.state == .lost || tab.state == .failed { tab.retry() } else if tab.state == .locked { askingCode = true } } label: {
                     Text(note).font(.footnote).foregroundColor(Palette.muted).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 8)
                 }
                 .background(Palette.panel2)
@@ -223,7 +225,18 @@ private struct ConsoleScreen: View {
             }
             extraKeys
         }
-        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in tab.list() }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in if tab.state != .locked { tab.list() } }
+        // The machine asks for its code (`dotrino-terminal lock`, set on that machine): the dialog
+        // comes up by itself each time the agent asks, and from the note.
+        .onAppear { if tab.state == .locked { askingCode = true } }
+        .onChange(of: tab.codeAsks) { _ in askingCode = tab.state == .locked }
+        .alert(t("code.title", ("name", tab.machine.label)), isPresented: $askingCode) {
+            SecureField(t("code.label"), text: $code).accessibilityIdentifier("code-input")
+            Button(t("code.ok")) { let c = code; code = ""; if !c.isEmpty { tab.unlock(c) } }
+            Button(t("code.cancel"), role: .cancel) { code = "" }
+        } message: {
+            Text(codeMessage)
+        }
         // Long press on the console: paste, or copy what is on screen (the same as Android).
         .confirmationDialog(t("menu.title"), isPresented: $termMenu, titleVisibility: .visible) {
             Button(t("menu.paste")) { if let s = UIPasteboard.general.string { view?.paste(s) } }
@@ -238,9 +251,19 @@ private struct ConsoleScreen: View {
         }
     }
 
+    /// What the code dialog says: why the last one was not taken, or where the code comes from.
+    private var codeMessage: String {
+        switch tab.codeProblem {
+        case "bad-code": return t("code.wrong")
+        case "wait": return t("code.wait", ("min", max(1, Int((tab.codeWaitMs + 59_999) / 60_000))))
+        default: return t("code.lead")
+        }
+    }
+
     private var noteText: String? {
         switch tab.state {
         case .open: return nil
+        case .locked: return t("code.note")
         case .connecting: return t("tab.connecting")
         case .lost: return t("tab.lost")
         case .exited: return tab.note == "no-console" ? t("tab.gone") : t("tab.exited")

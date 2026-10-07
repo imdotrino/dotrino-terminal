@@ -79,6 +79,8 @@ dotrino-profile {
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .modal { max-width: 420px; }
+.machine-code { width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px 12px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.machine-code-why { color: #ffd98a; }
 .modal-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
 button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); padding: 8px 14px; background: var(--panel); color: inherit; }
 button.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); font-weight: 600; }

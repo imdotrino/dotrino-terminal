@@ -108,4 +108,42 @@ final class TabTests: XCTestCase {
     }
 
     func testBothLanguagesSayTheSameThings() { XCTAssertEqual(I18n.missing(), []) }
+
+    private func fail(_ code: String, retryMs: Int64? = nil) -> JSON {
+        var o: [String: JSON] = ["type": "fail", "code": .string(code)]
+        if let retryMs { o["retryMs"] = .int(retryMs) }
+        return .object(o)
+    }
+
+    func testAMachineWithACodeAsksForItAndGoesOnOnceTyped() {
+        Tab.codes = [:]
+        let (t, ch) = tab()
+        t.handle(fail("locked"))                                   // the first `list` was refused
+        XCTAssertEqual(t.state, .locked)
+        XCTAssertNil(ch.last("unlock"))                            // nothing remembered: the screen asks
+        XCTAssertEqual(t.codeAsks, 1)
+        t.unlock("0000")
+        t.handle(fail("bad-code"))
+        XCTAssertEqual(t.state, .locked); XCTAssertEqual(t.codeProblem, "bad-code"); XCTAssertEqual(t.codeAsks, 2)
+        t.unlock("4821")
+        t.handle(["type": "unlocked"])
+        XCTAssertEqual(t.state, .connecting)
+        XCTAssertEqual(ch.types.last, "list")                      // it goes on where it was: picking a console
+        XCTAssertEqual(Tab.codes[other], "4821")
+    }
+
+    func testTheRememberedCodeIsTriedOnceByItselfAndForgottenIfWrong() {
+        Tab.codes = [other: "4821"]
+        let (t, ch) = tab()
+        t.handle(fail("locked"))
+        XCTAssertEqual(ch.last("unlock")?["code"]?.string, "4821")
+        XCTAssertEqual(t.codeAsks, 0)                              // the screen did not ask
+        let sent = ch.sent.count
+        t.handle(fail("locked"))                                   // another refusal meanwhile: not sent again
+        XCTAssertEqual(ch.sent.count, sent)
+        t.handle(fail("wait", retryMs: 90_000))
+        XCTAssertEqual(t.codeProblem, "wait"); XCTAssertEqual(t.codeWaitMs, 90_000)
+        XCTAssertNil(Tab.codes[other])
+        Tab.codes = [:]
+    }
 }

@@ -9,7 +9,13 @@
 import { RemoteAgentClient } from '@dotrino/remote-agent/client'
 
 /** Error con `code` del agente (`no-console`…): se comprueba por el código, no por la frase. */
-const agentError = (p) => Object.assign(new Error(p.message || p.code), { code: p.code })
+const agentError = (p) => Object.assign(new Error(p.message || p.code), { code: p.code, ...(p.retryMs ? { retryMs: p.retryMs } : {}) })
+
+/**
+ * La clave de cada máquina que la pide (agente ≥ 0.19, `dotrino-terminal lock`), por la llave
+ * de la máquina. SOLO en memoria: vale para las pestañas de esta página y se va al recargar.
+ */
+const CODES = new Map()
 
 export class AgentClient {
   /**
@@ -26,6 +32,14 @@ export class AgentClient {
     /** @type {()=>void} */ this.onResumed = () => {}
     /** La consola enganchada cambió (quién mira, título, TAMAÑO): `info` como en `list`. */
     /** @type {(info:object)=>void} */ this.onMeta = () => {}
+    /**
+     * La máquina pide su clave. Devuelve lo tecleado, o null si la persona lo deja. `wrong` trae
+     * el fallo del intento anterior (`bad-code`, o `wait` con `retryMs`).
+     * @type {(info:{ wrong: (Error & { code?:string, retryMs?:number })|null }) => Promise<string|null>}
+     */
+    this.askCode = async () => null
+    this._pub = agentPubkey
+    this._unlocking = null
     this._waiting = null   // { type, resolve, reject }: la respuesta que se espera
     this._queue = Promise.resolve()   // las preguntas van de una en una (ver `_ask`)
   }
@@ -38,7 +52,10 @@ export class AgentClient {
       if (p.type === 'meta') { if (p.console) this.onMeta(p.console); return }
       const w = this._waiting
       if (p.type === 'fail') {
-        if (w) { this._waiting = null; w.reject(agentError(p)) } else this.onError(agentError(p))
+        if (w) { this._waiting = null; w.reject(agentError(p)); return }
+        // Le pusieron clave a la máquina con esta pestaña ya dentro: se pide, sin dar error.
+        if (p.code === 'locked') { this._queue = this._queue.then(() => this._unlock()).catch((e) => this.onError(e)); return }
+        this.onError(agentError(p))
         return
       }
       if (w && p.type === w.type) { this._waiting = null; w.resolve(p) }
@@ -60,7 +77,13 @@ export class AgentClient {
    * poco, y si eso pisara un `attach` en curso, el `attach` no recibiría nunca su respuesta.
    */
   _ask (msg, type, timeoutMs = 20000) {
-    const run = () => this._askNow(msg, type, timeoutMs)
+    const run = async () => {
+      try { return await this._askNow(msg, type, timeoutMs) } catch (e) {
+        if (e.code !== 'locked') throw e
+        await this._unlock()                       // la máquina pide su clave: se escribe y se repite
+        return this._askNow(msg, type, timeoutMs)
+      }
+    }
     const p = this._queue.then(run, run)
     this._queue = p.catch(() => {})
     return p
@@ -76,6 +99,33 @@ export class AgentClient {
       }, timeoutMs)
       this.rc.send(msg).catch(reject)
     })
+  }
+
+  /**
+   * Escribe la clave de la máquina: la que ya se tecleó en esta página o, si no hay o ya no
+   * vale, la que diga `askCode`. Insiste mientras la persona siga probando; si lo deja, lanza
+   * `locked`. Una sola a la vez por pestaña.
+   */
+  _unlock () {
+    if (this._unlocking) return this._unlocking
+    this._unlocking = (async () => {
+      let wrong = null
+      for (;;) {
+        let code = wrong ? null : CODES.get(this._pub)
+        if (code == null) code = await this.askCode({ wrong })
+        if (code == null) throw Object.assign(new Error('this machine asks for its code'), { code: 'locked' })
+        try {
+          await this._askNow({ type: 'unlock', code }, 'unlocked', 20000)
+          CODES.set(this._pub, code)
+          return
+        } catch (e) {
+          CODES.delete(this._pub)
+          if (e.code !== 'bad-code' && e.code !== 'wait') throw e
+          wrong = e
+        }
+      }
+    })().finally(() => { this._unlocking = null })
+    return this._unlocking
   }
 
   /** Las consolas vivas en la máquina: `[{ id, n, title, origin, cols, rows, viewers, watchers… }]`. */

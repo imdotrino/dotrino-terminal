@@ -204,7 +204,12 @@ final class Consoles: ObservableObject {
 ///  · the screen's size is said with `resize`, and the agent applies it only if it is ours.
 @MainActor
 final class Tab: ObservableObject, Identifiable {
-    enum State { case connecting, open, lost, exited, failed }
+    /// `locked`: the machine asks for its code (`dotrino-terminal lock`) and it has not been typed on this session.
+    enum State { case connecting, open, locked, lost, exited, failed }
+
+    /// The code of each machine that asks for one, by the machine's key. In MEMORY only: it lasts
+    /// while the app lives, so coming back after a dropped connection does not ask again.
+    static var codes: [String: String] = [:]
 
     let machine: Machine
     private let myDevice: String?
@@ -228,6 +233,14 @@ final class Tab: ObservableObject, Identifiable {
     private var offs: [() -> Void] = []
     private var fresh = true                      // the next replay starts a clean screen
     private var choosing = false                  // waiting for the list to pick a free console
+    private var trying: String?                   // the code sent, waiting for the agent's answer
+    private var triedKept = false                 // the remembered code was already sent on this lock
+    /// While locked: why the last code was not taken (`bad-code`, `wait`), or nil if none was tried.
+    @Published private(set) var codeProblem: String?
+    /// With `wait`: how long the machine makes everyone wait, in ms.
+    private(set) var codeWaitMs: Int64 = 0
+    /// Goes up every time the screen has to ask for the code (the dialog comes up by itself).
+    @Published private(set) var codeAsks = 0
 
     nonisolated var id: ObjectIdentifier { ObjectIdentifier(self) }
 
@@ -288,8 +301,28 @@ final class Tab: ObservableObject, Identifiable {
             upsert(c)
             if c.id == consoleId { follow(c) }
         case "exit": state = .exited; note = m["code"].map { $0.text }; list()
+        // The machine's code was right: it is remembered while the app lives, and the tab goes on.
+        case "unlocked":
+            if let c = trying { Self.codes[machine.pubkey] = c }
+            trying = nil; triedKept = false; codeProblem = nil; codeWaitMs = 0
+            state = .connecting
+            if let id = consoleId { send("attach", id) } else { choosing = true; list() }
         case "fail":
             let code = m["code"]?.string
+            // The machine asks for its code. The one typed before (if any) is tried once by itself;
+            // if there is none or it no longer works, the screen asks.
+            if code == "locked" {
+                if state != .locked { state = .locked; codeProblem = nil; if Self.codes[machine.pubkey] == nil { codeAsks += 1 } }
+                if let kept = Self.codes[machine.pubkey], !triedKept, trying == nil { triedKept = true; unlock(kept) }
+                return
+            }
+            if code == "bad-code" || code == "wait" {
+                Self.codes[machine.pubkey] = nil; trying = nil
+                state = .locked; codeProblem = code
+                codeWaitMs = m["retryMs"]?.int ?? 0
+                codeAsks += 1
+                return
+            }
             // The console is gone on the machine (it was closed there, or the agent restarted).
             if code == "no-console" { state = .exited; note = code } else { state = .failed; note = m["message"]?.string ?? code }
             list()
@@ -308,6 +341,12 @@ final class Tab: ObservableObject, Identifiable {
     private func feed(_ m: JSON) {
         guard let data = m["data"]?.string else { return }
         terminal.feed(data); onOutput()
+    }
+
+    /// Type the machine's code. The agent answers `unlocked`, or says why not (`codeProblem`).
+    func unlock(_ code: String) {
+        trying = code
+        do { try channel?.send(["type": "unlock", "code": .string(code)]) } catch { trying = nil }
     }
 
     func input(_ text: String) {

@@ -276,6 +276,8 @@ enum Message {
     Enroll(window::Id),
     /// Renombrar el perfil de la ventana.
     Rename(window::Id),
+    /// «Poner o cambiar la clave» (`true`) o «Quitar la clave» (`false`) del perfil de la ventana.
+    Lock(window::Id, bool),
     /// Escribe en la consola de la ventana la orden que instala (o actualiza) el cliente.
     InstallClient(window::Id),
     /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
@@ -1180,6 +1182,17 @@ impl App {
                 }
                 self.focus(id)
             }
+            Message::Lock(id, set) => {
+                // Como «Renombrar»: la orden corre en TU consola, a la vista. La clave se teclea
+                // ahí (no se ve) y vale al momento para los otros aparatos, sin reiniciar nada.
+                if let Some(win) = self.windows.get_mut(&id) {
+                    if let (Some(profile), Some(term)) = (win.profile.clone(), win.term.as_mut()) {
+                        let order = format!("dotrino-terminal lock{} --name {profile}\r", if set { "" } else { " --off" });
+                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
+                    }
+                }
+                self.focus(id)
+            }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
                 let linked_before = linked_names(&self.profiles);
@@ -1364,6 +1377,10 @@ impl App {
             None => t("Renombrar perfil…", "Rename profile…"),
         };
         profiles.push(Item::new(entry(rename_label, "", (!linking && self.launch.is_ok() && win.profile.is_some() && win.term.is_some()).then_some(Message::Rename(id)))));
+        // La clave que piden los otros aparatos para abrir consolas de este perfil (opcional).
+        let can_lock = !linking && self.launch.is_ok() && win.profile.is_some() && win.term.is_some();
+        profiles.push(Item::new(entry(t("Poner o cambiar la clave…", "Set or change the code…"), "", can_lock.then_some(Message::Lock(id, true)))));
+        profiles.push(Item::new(entry(t("Quitar la clave", "Remove the code"), "", can_lock.then_some(Message::Lock(id, false)))));
         // Sin el cliente no hay perfiles ni enrolar: se ve deshabilitado, y la razón a la vista.
         profiles.push(Item::new(entry(t("Enrolar…", "Enroll…"), "", (!linking && self.launch.is_ok()).then_some(Message::Enroll(id)))));
         if let Err(why) = &self.launch {

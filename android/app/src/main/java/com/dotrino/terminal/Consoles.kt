@@ -221,6 +221,12 @@ object Consoles {
     }
 
     /**
+     * The code of each machine that asks for one, by the machine's key. In MEMORY only: it lasts
+     * while the app lives, so coming back after a dropped connection does not ask again.
+     */
+    internal val codes = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
      * A machine on screen: its session, the console it shows ([consoleId]) and the machine's
      * consoles ([consoles], for the panel). The same rules as the PWA (`src/main.js`):
      *  · switching to another console goes over the same session (`attach` / `open`);
@@ -230,7 +236,8 @@ object Consoles {
      * [post] runs on the main thread (the tests run it right away).
      */
     class Tab(val machine: Machine, private val myDevice: String?, private val post: (() -> Unit) -> Unit) {
-        enum class State { CONNECTING, OPEN, LOST, EXITED, FAILED }
+        /** LOCKED: the machine asks for its code (`dotrino-terminal lock`) and it has not been typed on this session. */
+        enum class State { CONNECTING, OPEN, LOCKED, LOST, EXITED, FAILED }
 
         val terminal = Terminal(80, 24)
         var state = State.CONNECTING; private set
@@ -257,6 +264,12 @@ object Consoles {
         private var fresh = true                                      // the next replay starts a clean screen
         private var choosing = false                                  // waiting for the list to pick a free console
         private var resuming = false                                  // coming back to the console it had, over a new session
+        private var trying: String? = null                            // the code sent, waiting for the agent's answer
+        private var triedKept = false                                 // the remembered code was already sent on this lock
+        /** While LOCKED: why the last code was not taken (`bad-code`, `wait`), or null if none was tried. */
+        var codeProblem: String? = null; private set
+        /** With `wait`: how long the machine makes everyone wait, in ms. */
+        var codeWaitMs = 0L; private set
 
         init {
             // What the emulator answers by itself (a cursor report) goes back as typed input.
@@ -320,8 +333,30 @@ object Consoles {
                     onChange()
                 }
                 "exit" -> { state = State.EXITED; note = (m["code"] as? JsonPrimitive)?.content; list(); onChange() }
+                // The machine's code was right: it is remembered while the app lives, and the tab goes on.
+                "unlocked" -> {
+                    trying?.let { codes[machine.pubkey] = it }
+                    trying = null; triedKept = false; codeProblem = null; codeWaitMs = 0
+                    state = State.CONNECTING
+                    if (consoleId != null) { resuming = true; send("attach", consoleId) } else { choosing = true; list() }
+                    onChange()
+                }
                 "fail" -> {
                     val code = (m["code"] as? JsonPrimitive)?.content
+                    // The machine asks for its code. The one typed before (if any) is tried once by
+                    // itself; if there is none or it no longer works, the screen asks.
+                    if (code == "locked") {
+                        if (state != State.LOCKED) { state = State.LOCKED; codeProblem = null }
+                        val kept = codes[machine.pubkey]
+                        if (kept != null && !triedKept && trying == null) { triedKept = true; unlock(kept) }
+                        onChange(); return
+                    }
+                    if (code == "bad-code" || code == "wait") {
+                        codes.remove(machine.pubkey); trying = null
+                        state = State.LOCKED; codeProblem = code
+                        codeWaitMs = (m["retryMs"] as? JsonPrimitive)?.content?.toDoubleOrNull()?.toLong() ?: 0
+                        onChange(); return
+                    }
                     // Coming back after the machine restarted: its consoles died with it. A new one, and it is said (as the PWA).
                     if (code == "no-console" && resuming) { resuming = false; consoleId = null; send("open", null); onGone(); return }
                     // The console is gone on the machine (it was closed there, or the agent restarted).
@@ -344,6 +379,12 @@ object Consoles {
         private fun feed(m: JsonObject) {
             val data = (m["data"] as? JsonPrimitive)?.content ?: return
             terminal.feed(data); onOutput()
+        }
+
+        /** Type the machine's code. The agent answers `unlocked`, or says why not ([codeProblem]). */
+        fun unlock(code: String) {
+            trying = code
+            try { channel?.send(buildJsonObject { put("type", "unlock"); put("code", code) }) } catch (_: Exception) { trying = null }
         }
 
         fun input(text: String) {

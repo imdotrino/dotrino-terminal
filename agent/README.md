@@ -58,3 +58,28 @@ Cada agente guarda su enlace en `~/.dotrino/agent/terminal-agent/<nombre>/`, el 
 carpeta concreta. El `link.json` guarda la llave privada: trátalo como una llave SSH.
 
 MIT.
+
+## Clave de la máquina (opcional)
+
+Por defecto, cualquier aparato de tu cuenta con permiso abre consolas en esta máquina. Si
+quieres pedir además una clave (un PIN o una contraseña):
+
+```bash
+dotrino-terminal lock [--name <perfil>]          # la pone o la cambia (se teclea dos veces, no se ve)
+dotrino-terminal lock --off [--name <perfil>]    # la quita
+dotrino-terminal lock --status [--name <perfil>] # dice si hay
+```
+
+En la app de escritorio: menú **Perfil → Poner o cambiar la clave… / Quitar la clave**.
+
+- Es **del perfil**: todas sus consolas comparten la misma clave.
+- La piden **solo los otros aparatos** (web, teléfono). Las ventanas de esta máquina no.
+- Vale **al momento**, sin reiniciar el agente: quien ya estaba dentro tiene que escribirla
+  en lo siguiente que haga.
+- Cada conexión la escribe una vez. La web y las apps la recuerdan solo en memoria.
+- Cinco fallos seguidos y hay que esperar (30 s, y el doble cada vez, hasta una hora). El freno
+  es de la máquina, no de la conexión.
+- En el disco (`access.json`, en la carpeta del perfil) quedan la sal y el resumen scrypt,
+  nunca la clave. Viaja dentro de la sesión cifrada: el proxio no la ve.
+- Hace falta agente ≥ 0.19.0, y web ≥ 0.8.9 o las apps ≥ 0.8.9 para poder escribirla. Un
+  cliente más viejo ve el error `locked` y no entra.

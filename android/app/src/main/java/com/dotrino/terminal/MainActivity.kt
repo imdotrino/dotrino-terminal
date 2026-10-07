@@ -450,13 +450,51 @@ class MainActivity : Activity() {
         val text = when (tab.state) {
             Consoles.Tab.State.OPEN -> null
             Consoles.Tab.State.CONNECTING -> t("tab.connecting")
+            Consoles.Tab.State.LOCKED -> t("code.note")
             Consoles.Tab.State.LOST -> t("tab.lost")
             Consoles.Tab.State.EXITED -> if (tab.note == "no-console") t("tab.gone") else t("tab.exited")
             Consoles.Tab.State.FAILED -> t("tab.failed", "why" to (tab.note ?: "?"))
         }
         note.visibility = if (text == null) View.GONE else View.VISIBLE
         note.text = text.orEmpty()
-        note.setOnClickListener(if (tab.state == Consoles.Tab.State.LOST || tab.state == Consoles.Tab.State.FAILED) View.OnClickListener { tab.retry() } else null)
+        note.setOnClickListener(when (tab.state) {
+            Consoles.Tab.State.LOST, Consoles.Tab.State.FAILED -> View.OnClickListener { tab.retry() }
+            Consoles.Tab.State.LOCKED -> View.OnClickListener { askCode(tab) }
+            else -> null
+        })
+        // The machine asks for its code: the sheet comes up by itself, once per answer of the agent.
+        if (tab.state == Consoles.Tab.State.LOCKED) {
+            val asked = tab to tab.codeProblem
+            if (codeSheet?.isShowing != true && codeAsked != asked) { codeAsked = asked; askCode(tab) }
+        } else { codeAsked = null; codeSheet?.dismiss(); codeSheet = null }
+    }
+
+    private var codeSheet: android.app.Dialog? = null
+    private var codeAsked: Pair<Consoles.Tab, String?>? = null
+
+    /** The machine's code (`dotrino-terminal lock`, set on that machine): typed here, kept only in memory. */
+    private fun askCode(tab: Consoles.Tab) {
+        codeSheet?.dismiss()
+        val (dialog, body) = sheet(t("code.title", "name" to tab.label))
+        body.add(label(t("code.lead"), 14f, col(R.color.t_muted)), top = 4)
+        when (tab.codeProblem) {
+            "bad-code" -> body.add(label(t("code.wrong"), 14f, col(R.color.t_busy)).apply { tag = "code-why" }, top = 10)
+            "wait" -> body.add(label(t("code.wait", "min" to maxOf(1, (tab.codeWaitMs + 59_999) / 60_000)), 14f, col(R.color.t_busy)).apply { tag = "code-why" }, top = 10)
+        }
+        val input = android.widget.EditText(this).apply {
+            tag = "code-input"; hint = t("code.label")
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setTextColor(col(R.color.t_text)); setHintTextColor(col(R.color.t_muted))
+            background = rounded(col(R.color.t_panel), px(12), px(1), col(R.color.t_line))
+            setPadding(px(14), px(12), px(14), px(12))
+        }
+        body.add(input, top = 12)
+        val go = { val v = input.text.toString(); if (v.isNotEmpty()) { dialog.dismiss(); tab.unlock(v) } }
+        input.setOnEditorActionListener { _, _, _ -> go(); true }
+        body.add(pill(t("code.ok"), filled = true) { go() }.apply { tag = "code-ok" }, top = 12)
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        codeSheet = dialog
+        dialog.show(); input.requestFocus()
     }
 
     private fun extraKeys(): View {

@@ -13,10 +13,16 @@
  *   cliente → agente: { type:'list' } · { type:'open', cols, rows, cwd?, tag? } ·
  *                     { type:'attach', id, cols, rows } · { type:'detach' } ·
  *                     { type:'input', data } · { type:'resize', cols, rows } · { type:'pin', on } ·
- *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id }
+ *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id } ·
+ *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
- *                     { type:'exit', code, closedBy? } · { type:'fail', code, message }
+ *                     { type:'exit', code, closedBy? } · { type:'fail', code, message, retryMs? } ·
+ *                     { type:'unlocked' }
+ *
+ * Con clave puesta, una sesión remota que no la ha escrito recibe `fail` con `code:'locked'`
+ * a todo lo que pida; tras `unlock` vale para esa conexión. `bad-code` y `wait` traen
+ * `retryMs` cuando toca esperar.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -26,6 +32,7 @@ import { startRemoteAgent } from '@dotrino/remote-agent/agent'
 import { dataDir, loadLink, LABEL } from './link.js'
 import { ConsoleHub, REPLAY_CHUNK } from './consoles.js'
 import { listenLocal } from './local.js'
+import { makeGate } from './access.js'
 
 const require = createRequire(import.meta.url)
 
@@ -78,9 +85,10 @@ export function makeHub (pty, opts = {}) {
  *
  * @param {object} session
  * @param {ConsoleHub} hub
- * @param {{ origin?: 'local'|'remote' }} [opts]
+ * @param {{ origin?: 'local'|'remote', gate?: ReturnType<typeof makeGate> }} [opts]  `gate`: la
+ *   clave de la máquina (access.js). Solo se le pide a las sesiones remotas.
  */
-export function serveSession (session, hub, { origin = 'remote' } = {}) {
+export function serveSession (session, hub, { origin = 'remote', gate = null } = {}) {
   let current = null
   let owned = null                       // la consola que esta ventana local abrió
   let size = { cols: 80, rows: 24 }
@@ -93,7 +101,18 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
     onMeta: (info) => { session.send({ type: 'meta', console: info }) }
   }
   const release = () => { if (current) { current.detach(viewer); current = null } }
-  const fail = (code, message) => session.send({ type: 'fail', code, message })
+  const fail = (code, message, extra = {}) => session.send({ type: 'fail', code, message, ...extra })
+  // La clave de la máquina: una vez escrita vale para ESTA conexión.
+  let unlocked = false
+  /** True si esta sesión puede seguir; si no, ya contestó por qué. No saber si hay clave = no pasa. */
+  const mayPass = () => {
+    if (origin !== 'remote' || !gate || unlocked) return true
+    try {
+      if (!gate.required()) return true
+    } catch (e) { fail(e.code || 'access-unreadable', e.message); return false }
+    fail('locked', 'this machine asks for its code')
+    return false
+  }
   const takeSize = (msg) => { if (msg.cols && msg.rows) { size = { cols: msg.cols, rows: msg.rows }; viewer.size = size } }
   // La etiqueta con la que se presenta quien mira (una ventana de la app de escritorio).
   const takeTag = (msg) => { if (typeof msg.tag === 'string') viewer.tag = msg.tag.slice(0, 64) }
@@ -112,6 +131,16 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
 
   session.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return
+    if (msg.type === 'unlock') {
+      if (origin !== 'remote' || !gate) { session.send({ type: 'unlocked' }); return }
+      try {
+        if (gate.required()) gate.check(msg.code)
+        unlocked = true
+        session.send({ type: 'unlocked' })
+      } catch (e) { fail(e.code || 'access-unreadable', e.message, e.retryMs ? { retryMs: e.retryMs } : {}) }
+      return
+    }
+    if (!mayPass()) return
     if (msg.type === 'list') { session.send({ type: 'consoles', list: hub.list() }); return }
     if (msg.type === 'open') {
       takeSize(msg)
@@ -172,6 +201,7 @@ export function serveSession (session, hub, { origin = 'remote' } = {}) {
 export async function startAgent (opts = {}) {
   const dir = opts.dir || dataDir()
   const hub = makeHub(loadPty(), { ...opts, dir })
+  const gate = makeGate(dir)
   const local = await listenLocal({ dir, serve: (session) => serveSession(session, hub, { origin: 'local' }) })
   let remote = null
   let stopped = false
@@ -181,7 +211,7 @@ export async function startAgent (opts = {}) {
     proxyUrl: opts.proxyUrl,
     quiet: opts.quiet,
     onRevoked: () => { hub.killAll(); opts.onRevoked?.() },
-    onSession: (session) => serveSession(session, hub, { origin: 'remote' })
+    onSession: (session) => serveSession(session, hub, { origin: 'remote', gate })
   })
   let watcher = null
   if (loadLink(dir)) {

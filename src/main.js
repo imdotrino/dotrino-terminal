@@ -92,6 +92,14 @@ const M = {
     self_choice_self: 'Usar este dispositivo como bóveda',
     self_choice_self_d: 'Sin vault: la identidad de este navegador certifica tus máquinas directamente.',
     self_back_vault: 'Usar una bóveda externa',
+    code_title: (alias) => `${alias} pide su clave`,
+    code_lead: 'La pusiste en esa máquina con «dotrino-terminal lock». Se recuerda hasta que cierres o recargues esta página.',
+    code_label: 'Clave de la máquina',
+    code_wrong: 'Esa no es la clave.',
+    code_wait: (min) => `Demasiados intentos. Espera ${min} min y vuelve a probar.`,
+    code_ok: 'Entrar',
+    code_cancel: 'Cancelar',
+    code_needed: (alias) => `${alias} pide su clave y no se escribió.`,
   },
   en: {
     home_title: 'Your terminal, from your phone too',
@@ -162,6 +170,14 @@ const M = {
     self_choice_self: 'Use this device as its own vault',
     self_choice_self_d: 'No vault: this browser\'s identity certifies your machines directly.',
     self_back_vault: 'Use an external vault',
+    code_title: (alias) => `${alias} asks for its code`,
+    code_lead: 'You set it on that machine with "dotrino-terminal lock". It is remembered until you close or reload this page.',
+    code_label: 'Machine code',
+    code_wrong: 'That is not the code.',
+    code_wait: (min) => `Too many tries. Wait ${min} min and try again.`,
+    code_ok: 'Enter',
+    code_cancel: 'Cancel',
+    code_needed: (alias) => `${alias} asks for its code and it was not typed.`,
   }
 }
 // Idioma: lo gobierna <dotrino-topbar> (clave compartida del ecosistema
@@ -304,6 +320,35 @@ function choiceScreen () {
 // pestañas abiertas se recuerdan en sessionStorage (CONVENCIONES §4: sobreviven a un
 // refresco, no a cerrar la pestaña) para volver a engancharlas al recargar.
 const SS_TABS = 'dotrino-terminal:tabs'
+/**
+ * El diálogo de la clave de una máquina (`dotrino-terminal lock`). Devuelve lo tecleado, o null
+ * si la persona lo deja. `wrong`: el fallo del intento anterior (`bad-code` / `wait`).
+ */
+function askMachineCode (alias, wrong) {
+  return new Promise((resolve) => {
+    const why = !wrong ? '' : wrong.code === 'wait' ? t('code_wait', Math.max(1, Math.ceil((wrong.retryMs || 0) / 60000))) : t('code_wrong')
+    const back = el(`<div class="modal-back" data-testid="code-modal">
+      <form class="card modal">
+        <h2>${esc(t('code_title', alias))}</h2>
+        <p class="status">${esc(t('code_lead'))}</p>
+        ${why ? `<p class="status machine-code-why" data-testid="code-why">${esc(why)}</p>` : ''}
+        <input type="password" class="machine-code" autocomplete="off" aria-label="${esc(t('code_label'))}" placeholder="${esc(t('code_label'))}" data-testid="code-input">
+        <div class="modal-row">
+          <button type="button" data-testid="code-cancel">${esc(t('code_cancel'))}</button>
+          <button type="submit" class="primary" data-testid="code-ok">${esc(t('code_ok'))}</button>
+        </div>
+      </form>
+    </div>`)
+    const input = back.querySelector('input')
+    const done = (v) => { back.remove(); resolve(v) }
+    back.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); if (input.value) done(input.value) })
+    back.querySelector('[data-testid=code-cancel]').addEventListener('click', () => done(null))
+    back.addEventListener('keydown', (e) => { if (e.key === 'Escape') done(null) })
+    document.body.appendChild(back)
+    input.focus()
+  })
+}
+
 function loadTabs () { try { return JSON.parse(sessionStorage.getItem(SS_TABS) || '[]') } catch { return [] } }
 function saveTabs (list) { try { sessionStorage.setItem(SS_TABS, JSON.stringify(list)) } catch {} }
 
@@ -600,6 +645,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     hint.textContent = t('connecting', s.alias)
     try {
       s.agent = new AgentClient(link, { agentPubkey: pub })
+      s.agent.askCode = ({ wrong }) => askMachineCode(s.alias, wrong)
       s.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
       // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
       // a la misma consola si sigue viva, o a una nueva diciéndolo.
@@ -632,6 +678,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       // dice, con el enlace a la guía.
       try { s.agent?.disconnect() } catch {}
       removeSession(s)
+      if (e.code === 'locked') { hint.textContent = t('code_needed', s.alias); hint.title = ''; return }
       hint.innerHTML = `${esc(t('conn_machine', s.alias))} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('how_link')}</a>`
       hint.title = e.message
     }
