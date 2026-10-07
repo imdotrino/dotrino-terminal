@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/terminal-agent",
-  "version": "0.19.2",
+  "version": "0.20.0",
   "description": "Dotrino Terminal: las ventanas de esta máquina (dotrino-terminal) y su agente, que deja abrir esas mismas consolas desde los otros aparatos de tu cuenta, cifrado punto a punto.",
   "type": "module",
   "bin": {
@@ -13,6 +13,7 @@
   "files": [
     "index.js",
     "access.js",
+    "editors.js",
     "consoles.js",
     "link.js",
     "local.js",
@@ -32,6 +33,7 @@
     "@dotrino/vault": "0.79.0",
     "@xterm/addon-serialize": "0.13.0",
     "@xterm/headless": "5.5.0",
+    "jsonc-parser": "3.3.1",
     "node-pty": "1.2.0-beta.15"
   },
   "engines": {

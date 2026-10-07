@@ -30,6 +30,7 @@ dotrino-terminal kill <id>
 dotrino-terminal profiles [--json]       # los perfiles (agentes con nombre) de esta máquina
 dotrino-terminal link [--name <n>]       # enlazar un perfil con tu bóveda
 dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para su agente; mismo aparato)
+dotrino-terminal vscode [--name <n>]     # la terminal embebida de VS Code abre consolas de aquí (--off lo deshace)
 ```
 
 Cerrar la ventana cierra su consola, como cualquier terminal; **Ctrl+] y luego d** la suelta
@@ -39,6 +40,12 @@ escritorio lo manda al ganar el foco). `--tag <t>` presenta la ventana en la lis
 título. Sin enlace el agente atiende solo a las ventanas locales; al enlazarlo
 (`dotrino-terminal link`) enciende la parte remota sin reiniciarse. La app de escritorio
 (`desktop/` del repo) es una ventana nativa que corre este mismo cliente.
+
+`dotrino-terminal vscode` escribe el perfil de terminal «Dotrino» en el `settings.json` de VS Code,
+VS Code Insiders, VSCodium y Cursor (los que haya, Linux y macOS) y lo deja por defecto; conserva
+los comentarios y el resto del archivo (`editors.js`, con `jsonc-parser`). El perfil apunta a Node
+y al script por su ruta, porque un editor lanzado desde el escritorio no hereda el PATH de la shell:
+al cambiar de Node se vuelve a correr.
 
 Enlazar pide una terminal interactiva: se pega la invitación de `dotrino-vault pair` y
 se aprueba con `dotrino-vault approve <código>`. Después puede correr como servicio

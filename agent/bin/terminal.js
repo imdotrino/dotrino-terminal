@@ -11,6 +11,8 @@
  *   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente si corre)
  *   dotrino-terminal lock [--name <n>]         pone o cambia la clave que piden los otros aparatos
  *   dotrino-terminal lock --off [--name <n>]   la quita
+ *   dotrino-terminal vscode [--name <n>]       la terminal embebida de VS Code abre consolas de aquí
+ *   dotrino-terminal vscode --off              lo deshace
  *
  * Un PERFIL es un agente con nombre (`~/.dotrino/agent/terminal-agent/<nombre>/`), enlazado a
  * una bóveda o solo local. Cada consola vive en el agente de un perfil.
@@ -35,6 +37,7 @@ import readline from 'node:readline'
 import { connectLocal } from '../local.js'
 import { titleFilter } from '../title.js'
 import { hasAccessCode, setAccessCode, clearAccessCode, MIN_LENGTH } from '../access.js'
+import { configureEditors, terminalProfile } from '../editors.js'
 
 const { version: VERSION } = createRequire(import.meta.url)('../package.json')
 const args = process.argv.slice(2)
@@ -59,6 +62,9 @@ if (args.includes('-h') || args.includes('--help')) {
                                              aparatos tienen que escribir para abrir consolas aquí
   dotrino-terminal lock --off [--name <n>]   quita la clave
   dotrino-terminal lock --status [--name <n>] dice si hay clave
+  dotrino-terminal vscode [--name <n>]       hace que la terminal embebida de VS Code (y de
+                                             VS Code Insiders, VSCodium y Cursor) abra consolas de aquí
+  dotrino-terminal vscode --off              lo deshace
 
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla; Ctrl+] n abre otra
 (y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola; Ctrl+] p fija el tamaño de la
@@ -75,6 +81,9 @@ Cerrar la ventana cierra la consola que abrió.`, `usage:
                                              devices must type to open consoles here
   dotrino-terminal lock --off [--name <n>]   remove the code
   dotrino-terminal lock --status [--name <n>] say whether there is a code
+  dotrino-terminal vscode [--name <n>]       make the integrated terminal of VS Code (and VS Code
+                                             Insiders, VSCodium and Cursor) open consoles from here
+  dotrino-terminal vscode --off              undo it
 
 Inside a console: Ctrl+] then d detaches without closing it; Ctrl+] n opens another
 (detaching the current one); Ctrl+] a <id> Enter switches to that console; Ctrl+] p pins the
@@ -159,6 +168,28 @@ async function profiles () {
     const what = p.linked ? `${t('aparato', 'device')} ${p.id} · ${t('bóveda', 'vault')} ${p.vault}` : t('sin enlazar (solo esta máquina)', 'not linked (this machine only)')
     console.log(`  ${p.name.padEnd(16)} ${what}`)
   }
+}
+
+/** Pone (o quita, con `--off`) el perfil de terminal «Dotrino» en los editores instalados. */
+function vscode () {
+  const off = args.includes('--off')
+  const name = opt('--name')
+  if (name !== undefined && !isValidName(name)) die(t(`nombre de perfil no válido: ${name}`, `invalid profile name: ${name}`))
+  const profile = off ? null : terminalProfile({ node: process.execPath, script: fs.realpathSync(fileURLToPath(import.meta.url)), name })
+  let done
+  try { done = configureEditors({ profile }) } catch (e) {
+    if (e.code === 'no-editor') die(t('no encontré VS Code, VS Code Insiders, VSCodium ni Cursor en esta cuenta.', 'could not find VS Code, VS Code Insiders, VSCodium or Cursor in this account.'))
+    if (e.code === 'bad-settings') die(t(`no se pudo leer la configuración y no se tocó nada: ${e.message}`, `could not read the settings and nothing was changed: ${e.message}`))
+    if (e.code === 'unsupported-platform') die(t('esto solo está para Linux y macOS.', 'this is only available on Linux and macOS.'))
+    throw e
+  }
+  for (const d of done) {
+    const what = off
+      ? (d.changed ? t('quitado', 'removed') : t('no estaba', 'was not set'))
+      : (d.changed ? t('configurado', 'configured') : t('ya estaba', 'already set'))
+    console.log(`  ${d.name.padEnd(18)} ${what}  ${d.settings}`)
+  }
+  if (!off) console.log(t('\nLas terminales nuevas del editor ya abren aquí. Si actualizas o cambias de Node, vuelve a correr esta orden.', '\nNew terminals in the editor now open here. If you update or switch Node, run this command again.'))
 }
 
 /** Enlaza un perfil. Sin `--name`, lo pregunta. Uno ya enlazado no se pisa: eso es `enroll`. */
@@ -504,6 +535,7 @@ try {
   if (cmd === 'link') { await link(); process.exit(0) }
   if (cmd === 'rename') { await rename(); process.exit(0) }
   if (cmd === 'lock') { await lock(); process.exit(0) }
+  if (cmd === 'vscode') { vscode(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))
   if (cmd === 'open' || cmd === 'attach') captureEarly()
   const conn = await agent(dir)
