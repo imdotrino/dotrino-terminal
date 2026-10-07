@@ -282,6 +282,7 @@ test('cada consola dice en qué carpeta está AHORA, aunque el título no lo dig
   s.deliver({ type: 'open', cols: 80, rows: 24 })
   await until(() => s.sent.some((p) => p.type === 'attached'))
   assert.equal(h.list()[0].cwd, '~', 'abre en la carpeta personal')
+  assert.equal(h.list()[0].host, `${os.userInfo().username}@${os.hostname().split('.')[0]}`, 'dice de qué máquina es, como el prompt')
   s.deliver({ type: 'input', data: `cd ${dir}\r` })
   await until(() => h.list()[0].cwd === dir)
   h.killAll()

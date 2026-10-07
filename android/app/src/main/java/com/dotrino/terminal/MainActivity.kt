@@ -460,9 +460,10 @@ class MainActivity : Activity() {
                     fun oneLine(text: String, tagName: String, color: Int) = label(text, 12f, color).apply {
                         tag = tagName; setLineSpacing(0f, 1f); isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.START
                     }
-                    val (what, where) = panelLines(c.title, c.cwd)
-                    what?.let { addView(oneLine(it, "drawer-title", col(R.color.t_text))) }
-                    where?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_muted))) }
+                    val lines = panelLines(c.title, c.cwd, c.host)
+                    lines.host?.let { addView(oneLine(it, "drawer-host", col(R.color.t_text))) }
+                    lines.dir?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_text))) }
+                    lines.name?.let { addView(oneLine(it, "drawer-title", col(R.color.t_text))) }
                     addView(label(where(tab, c) + actText(c), 11f, col(R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }

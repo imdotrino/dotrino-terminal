@@ -29,6 +29,8 @@ struct ConsoleInfo: Equatable, Identifiable {
     let lastActive: Int64
     /// The folder its shell is in now (agent ≥ 0.22, Linux); nil when the machine does not say.
     var cwd: String? = nil
+    /// `user@host` of the machine it runs on, as a shell's prompt says it (agent ≥ 0.24).
+    var host: String? = nil
     /// Something is working in it now (the agent says it, ≥ 0.17).
     var busy = false
     /// It finished and nobody has looked at it yet.
@@ -58,21 +60,27 @@ func consoleOf(_ o: JSON) -> ConsoleInfo? {
     func int(_ k: String) -> Int { Int(o[k]?.int ?? 0) }
     return ConsoleInfo(id: id, n: int("n"), title: o["title"]?.string ?? "", origin: o["origin"]?.string, cols: int("cols"), rows: int("rows"),
                        viewers: int("viewers"), watchers: watchers.count, watchedLocally: watchers.contains { $0["origin"]?.string == "local" },
-                       sizeBy: by, lastActive: o["lastActive"]?.int ?? 0, cwd: o["cwd"]?.string,
+                       sizeBy: by, lastActive: o["lastActive"]?.int ?? 0, cwd: o["cwd"]?.string, host: o["host"]?.string,
                        busy: o["activity"]?.string == "busy", doneAt: o["doneAt"]?.int)
 }
 
-/// What the open panel says of a console, in at most TWO lines: what it is, and where.
-/// «user@host:» goes from the title (the machine is the tab). A shell's title IS its folder, so it
-/// is one line; a program that names itself (Claude: its session) gets its folder on the second.
-func panelLines(_ title: String, _ cwd: String?) -> (what: String?, at: String?) {
-    var name = title
-    if let r = title.range(of: #"^[^\s:]+@[^\s:]+:\s*"#, options: .regularExpression) { name = String(title[r.upperBound...]) }
-    name = name.trimmingCharacters(in: .whitespaces)
-    guard let dir = cwd?.trimmingCharacters(in: .whitespaces), !dir.isEmpty else { return (name.isEmpty ? nil : name, nil) }
-    if name.isEmpty || name == dir { return (dir, nil) }
-    if name.contains(dir) { return (name, nil) }
-    return (name, dir)
+/// What the open panel says of a console, each thing on ITS line: the machine (`user@host`) only
+/// when it is ANOTHER one, the folder, and the title the program set. A shell titles itself
+/// «user@host: folder»: on its machine the folder is left, and after an `ssh` where it went shows
+/// too. A program that names itself (Claude: its session) shows the folder and its title. The same
+/// split as the PWA, the desktop and Android. `me`: `user@host` of the console's machine (agent ≥ 0.24).
+func panelLines(_ title: String, _ cwd: String?, _ me: String? = nil) -> (host: String?, dir: String?, name: String?) {
+    let title = title.trimmingCharacters(in: .whitespaces)
+    var host: String? = nil
+    var rest = title
+    if let r = title.range(of: #"^[^\s:]+@[^\s:]+:"#, options: .regularExpression) {
+        host = String(title[title.startIndex..<title.index(before: r.upperBound)])
+        rest = title[r.upperBound...].trimmingCharacters(in: .whitespaces)
+    }
+    // Without the machine's folder (an older agent, or macOS), a shell's is what follows the host.
+    var dir = cwd?.trimmingCharacters(in: .whitespaces)
+    if dir?.isEmpty ?? true { dir = host != nil && !rest.isEmpty ? rest : nil }
+    return (host == me ? nil : host, dir, rest.isEmpty || rest == dir ? nil : rest)
 }
 
 /// The title of a console for the panel. The shell sets it as «user@host: path»; what matters is

@@ -55,6 +55,16 @@ export function cwdOf (pid) {
   return dir === home ? '~' : dir.startsWith(home + '/') ? '~' + dir.slice(home.length) : dir
 }
 
+/**
+ * `usuario@máquina` de ESTA máquina, tal como lo pone el prompt de una shell (`\u@\h`: el nombre
+ * hasta el primer punto). Va con cada consola para que el panel sepa si su título habla de OTRA
+ * (tras un `ssh`) y solo entonces la enseñe. Si el sistema no lo dice, `null`: no se inventa.
+ */
+export function userAtHost () {
+  try { return `${os.userInfo().username}@${os.hostname().split('.')[0]}` } catch (_) { return null }
+}
+const HOST = userAtHost()
+
 const randomId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
 
 class Console {
@@ -242,7 +252,7 @@ class Console {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
     const d = this.decider()
     const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null, pinned: !!d && d === this.pinnedViewer() } : null
-    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 

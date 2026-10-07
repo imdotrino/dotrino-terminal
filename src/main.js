@@ -14,6 +14,7 @@ import '@dotrino/install' // botón «Instalar app»: captura beforeinstallpromp
 import { createVaultReputation } from '@dotrino/reputation'
 import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
+import { panelLines } from './panel.js'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
 
@@ -68,9 +69,6 @@ const M = {
     panel_close: 'Colapsar el panel',
     pin_here: 'Esta pantalla manda en el tamaño',
     pin_title: (n, on) => on ? `Soltar: la consola ${n} deja de usar el tamaño de esta pantalla` : `Usar el tamaño de esta pantalla en la consola ${n}`,
-    size_row: (n, who, cols, rows) => `Tamaño de la ${n}: ${who} (${cols}×${rows})`,
-    size_pinned: 'elegido a propósito',
-    size_last: 'lo tiene la última pantalla que la abre',
     act_busy: 'trabajando',
     act_done: 'terminó',
     pinned_now: (n, cols, rows) => `Consola ${n}: usa el tamaño de esta pantalla (${cols}×${rows}). Las demás la ven a ese tamaño.`,
@@ -146,9 +144,6 @@ const M = {
     panel_close: 'Collapse the panel',
     pin_here: 'This screen sets the size',
     pin_title: (n, on) => on ? `Release: console ${n} stops using this screen's size` : `Use this screen's size for console ${n}`,
-    size_row: (n, who, cols, rows) => `Size of ${n}: ${who} (${cols}×${rows})`,
-    size_pinned: 'chosen on purpose',
-    size_last: 'set by the last screen that opens it',
     act_busy: 'working',
     act_done: 'finished',
     pinned_now: (n, cols, rows) => `Console ${n}: uses this screen's size (${cols}×${rows}). Other screens show it at that size.`,
@@ -436,14 +431,24 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** ⤢ «Usar el tamaño de esta pantalla»: una flecha diagonal doble, dibujada (no depende de fuentes). */
   const ICON_SIZE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5l-11 11"/></svg>'
 
+  /** Las líneas de una consola en el panel: máquina (si es otra), carpeta y título del programa. */
+  function linesOf (c) {
+    const l = panelLines(c.title, c.cwd, c.host)
+    return [l.host, l.dir && shortTitle(l.dir), l.name].filter(Boolean)
+  }
+
+  /** Esas líneas como filas del panel abierto; el número va con la primera. */
+  function rows (c, i, mine) {
+    const [first, ...more] = linesOf(c)
+    const head = `${c.id === mine ? '● ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
+    return `<span>${head}</span>` + more.map((l) => `<span>${esc(l)}</span>`).join('')
+  }
+
   /**
-   * El título de una consola para el panel. La shell lo pone como «usuario@máquina: ruta»; lo que
-   * importa es la carpeta final, así que se quita el «usuario@máquina:» (la máquina ya se sabe) y
-   * la ruta se recorta POR LA IZQUIERDA, por carpetas enteras, hasta `max` caracteres.
+   * Una ruta para el panel: lo que importa es la carpeta final, así que se recorta POR LA
+   * IZQUIERDA, por carpetas enteras, hasta `max` caracteres.
    */
-  function shortTitle (title, max = 24) {
-    const m = /^[^\s:]+@[^\s:]+:\s*(.+)$/.exec(title)
-    const text = m ? m[1] : title
+  function shortTitle (text, max = 24) {
     if (text.length <= max) return text
     const parts = text.split('/')
     let out = parts.pop()
@@ -510,14 +515,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((c.title || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
-        ${cur ? `<div class="srow"><span class="grow">${esc(t('size_row', cur.n, sizeWho(cur.c.sizeBy), cur.c.cols, cur.c.rows))}<small>${cur.c.sizeBy?.pinned ? t('size_pinned') : t('size_last')}</small></span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
+        ${cur ? `<div class="srow"><span class="grow" data-testid="panel-size">${cur.c.cols}×${cur.c.rows}</span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
         ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}">
-          <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}"><span>${c.id === mine ? '● ' : ''}${numOf(c, i)}${c.title ? ' · ' + esc(shortTitle(c.title)) : ''}</span><small>${esc(where(s, c) + actText(c))}</small></button>
+          <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}">${rows(c, i, mine)}<small>${esc(where(s, c) + actText(c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
         </div>`).join('')}`
     }

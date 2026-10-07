@@ -421,9 +421,10 @@ private struct ConsoleScreen: View {
                             Text((on ? "● " : "") + "\(c.n)").font(.footnote.bold()).foregroundColor(Palette.text)
                             // ONE line each, never wrapped (a long path would push every row down); what
                             // does not fit is cut at the START, so the end — the folder — stays.
-                            let lines = panelLines(c.title, c.cwd)
-                            if let what = lines.what { Text(what).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head) }
-                            if let at = lines.at { Text(at).font(.caption).foregroundColor(Palette.muted).lineLimit(1).truncationMode(.head) }
+                            let lines = panelLines(c.title, c.cwd, c.host)
+                            ForEach([lines.host, lines.dir, lines.name].compactMap { $0 }, id: \.self) { line in
+                                Text(line).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head)
+                            }
                             Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -49,6 +49,8 @@ data class ConsoleInfo(
     val watcherDevices: List<String?> = emptyList(),
     /** The folder its shell is in now (agent ≥ 0.22, Linux); null when the machine does not say. */
     val cwd: String? = null,
+    /** `user@host` of the machine it runs on, as a shell's prompt says it (agent ≥ 0.24). */
+    val host: String? = null,
 ) {
     enum class Activity { IDLE, BUSY, DONE }
     val activity: Activity get() = if (busy) Activity.BUSY else if (doneAt != null) Activity.DONE else Activity.IDLE
@@ -85,6 +87,7 @@ fun consoleOf(o: JsonObject): ConsoleInfo? {
         str("activity") == "busy", (o["doneAt"] as? JsonPrimitive)?.longOrNull,
         (o["watchers"] as? JsonArray).orEmpty().map { w -> (w as? JsonObject)?.let { str("device", it) } },
         str("cwd"),
+        str("host"),
     )
 }
 
@@ -102,19 +105,23 @@ fun shortTitle(title: String, max: Int = 24): String {
     return "…/" + if (out.length > max - 2) "…" + out.takeLast(max - 3) else out
 }
 
+/** What the open panel says of a console, a line each (any may be missing). */
+data class PanelLines(val host: String?, val dir: String?, val name: String?)
+
 /**
- * What the open panel says of a console, in at most TWO lines: what it is, and where.
- * «user@host:» goes from the title (the machine is the tab). A shell's title IS its folder, so it
- * is one line; a program that names itself (Claude: its session) gets its folder on the second.
+ * What the open panel says of a console, each thing on ITS line: the machine (`user@host`) only
+ * when it is ANOTHER one, the folder, and the title the program set. A shell titles itself
+ * «user@host: folder»: on its machine the folder is left, and after an `ssh` where it went shows
+ * too. A program that names itself (Claude: its session) shows the folder and its title. The same
+ * split as the PWA, the desktop and iOS. [me]: `user@host` of the console's machine (agent ≥ 0.24).
  */
-fun panelLines(title: String, cwd: String?): Pair<String?, String?> {
-    val name = (Regex("""^[^\s:]+@[^\s:]+:\s*(.*)$""").find(title)?.groupValues?.get(1) ?: title).trim()
-    val dir = cwd?.trim()?.takeIf { it.isNotEmpty() }
-    return when {
-        dir == null -> name.takeIf { it.isNotEmpty() } to null
-        name.isEmpty() || name == dir || name.contains(dir) -> (if (name.contains(dir) && name != dir) name else dir) to null
-        else -> name to dir
-    }
+fun panelLines(title: String, cwd: String?, me: String? = null): PanelLines {
+    val m = Regex("""^([^\s:]+@[^\s:]+):\s*(.*)$""").find(title.trim())
+    val host = m?.groupValues?.get(1)
+    val rest = (m?.groupValues?.get(2) ?: title).trim()
+    // Without the machine's folder (an older agent, or macOS), a shell's is what follows the host.
+    val dir = cwd?.trim()?.takeIf { it.isNotEmpty() } ?: rest.takeIf { host != null && it.isNotEmpty() }
+    return PanelLines(host?.takeIf { it != me }, dir, rest.takeIf { it.isNotEmpty() && it != dir })
 }
 
 object Consoles {

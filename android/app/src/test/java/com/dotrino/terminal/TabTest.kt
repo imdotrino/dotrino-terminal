@@ -229,11 +229,19 @@ class TabTest {
         assertEquals("it was the last one: a new one", opens + 1, ch2.types().count { it == "open" })
     }
 
-    @Test fun thePanelSaysWhatAndWhereInAtMostTwoLinesWithoutTheHost() {
-        assertEquals("~/proyectos/dotrino" to null, panelLines("seyacat@loca: ~/proyectos/dotrino", "~/proyectos/dotrino"))
-        assertEquals("~/proyectos/dotrino" to null, panelLines("seyacat@loca: ~/proyectos/dotrino", null))   // an older agent
-        assertEquals("✳ Sefjr improvement" to "/mnt/sda1/Dotrino", panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino"))
-        assertEquals("~" to null, panelLines("", "~"))
-        assertEquals(null to null, panelLines("", null))
+    @Test fun thePanelGivesTheFolderAndTheTitleALineEachAndTheMachineOnlyWhenItIsAnother() {
+        val me = "seyacat@loca"
+        // Local: the machine line is left out, the folder leads.
+        assertEquals(PanelLines(null, "~", null), panelLines("seyacat@loca: ~", "~", me))
+        assertEquals(PanelLines(null, "~/p/dotrino", null), panelLines("seyacat@loca: ~/p/dotrino", null, me))   // an older agent
+        assertEquals(PanelLines(null, "/mnt/sda1/Dotrino", "✳ Sefjr improvement"), panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino", me))
+        assertEquals(PanelLines(null, "~", "vim: notas.txt"), panelLines("vim: notas.txt", "~", me))
+        // After an ssh the title names ANOTHER machine: that is shown.
+        assertEquals(PanelLines("dotrino@proxy1", "~", "/var/www"), panelLines("dotrino@proxy1: /var/www", "~", me))
+        assertEquals(PanelLines("dotrino@proxy1", "~", null), panelLines("dotrino@proxy1: ~", null, me))
+        // Without knowing the machine's name, a host in the title is shown.
+        assertEquals(PanelLines("seyacat@loca", "~", null), panelLines("seyacat@loca: ~", "~", null))
+        assertEquals(PanelLines(null, "~", null), panelLines("", "~", null))
+        assertEquals(PanelLines(null, null, null), panelLines("", null, null))
     }
 }
