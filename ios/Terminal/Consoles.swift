@@ -449,7 +449,6 @@ final class Tab: ObservableObject, Identifiable {
         var o: [String: JSON] = ["type": "move", "id": .string(id)]
         if let b = to.before { o["before"] = .string(b) }
         try? channel?.send(.object(o))
-        onChange()
     }
 
     /// The tab's ×: closes the console on screen on the machine too (as the PWA's × does), and the tab.
