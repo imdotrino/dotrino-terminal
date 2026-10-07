@@ -42,7 +42,7 @@ sesión cifrada).
 
 | Sentido | Payload |
 |---|---|
-| cliente → máquina | `list` · `open {cols,rows,cwd?,tag?}` · `attach {id,cols,rows}` · `detach` · `input {data}` · `resize {cols,rows}` · `close` (mata la enganchada) · `kill {id}` |
+| cliente → máquina | `list` · `open {cols,rows,cwd?,tag?}` · `attach {id,cols,rows}` · `detach` · `input {data}` · `resize {cols,rows}` · `close` (mata la enganchada) · `kill {id}` · `move {id,before?}` (el orden del panel, agente ≥ 0.26.0) |
 | máquina → cliente | `consoles {list}` · `replay {id,data,last}` · `attached {id,fresh,console}` · `out {data}` · `meta {console}` · `exit {code}` · `fail {code,message}` |
 
 Cada consola dice su `origin` (`local`/`remote`), su `title` (el de la shell) y `watchers`

@@ -14,6 +14,7 @@
  *                     { type:'attach', id, cols, rows } · { type:'detach' } ·
  *                     { type:'input', data } · { type:'resize', cols, rows } · { type:'pin', on } ·
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id } ·
+ *                     { type:'move', id, before? } (el orden del panel; contesta con `consoles`) ·
  *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
@@ -174,7 +175,12 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
     // ⤢ «Esta pantalla manda en el tamaño» (on) o soltarlo (off).
     if (msg.type === 'pin') { current?.pin(viewer, !!msg.on); return }
     if (msg.type === 'close') { if (current) hub.kill(current.id, viewer); return }
-    if (msg.type === 'kill') { if (!hub.kill(msg.id, viewer)) fail('no-console', 'that console no longer exists') }
+    if (msg.type === 'kill') { if (!hub.kill(msg.id, viewer)) fail('no-console', 'that console no longer exists'); return }
+    // El orden del panel: es de la máquina, así que lo ve igual cualquier pantalla.
+    if (msg.type === 'move') {
+      if (!hub.move(String(msg.id), msg.before == null ? null : String(msg.before))) return fail('no-console', 'that console no longer exists')
+      session.send({ type: 'consoles', list: hub.list() })
+    }
   })
   session.on('close', () => {
     const mine = owned && owned === current ? owned : null

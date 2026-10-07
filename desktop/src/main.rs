@@ -172,7 +172,17 @@ fn user_at_host() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::panel_lines;
+    use super::{drop_target, panel_lines};
+
+    #[test]
+    fn a_console_dropped_on_another_takes_its_place() {
+        let ids = ["a", "b", "c", "d"];
+        assert_eq!(drop_target(&ids, "c", "a"), Some(Some("a".to_string()))); // up: in front of it
+        assert_eq!(drop_target(&ids, "a", "c"), Some(Some("d".to_string()))); // down: behind it
+        assert_eq!(drop_target(&ids, "a", "d"), Some(None)); // down to the last: the end
+        assert_eq!(drop_target(&ids, "b", "b"), None);
+        assert_eq!(drop_target(&ids, "x", "b"), None);
+    }
 
     fn s(v: &str) -> Option<String> {
         Some(v.to_string())
@@ -194,6 +204,25 @@ mod tests {
         assert_eq!(panel_lines("seyacat@loca: ~", Some("~"), None), (s("seyacat@loca"), s("~"), None));
         assert_eq!(panel_lines("", None, None), (None, None, None));
     }
+}
+
+/// Una consola a medio arrastrar en el panel de una ventana, y la fila sobre la que caería.
+struct Drag {
+    win: window::Id,
+    id: String,
+    over: String,
+}
+
+/// A dónde va una consola que se suelta sobre otra al arrastrarla: toma el SITIO de esa. Hacia
+/// arriba queda delante de ella; hacia abajo, detrás (delante de la siguiente, o al final: `None`
+/// dentro). `None` fuera: no se mueve. Igual que `dropTarget` de la PWA.
+fn drop_target(ids: &[&str], id: &str, over: &str) -> Option<Option<String>> {
+    let from = ids.iter().position(|x| *x == id)?;
+    let to = ids.iter().position(|x| *x == over)?;
+    if from == to {
+        return None;
+    }
+    Some(if to < from { Some(over.to_string()) } else { ids.get(to + 1).map(|x| x.to_string()) })
 }
 
 /// Qué hace una consola, para el color del panel.
@@ -323,6 +352,10 @@ struct App {
     palette: iced_term::ColorPalette,
     /// Las consolas abiertas, por perfil, leídas del socket de su agente cada poco.
     consoles: HashMap<String, Vec<ConsoleInfo>>,
+    /// La fila del panel bajo el puntero (ventana, consola): de ahí arranca un arrastre.
+    hover: Option<(window::Id, String)>,
+    /// La consola que se está arrastrando en el panel para cambiarla de sitio.
+    drag: Option<Drag>,
     /// Las consolas que usaron las ventanas de la app (perfil, id): al cerrar la última ventana se
     /// cierran, salvo las dejadas en segundo plano.
     tracked: std::collections::HashSet<(String, String)>,
@@ -378,6 +411,12 @@ enum Message {
     NewConsole(window::Id),
     /// Panel lateral: cerrar esa consola.
     KillConsole(window::Id, String),
+    /// El puntero entra en (o sale de) la fila de una consola del panel.
+    RowEnter(window::Id, String),
+    RowExit(window::Id, String),
+    /// El botón del ratón baja o sube en una ventana: empieza o termina un arrastre del panel.
+    MouseDown(window::Id),
+    MouseUp,
     /// Panel lateral (clic derecho): abrir esa consola en una ventana nueva.
     OpenInNewWindow(window::Id, String),
     /// Cerrar la ventana aunque su cliente no haya terminado de soltar la consola.
@@ -704,7 +743,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), tracked: Default::default(), background: load_background(), dying: Default::default(), next_tag: 0 };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, tracked: Default::default(), background: load_background(), dying: Default::default(), next_tag: 0 };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1439,6 +1478,40 @@ impl App {
                 }
                 self.update(Message::KillNow(id, cid))
             }
+            Message::RowEnter(id, cid) => {
+                if let Some(d) = self.drag.as_mut().filter(|d| d.win == id) {
+                    d.over = cid.clone();
+                }
+                self.hover = Some((id, cid));
+                Task::none()
+            }
+            Message::RowExit(id, cid) => {
+                if self.hover.as_ref() == Some(&(id, cid)) {
+                    self.hover = None;
+                }
+                Task::none()
+            }
+            Message::MouseDown(id) => {
+                self.drag = self.hover.clone().filter(|(w, _)| *w == id).map(|(win, cid)| Drag { win, over: cid.clone(), id: cid });
+                Task::none()
+            }
+            Message::MouseUp => {
+                // Soltada sobre OTRA fila: toma su sitio. El orden es de la máquina (lo ven igual
+                // las demás ventanas y aparatos); aquí se adelanta para que no salte al releer.
+                let Some(d) = self.drag.take() else { return Task::none() };
+                let Some(profile) = self.windows.get(&d.win).and_then(|w| w.profile.clone()) else { return Task::none() };
+                let Some(list) = self.consoles.get_mut(&profile) else { return Task::none() };
+                let ids: Vec<&str> = list.iter().map(|c| c.id.as_str()).collect();
+                let Some(before) = drop_target(&ids, &d.id, &d.over) else { return Task::none() };
+                let from = list.iter().position(|c| c.id == d.id).expect("drop_target found it");
+                let moved = list.remove(from);
+                let at = before.as_ref().and_then(|b| list.iter().position(|c| &c.id == b)).unwrap_or(list.len());
+                list.insert(at, moved);
+                if let Some(dir) = self.profile_dir(&profile) {
+                    agent_send(&dir, &serde_json::json!({ "type": "move", "id": d.id, "before": before }));
+                }
+                Task::none()
+            }
             Message::KillNow(id, cid) => {
                 if let Some(dir) = self.windows.get(&id).and_then(|w| w.profile.clone()).and_then(|p| self.profile_dir(&p)) {
                     agent_send(&dir, &serde_json::json!({ "type": "kill", "id": cid }));
@@ -1675,7 +1748,7 @@ impl App {
     }
 
     /// El panel lateral: un botón por cada consola abierta en el perfil de la ventana.
-    fn side(&self, id: window::Id, profile: &str) -> Element<'_, Message> {
+    fn side<'a>(&'a self, id: window::Id, profile: &str) -> Element<'a, Message> {
         let mine = self.mine(id);
         let list = self.consoles.get(profile).cloned().unwrap_or_default();
         let my_tag = self.windows.get(&id).map(|w| w.tag.clone()).unwrap_or_default();
@@ -1701,6 +1774,22 @@ impl App {
             let icon = iced::widget::svg(iced::widget::svg::Handle::from_memory(ICON_SIZE)).width(14).height(14).style(move |theme: &Theme, _| iced::widget::svg::Style { color: Some(if pin_on { theme.palette().primary } else { theme.extended_palette().background.base.text.scale_alpha(0.7) }) });
             let b = button(container(icon).center_x(Length::Fill)).width(w).padding([4, 0]).style(if pin_on { side_selected } else { menu_button }).on_press_maybe(can_pin.then_some(Message::TogglePin(id)));
             iced::widget::tooltip(b, container(text(pin_tip.clone()).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into()
+        };
+        // ORDENAR ARRASTRANDO: la fila sobre la que caería la que se lleva se marca con una raya,
+        // encima (va delante) o debajo (va detrás).
+        let ids: Vec<&str> = list.iter().map(|c| c.id.as_str()).collect();
+        let drop = self.drag.as_ref().filter(|d| d.win == id).and_then(|d| {
+            let before = drop_target(&ids, &d.id, &d.over)?;
+            Some((d.over.clone(), before.as_deref() == Some(d.over.as_str())))
+        });
+        let mark = |w: Length| -> Element<'_, Message> { container(space()).width(w).height(2).style(|theme: &Theme| container::Style { background: Some(theme.palette().primary.into()), ..Default::default() }).into() };
+        let draggable = |cid: &str, e: Element<'a, Message>, w: Length| -> Element<'a, Message> {
+            let e: Element<'a, Message> = iced::widget::mouse_area(e).on_enter(Message::RowEnter(id, cid.to_string())).on_exit(Message::RowExit(id, cid.to_string())).into();
+            match drop.as_ref().filter(|(over, _)| over == cid) {
+                Some((_, true)) => column![mark(w), e].into(),
+                Some((_, false)) => column![e, mark(w)].into(),
+                None => e,
+            }
         };
         if collapsed {
             let mut strip = column![
@@ -1728,7 +1817,8 @@ impl App {
                     Act::Idle => tip,
                 };
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
-                strip = strip.push(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right));
+                let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                strip = strip.push(draggable(&c.id, tipped, Length::Fixed(24.0)));
             }
             // Lo justo para dos dígitos («00»): 24 px de botón en 30 de franja.
             return container(iced::widget::scrollable(strip)).width(30).height(Length::Fill).padding([4, 3]).style(panel_style).into();
@@ -1799,7 +1889,7 @@ impl App {
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
-            items = items.push(self.console_menu(id, c.id.clone(), is_mine, entry_row));
+            items = items.push(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill));
         }
         container(iced::widget::scrollable(items)).width(210).height(Length::Fill).padding(4).style(panel_style).into()
     }
@@ -1829,9 +1919,16 @@ impl App {
     }
 }
 
-/// Los atajos del menú Archivo: Ctrl+Shift+N / Ctrl+Shift+W (Cmd+N / Cmd+W en macOS).
+/// El ratón para el arrastre del panel, y los atajos del menú Archivo: Ctrl+Shift+N / Ctrl+Shift+W (Cmd+N / Cmd+W en macOS).
 /// Copiar y pegar ya los atiende la propia terminal.
 fn shortcut(event: Event, _status: iced::event::Status, id: window::Id) -> Option<Message> {
+    // El arrastre del panel: el botón del ratón, lo atienda quien lo atienda (un botón de la
+    // fila captura el clic, y aun así es donde empieza el arrastre).
+    match event {
+        Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => return Some(Message::MouseDown(id)),
+        Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => return Some(Message::MouseUp),
+        _ => {}
+    }
     let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else { return None };
     let chord = if cfg!(target_os = "macos") {
         modifiers == Modifiers::COMMAND

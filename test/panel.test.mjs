@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { panelLines } from '../src/panel.js'
+import { panelLines, dropTarget } from '../src/panel.js'
 
 const me = 'seyacat@loca'
 const L = (host, dir, name) => ({ host, dir, name })
@@ -19,4 +19,14 @@ test('the panel gives the folder and the title a line each, and the machine only
   assert.deepEqual(panelLines('seyacat@loca: ~', '~', null), L('seyacat@loca', '~', null))
   assert.deepEqual(panelLines('', '~', null), L(null, '~', null))
   assert.deepEqual(panelLines('', null, null), L(null, null, null))
+})
+
+test('a console dropped on another takes its place', () => {
+  const ids = ['a', 'b', 'c', 'd']
+  assert.deepEqual(dropTarget(ids, 'c', 'a'), { before: 'a' })   // up: in front of it
+  assert.deepEqual(dropTarget(ids, 'a', 'c'), { before: 'd' })   // down: behind it
+  assert.deepEqual(dropTarget(ids, 'a', 'd'), { before: null })  // down to the last: the end
+  assert.deepEqual(dropTarget(ids, 'b', 'c'), { before: 'd' })
+  assert.equal(dropTarget(ids, 'b', 'b'), null)
+  assert.equal(dropTarget(ids, 'x', 'b'), null)
 })

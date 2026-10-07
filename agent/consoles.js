@@ -310,13 +310,38 @@ export class ConsoleHub {
       c.viewers.clear()
       try { c.screen.dispose() } catch (_) {}
     })
-    this.consoles.set(id, c)
+    // DÓNDE va en el panel: mientras nadie haya movido nada (están por número), en su sitio por
+    // número; si alguien las ordenó a mano, al final, para no deshacerle el orden.
+    const all = [...this.consoles.values()]
+    const byNumber = all.every((x, i) => i === 0 || all[i - 1].n < x.n)
+    const at = byNumber ? all.findIndex((x) => x.n > n) : -1
+    if (at === -1) all.push(c); else all.splice(at, 0, c)
+    this._order(all)
     return c
+  }
+
+  _order (all) { this.consoles = new Map(all.map((c) => [c.id, c])) }
+
+  /**
+   * El ORDEN del panel, el mismo en todas las ventanas y aparatos: la consola `id` pasa a estar
+   * justo antes de `before` (o al final, con `null` o con una que ya no existe). No cambia su
+   * número, que es fijo. `false` si esa consola ya no existe.
+   */
+  move (id, before = null) {
+    const c = this.consoles.get(id)
+    if (!c) return false
+    if (before === id) return true
+    const all = [...this.consoles.values()].filter((x) => x !== c)
+    const at = before == null ? -1 : all.findIndex((x) => x.id === before)
+    if (at === -1) all.push(c); else all.splice(at, 0, c)
+    this._order(all)
+    return true
   }
 
   get (id) { return this.consoles.get(id) || null }
 
-  list () { return [...this.consoles.values()].map((c) => c.info()).sort((a, b) => a.n - b.n) }
+  /** Las consolas, en el orden del panel (por número hasta que alguien las mueve: `move`). */
+  list () { return [...this.consoles.values()].map((c) => c.info()) }
 
   /** Cierra una consola. `by`: la pantalla (viewer) que lo pide, para decirle a las DEMÁS que no fueron ellas. */
   kill (id, by = null) {

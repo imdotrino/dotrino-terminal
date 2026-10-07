@@ -222,3 +222,10 @@ a.btn.primary { background: var(--brand); border-color: var(--brand); color: #ff
 .home-points .point { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
 .home-points .point span { color: var(--muted); line-height: 1.5; }
 .home-remote { color: var(--muted); margin-top: 28px; }
+
+/* Ordenar las consolas arrastrando: el asa (para el dedo), la que se lleva y dónde caería. */
+.srow.item .grip { color: var(--muted); opacity: .55; font-size: 12px; padding: 4px 0 4px 2px; cursor: grab; touch-action: none; user-select: none; }
+.side.dragging, .side.dragging * { cursor: grabbing !important; user-select: none; }
+.side .dragged { opacity: .45; }
+.side .drop-before { box-shadow: 0 -2px 0 var(--brand); }
+.side .drop-after { box-shadow: 0 2px 0 var(--brand); }

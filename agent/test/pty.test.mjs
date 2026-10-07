@@ -129,6 +129,37 @@ test('cada consola tiene un número fijo: al cerrar la 1, la 2 sigue siendo 2 y 
   h.killAll()
 })
 
+test('el ORDEN del panel: por número hasta que alguien mueve una; es de la máquina y no cambia los números', async () => {
+  const h = hub()
+  try {
+    const s = fakeSession(); serveSession(s, h)
+    const open = async () => {
+      const before = s.sent.filter((p) => p.type === 'attached').length
+      s.deliver({ type: 'open', cols: 80, rows: 24 })
+      await until(() => s.sent.filter((p) => p.type === 'attached').length > before)
+      return s.sent.filter((p) => p.type === 'attached').pop().id
+    }
+    const a = await open(); const b = await open(); const c = await open()
+    const order = () => h.list().map((x) => x.n)
+    assert.deepEqual(order(), [1, 2, 3])
+    s.deliver({ type: 'move', id: c, before: a })
+    assert.deepEqual(order(), [3, 1, 2], 'la 3 pasa delante de la 1')
+    assert.deepEqual(s.sent.filter((p) => p.type === 'consoles').pop().list.map((x) => x.n), [3, 1, 2], 'y contesta con la lista ya ordenada')
+    s.deliver({ type: 'move', id: c })
+    assert.deepEqual(order(), [1, 2, 3], 'sin `before` va al final')
+    s.deliver({ type: 'move', id: a, before: c })
+    assert.deepEqual(order(), [2, 1, 3])
+    s.deliver({ type: 'move', id: a, before: 'no-existe' })
+    assert.deepEqual(order(), [2, 3, 1], 'delante de una que ya no existe: al final')
+    assert.equal(h.get(a).n, 1, 'el número no cambia')
+    // Ordenadas a mano, una nueva va al final: no se le deshace el orden a nadie.
+    await open()
+    assert.deepEqual(order(), [2, 3, 1, 4])
+    s.deliver({ type: 'move', id: 'no-existe' })
+    assert.equal(s.sent.filter((p) => p.type === 'fail').pop().code, 'no-console')
+  } finally { h.killAll() }
+})
+
 test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (⤢) o el último que llegó; escribir no lo cambia', async () => {
   const h = hub()
   try {

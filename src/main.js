@@ -14,7 +14,7 @@ import '@dotrino/install' // botón «Instalar app»: captura beforeinstallpromp
 import { createVaultReputation } from '@dotrino/reputation'
 import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
-import { panelLines } from './panel.js'
+import { panelLines, dropTarget } from './panel.js'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
 
@@ -64,6 +64,7 @@ const M = {
     exited: (c) => `[la consola terminó (${c})]`,
     new_console: 'Nueva consola',
     kill_console: 'Cerrar esta consola',
+    move_old_agent: 'Esa máquina todavía no sabe ordenar las consolas. Actualiza allí dotrino-terminal.',
     consoles: 'Consolas',
     panel_open: 'Abrir el panel',
     panel_close: 'Colapsar el panel',
@@ -139,6 +140,7 @@ const M = {
     exited: (c) => `[console ended (${c})]`,
     new_console: 'New console',
     kill_console: 'Close this console',
+    move_old_agent: 'That machine cannot reorder consoles yet. Update dotrino-terminal there.',
     consoles: 'Consoles',
     panel_open: 'Open the panel',
     panel_close: 'Collapse the panel',
@@ -503,6 +505,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   const actText = (c) => c.activity === 'busy' ? ` · ${t('act_busy')}` : c.doneAt ? ` · ${t('act_done')}` : ''
 
   function renderSide (s) {
+    if (s.drag?.on) return             // a media arrastrada no se repinta: se llevaría lo que se arrastra
     const list = s.list || []
     const cur = current(s)
     const pinOn = pinnedHere(s)
@@ -522,6 +525,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
         ${cur ? `<div class="srow"><span class="grow" data-testid="panel-size">${cur.c.cols}×${cur.c.rows}</span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
         ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}">
+          <span class="grip" aria-hidden="true">⠿</span>
           <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}">${rows(c, i, mine)}<small>${esc(where(s, c) + actText(c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
         </div>`).join('')}`
@@ -603,6 +607,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   function wireSide (s) {
     s.side.addEventListener('click', (e) => {
+      if (s.dragged) { s.dragged = false; return }   // soltar tras arrastrar no es un clic
       const b = e.target.closest('button'); if (!b) return
       if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { s.collapsed = !s.collapsed; renderSide(s); return }
       if (b.dataset.act === 'new') return switchTo(s, null)
@@ -616,6 +621,53 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     let hold = null
     s.side.addEventListener('touchstart', (e) => { const tt = e.touches[0]; hold = setTimeout(() => menuAt(e.target, tt.clientX, tt.clientY), 550) }, { passive: true })
     for (const ev of ['touchend', 'touchmove', 'touchcancel']) s.side.addEventListener(ev, () => clearTimeout(hold), { passive: true })
+
+    // ORDENAR ARRASTRANDO: una consola se suelta sobre otra y toma su sitio. Con ratón se arrastra
+    // la fila entera (o su número, con el panel plegado); con el dedo, por el asa ⠿, para que el
+    // resto de la fila siga sirviendo para desplazar el panel. El orden es de la máquina.
+    const ITEMS = '.srow.item, .sbtn.num'
+    const unmark = () => { for (const el of s.side.querySelectorAll('.drop-before, .drop-after, .dragged')) el.classList.remove('drop-before', 'drop-after', 'dragged') }
+    const endDrag = () => { s.drag = null; s.side.classList.remove('dragging'); unmark() }
+    s.side.addEventListener('pointerdown', (e) => {
+      const item = e.target.closest(ITEMS)
+      if (!item || e.button !== 0 || e.target.closest('[data-kill]')) return
+      if (e.pointerType !== 'mouse' && !e.target.closest('.grip')) return
+      s.drag = { id: item.dataset.id, y: e.clientY, pointer: e.pointerId, on: false, over: null }
+    })
+    s.side.addEventListener('pointermove', (e) => {
+      const d = s.drag
+      if (!d || e.pointerId !== d.pointer) return
+      if (!d.on) {
+        if (Math.abs(e.clientY - d.y) < 6) return      // un clic con el pulso flojo no es arrastrar
+        d.on = true
+        clearTimeout(hold)
+        try { s.side.setPointerCapture(e.pointerId) } catch {}
+        s.side.classList.add('dragging')
+      }
+      const items = [...s.side.querySelectorAll(ITEMS)]
+      if (!items.length) return
+      // La fila bajo el puntero; por encima de la primera o por debajo de la última, esa.
+      const over = items.find((el) => e.clientY < el.getBoundingClientRect().bottom) || items[items.length - 1]
+      const ids = items.map((el) => el.dataset.id)
+      unmark()
+      items[ids.indexOf(d.id)]?.classList.add('dragged')
+      d.over = over.dataset.id
+      const to = dropTarget(ids, d.id, d.over)
+      if (to) over.classList.add(ids.indexOf(d.over) < ids.indexOf(d.id) ? 'drop-before' : 'drop-after')
+    })
+    s.side.addEventListener('pointerup', async (e) => {
+      const d = s.drag
+      if (!d || e.pointerId !== d.pointer) return
+      const ids = (s.list || []).map((c) => c.id)
+      endDrag()
+      if (!d.on) return
+      s.dragged = true; setTimeout(() => { s.dragged = false }, 0)
+      const to = d.over && dropTarget(ids, d.id, d.over)
+      if (!to) return renderSide(s)
+      try { s.list = await s.agent.move(d.id, to.before) } catch (err) { s.term.write(`\r\n\x1b[33m${err.code === 'timeout' ? t('move_old_agent') : err.message}\x1b[0m\r\n`) }
+      renderSide(s)
+    })
+    s.side.addEventListener('pointercancel', () => { if (s.drag) { endDrag(); renderSide(s) } })
   }
 
   /**

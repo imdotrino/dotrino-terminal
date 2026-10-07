@@ -20,3 +20,19 @@ export function panelLines (title, cwd = null, me = null) {
   const name = rest && rest !== dir ? rest : null
   return { host: host && host !== me ? host : null, dir, name }
 }
+
+/**
+ * A dónde va una consola que se suelta sobre otra al arrastrarla: toma el SITIO de esa. Hacia
+ * arriba queda delante de ella; hacia abajo, detrás (o sea, delante de la siguiente, o al final).
+ *
+ * @param {string[]} ids  las consolas, en el orden del panel
+ * @param {string} id  la que se arrastra
+ * @param {string} over  sobre la que se suelta
+ * @returns {{ before: string|null }|null}  `null`: no se mueve (la misma, o alguna ya no está)
+ */
+export function dropTarget (ids, id, over) {
+  const from = ids.indexOf(id)
+  const to = ids.indexOf(over)
+  if (from < 0 || to < 0 || from === to) return null
+  return { before: to < from ? over : (ids[to + 1] ?? null) }
+}

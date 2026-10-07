@@ -153,6 +153,11 @@ export class AgentClient {
   /** ⤢ Usar (o soltar) el tamaño de esta pantalla en la consola (agente ≥ 0.14). */
   pin (on) { return this.rc.send({ type: 'pin', on: !!on }) }
   kill (id) { return this.rc.send({ type: 'kill', id }) }
+  /**
+   * El orden del panel: `id` pasa justo antes de `before` (o al final, sin él). Es de la máquina:
+   * lo ven igual las demás pantallas. Devuelve la lista ya ordenada (agente ≥ 0.26).
+   */
+  async move (id, before = null) { return (await this._ask({ type: 'move', id, before }, 'consoles', 5000)).list }
 
   /** Suelta la consola (sigue viva en la máquina) y corta la conexión. */
   async disconnect () {
