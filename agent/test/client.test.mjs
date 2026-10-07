@@ -48,7 +48,7 @@ test('pedir una consola que ya no existe NO termina el cliente: sigue en la suya
   }
 })
 
-test('si OTRA pantalla le cierra la consola, la ventana no se va: abre una nueva', async () => {
+test('si OTRA pantalla le cierra la consola y no queda ninguna, la ventana no se va: abre una nueva', async () => {
   const { connectLocal } = await import('../local.js')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dtc-'))
   const dir = path.join(home, 'terminal-agent/p')
@@ -78,6 +78,50 @@ test('si OTRA pantalla le cierra la consola, la ventana no se va: abre una nueva
     assert.equal(exited, null, 'el cliente sigue vivo')
     term.write('echo NUEVA-$((3+3))\r')
     assert.ok(await until(() => out.includes('NUEVA-6')), 'y la consola nueva responde')
+  } finally {
+    term.kill()
+    try { other.conn?.close() } catch (_) {}
+    try { process.kill(Number(fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8').trim())) } catch (_) {}
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('si OTRA pantalla le cierra la consola y queda otra, pasa a esa: no crea una nueva, aunque esté abierta en otro lado', async () => {
+  const { connectLocal } = await import('../local.js')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dtc-'))
+  const dir = path.join(home, 'terminal-agent/p')
+  fs.mkdirSync(dir, { recursive: true })
+  const env = { ...process.env, DOTRINO_AGENT_HOME: home, DOTRINO_NO_UPDATE_NOTICE: '1', SHELL: '/bin/sh' }
+  const term = pty.spawn(process.execPath, [CLIENT, 'open', '--name', 'p'], { cols: 80, rows: 24, env })
+  let out = ''
+  let exited = null
+  term.onData((d) => { out += d })
+  term.onExit((e) => { exited = e.exitCode })
+  const until = async (fn, ms = 8000) => { const t = Date.now() + ms; while (Date.now() < t) { if (await fn()) return true; await sleep(50) } return false }
+  const other = { conn: null }
+  const list = () => new Promise((resolve) => {
+    const c = other.conn
+    const on = (m) => { if (m.type === 'consoles') { c.off?.('message', on); resolve(m.list) } }
+    c.on('message', on); c.send({ type: 'list' })
+  })
+  try {
+    term.write('echo VIEJA-$((1+1))\r')
+    assert.ok(await until(() => out.includes('VIEJA-2')))
+    other.conn = await connectLocal(dir)
+    const before = await list()
+    assert.equal(before.length, 1)
+    // La otra pantalla abre SU consola y se queda mirándola: es la única que quedará.
+    other.conn.send({ type: 'open', cols: 80, rows: 24 })
+    let kept = null
+    assert.ok(await until(async () => { kept = (await list()).find((c) => c.id !== before[0].id); return kept?.watchers.length === 1 }), 'la que queda está abierta en otro lado')
+    out = ''
+    other.conn.send({ type: 'kill', id: before[0].id })          // y le cierra la suya a la ventana
+    assert.ok(await until(async () => { const l = await list(); return l.length === 1 && l[0].watchers.length === 2 }), 'la ventana pasó a la que quedaba')
+    assert.deepEqual((await list()).map((c) => c.id), [kept.id], 'sin consola nueva')
+    assert.equal(exited, null, 'el cliente sigue vivo')
+    assert.ok(!out.includes('Esta es una nueva') && !out.includes('This is a new one'), 'no anuncia una consola nueva')
+    term.write('echo SIGUE-$((4+4))\r')
+    assert.ok(await until(() => out.includes('SIGUE-8')), 'y la consola responde')
   } finally {
     term.kill()
     try { other.conn?.close() } catch (_) {}
