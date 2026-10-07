@@ -164,4 +164,15 @@ final class TabTests: XCTestCase {
         t2.killConsole("x")
         XCTAssertEqual(ch2.types.filter { $0 == "open" }.count, opens2 + 1)   // it was the last one
     }
+
+    func testThePanelSaysWhatAndWhereInAtMostTwoLinesWithoutTheHost() {
+        var l = panelLines("seyacat@loca: ~/proyectos/dotrino", "~/proyectos/dotrino")
+        XCTAssertEqual(l.what, "~/proyectos/dotrino"); XCTAssertNil(l.at)
+        l = panelLines("seyacat@loca: ~/proyectos/dotrino", nil)                 // an older agent
+        XCTAssertEqual(l.what, "~/proyectos/dotrino"); XCTAssertNil(l.at)
+        l = panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino")
+        XCTAssertEqual(l.what, "✳ Sefjr improvement"); XCTAssertEqual(l.at, "/mnt/sda1/Dotrino")
+        l = panelLines("", "~")
+        XCTAssertEqual(l.what, "~"); XCTAssertNil(l.at)
+    }
 }

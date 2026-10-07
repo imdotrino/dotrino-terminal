@@ -433,11 +433,8 @@ class MainActivity : Activity() {
         tab.current?.let { cur ->
             list.addView(LinearLayout(this).apply {
                 gravity = Gravity.CENTER_VERTICAL; setPadding(px(6), px(4), 0, px(8))
-                addView(LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    addView(label(t("size.row", "n" to cur.n, "who" to sizeWho(tab, cur), "cols" to cur.cols, "rows" to cur.rows), 12f, col(R.color.t_muted)))
-                    addView(label(if (cur.sizeBy?.pinned == true) t("size.pinned") else t("size.last"), 11f, col(R.color.t_muted)))
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                // Just the size (owner, 2026-10-07): who has it is what ⤢ lights up for.
+                addView(label("${cur.cols}×${cur.rows}", 13f, col(R.color.t_muted)).apply { tag = "drawer-size" }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(sizeButton(tab), LinearLayout.LayoutParams(px(32), px(32)))
             })
         }
@@ -455,9 +452,9 @@ class MainActivity : Activity() {
                     fun oneLine(text: String, tagName: String, color: Int) = label(text, 12f, color).apply {
                         tag = tagName; setLineSpacing(0f, 1f); isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.START
                     }
-                    if (c.title.isNotBlank()) addView(oneLine(c.title, "drawer-title", col(R.color.t_text)))
-                    // The folder, when the title does not already say it (Claude names its session, not its folder).
-                    c.cwd?.takeIf { it.isNotBlank() && !c.title.contains(it) }?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_muted))) }
+                    val (what, where) = panelLines(c.title, c.cwd)
+                    what?.let { addView(oneLine(it, "drawer-title", col(R.color.t_text))) }
+                    where?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_muted))) }
                     addView(label(where(tab, c) + actText(c), 11f, col(actColor(c) ?: R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }

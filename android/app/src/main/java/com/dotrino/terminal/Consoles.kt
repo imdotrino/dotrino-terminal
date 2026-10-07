@@ -102,6 +102,21 @@ fun shortTitle(title: String, max: Int = 24): String {
     return "…/" + if (out.length > max - 2) "…" + out.takeLast(max - 3) else out
 }
 
+/**
+ * What the open panel says of a console, in at most TWO lines: what it is, and where.
+ * «user@host:» goes from the title (the machine is the tab). A shell's title IS its folder, so it
+ * is one line; a program that names itself (Claude: its session) gets its folder on the second.
+ */
+fun panelLines(title: String, cwd: String?): Pair<String?, String?> {
+    val name = (Regex("""^[^\s:]+@[^\s:]+:\s*(.*)$""").find(title)?.groupValues?.get(1) ?: title).trim()
+    val dir = cwd?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        dir == null -> name.takeIf { it.isNotEmpty() } to null
+        name.isEmpty() || name == dir || name.contains(dir) -> (if (name.contains(dir) && name != dir) name else dir) to null
+        else -> name to dir
+    }
+}
+
 object Consoles {
     const val KIND = "terminal-agent"
     private const val DEFAULT_PROXY = "wss://proxy.dotrino.com"

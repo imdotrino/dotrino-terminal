@@ -54,6 +54,19 @@ func consoleOf(_ o: JSON) -> ConsoleInfo? {
                        sizeBy: by, lastActive: o["lastActive"]?.int ?? 0, cwd: o["cwd"]?.string)
 }
 
+/// What the open panel says of a console, in at most TWO lines: what it is, and where.
+/// «user@host:» goes from the title (the machine is the tab). A shell's title IS its folder, so it
+/// is one line; a program that names itself (Claude: its session) gets its folder on the second.
+func panelLines(_ title: String, _ cwd: String?) -> (what: String?, at: String?) {
+    var name = title
+    if let r = title.range(of: #"^[^\s:]+@[^\s:]+:\s*"#, options: .regularExpression) { name = String(title[r.upperBound...]) }
+    name = name.trimmingCharacters(in: .whitespaces)
+    guard let dir = cwd?.trimmingCharacters(in: .whitespaces), !dir.isEmpty else { return (name.isEmpty ? nil : name, nil) }
+    if name.isEmpty || name == dir { return (dir, nil) }
+    if name.contains(dir) { return (name, nil) }
+    return (name, dir)
+}
+
 /// The title of a console for the panel. The shell sets it as «user@host: path»; what matters is
 /// the last folder, so «user@host:» goes (the machine is known) and the path is cut ON THE LEFT,
 /// by whole folders, down to `max` characters. The same as the PWA and Android (`shortTitle`).

@@ -228,4 +228,12 @@ class TabTest {
         t2.killConsole("x")
         assertEquals("it was the last one: a new one", opens + 1, ch2.types().count { it == "open" })
     }
+
+    @Test fun thePanelSaysWhatAndWhereInAtMostTwoLinesWithoutTheHost() {
+        assertEquals("~/proyectos/dotrino" to null, panelLines("seyacat@loca: ~/proyectos/dotrino", "~/proyectos/dotrino"))
+        assertEquals("~/proyectos/dotrino" to null, panelLines("seyacat@loca: ~/proyectos/dotrino", null))   // an older agent
+        assertEquals("✳ Sefjr improvement" to "/mnt/sda1/Dotrino", panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino"))
+        assertEquals("~" to null, panelLines("", "~"))
+        assertEquals(null to null, panelLines("", null))
+    }
 }

@@ -398,10 +398,8 @@ private struct ConsoleScreen: View {
                 .padding(.leading, 6)
                 if let cur = tab.current {
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(t("size.row", ("n", cur.n), ("who", sizeWho(cur)), ("cols", cur.cols), ("rows", cur.rows))).font(.caption).foregroundColor(Palette.muted)
-                            Text(cur.sizeBy?.pinned == true ? t("size.pinned") : t("size.last")).font(.caption2).foregroundColor(Palette.muted)
-                        }
+                        // Just the size (owner, 2026-10-07): who has it is what ⤢ lights up for.
+                        Text("\(cur.cols)×\(cur.rows)").font(.footnote).foregroundColor(Palette.muted).accessibilityIdentifier("drawer-size")
                         Spacer()
                         sizeButton(34)
                     }
@@ -415,9 +413,9 @@ private struct ConsoleScreen: View {
                             Text((on ? "● " : "") + "\(c.n)").font(.footnote.bold()).foregroundColor(Palette.text)
                             // ONE line each, never wrapped (a long path would push every row down); what
                             // does not fit is cut at the START, so the end — the folder — stays.
-                            if !c.title.isEmpty { Text(c.title).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head) }
-                            // The folder, when the title does not already say it (Claude names its session, not its folder).
-                            if let cwd = c.cwd, !cwd.isEmpty, !c.title.contains(cwd) { Text(cwd).font(.caption).foregroundColor(Palette.muted).lineLimit(1).truncationMode(.head) }
+                            let lines = panelLines(c.title, c.cwd)
+                            if let what = lines.what { Text(what).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head) }
+                            if let at = lines.at { Text(at).font(.caption).foregroundColor(Palette.muted).lineLimit(1).truncationMode(.head) }
                             Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
