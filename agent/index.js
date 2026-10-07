@@ -122,6 +122,10 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
     release()
     current = c
     const snapshot = await c.attach(viewer)
+    // Mientras se hacía la foto la sesión se fue, soltó la consola o pidió otra: esta ya no es la
+    // suya. Quedarse enganchado dejaba un mirón FANTASMA (la consola salía «abierta en otro
+    // aparato» sin nadie mirando, y nadie la elegía como libre).
+    if (current !== c) { c.detach(viewer); return }
     c.sizeFrom(viewer, { attaching: true })
     // La pantalla va en trozos: el proxio corta los mensajes a 1 MB.
     for (let i = 0; i < snapshot.length || i === 0; i += REPLAY_CHUNK) {

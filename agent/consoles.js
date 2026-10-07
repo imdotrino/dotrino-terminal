@@ -40,6 +40,9 @@ const GAP_MS = 2000        // un hueco mayor que este corta la racha: eran cambi
 // Diez segundos: de sobra para un agente, y un comando que calle más se da por terminado pronto.
 export const QUIET_MS = Math.max(1, Number(process.env.DOTRINO_TERMINAL_IDLE_SECONDS) || 10) * 1000
 const MIN_TASK_MS = 3000   // menos que esto no fue «una tarea»: no se marca como terminada
+// Cerrar una consola: SIGHUP al momento y, si la shell sigue viva, SIGTERM y luego SIGKILL.
+export const KILL_TERM_MS = 1500
+export const KILL_KILL_MS = 3000
 
 /**
  * La carpeta en la que está AHORA el proceso de una consola (la shell), con `~` por la carpeta
@@ -293,6 +296,8 @@ export class ConsoleHub {
     // Su NÚMERO: el libre más bajo, y no cambia mientras viva. Si se cierra la 1, la 2 sigue
     // siendo la 2 y la próxima nueva será la 1. Lo da el agente para que sea el mismo en todas
     // las ventanas y aparatos.
+    // Una consola ya cerrada (`kill`) no está en el mapa: su número queda libre en el acto, así la
+    // que se abre para reemplazarla (los clientes pasan a otra ANTES de matar la suya) lo hereda.
     const used = new Set([...this.consoles.values()].map((c) => c.n))
     let n = 1
     while (used.has(n)) n++
@@ -302,6 +307,7 @@ export class ConsoleHub {
     pty.onExit(({ exitCode }) => {
       c.exited = true
       clearTimeout(c._quiet)
+      for (const t of c._killTimers || []) clearTimeout(t)
       this.consoles.delete(id)
       // A cada pantalla se le dice si la consola la cerró OTRA (`byOther`): la shell que termina
       // sola, o la que cierra la propia pantalla, no lo es. Quien mira decide con eso si se va
@@ -343,13 +349,27 @@ export class ConsoleHub {
   /** Las consolas, en el orden del panel (por número hasta que alguien las mueve: `move`). */
   list () { return [...this.consoles.values()].map((c) => c.info()) }
 
-  /** Cierra una consola. `by`: la pantalla (viewer) que lo pide, para decirle a las DEMÁS que no fueron ellas. */
+  /**
+   * Cierra una consola. `by`: la pantalla (viewer) que lo pide, para decirle a las DEMÁS que no fueron ellas.
+   *
+   * Desde que se pide, la consola YA NO EXISTE para nadie (no se lista, no se puede volver a ella y
+   * su número queda libre), aunque la shell tarde un instante en morir: preguntar justo después
+   * la devolvía y el panel enseñaba una consola muerta. Y si la shell no se va con el SIGHUP de
+   * siempre (un `trap '' HUP`, un programa colgado), se insiste: SIGTERM, y después SIGKILL. Antes
+   * la × no hacía nada y la consola se quedaba en la lista para siempre.
+   */
   kill (id, by = null) {
     const c = this.consoles.get(id)
     if (!c) return false
     c.killed = true
     c.killedBy = by
+    this.consoles.delete(id)
     try { c.pty.kill() } catch (_) {}
+    c._killTimers = [['SIGTERM', KILL_TERM_MS], ['SIGKILL', KILL_KILL_MS]].map(([sig, ms]) => {
+      const t = setTimeout(() => { if (!c.exited) try { c.pty.kill(sig) } catch (_) {} }, ms)
+      t.unref?.()
+      return t
+    })
     return true
   }
 

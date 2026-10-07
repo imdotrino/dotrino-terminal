@@ -26,7 +26,7 @@ export class AgentClient {
     this.rc = new RemoteAgentClient(link, { agentPubkey, proxyUrl })
     this.consoleId = null
     /** @type {(data:string)=>void} */ this.onData = () => {}
-    /** @type {(code:number)=>void} */ this.onExit = () => {}
+    /** @type {(code:number, why:{ closedBy:string|null, id:string|null })=>void} */ this.onExit = () => {}
     /** @type {(e:Error)=>void} */ this.onError = () => {}
     /** La máquina se reinició y la sesión se volvió a abrir sola: hay que volver a engancharse. */
     /** @type {()=>void} */ this.onResumed = () => {}
@@ -48,7 +48,13 @@ export class AgentClient {
     this.rc.on('message', (p) => {
       if (!p || typeof p !== 'object') return
       if (p.type === 'out' || p.type === 'replay') { this.onData(p.data); return }
-      if (p.type === 'exit') { this.consoleId = null; this.onExit(p.code); return }
+      if (p.type === 'exit') {
+        // `closedBy: 'other'`: la cerró otra pantalla (no esta, ni la shell por su cuenta).
+        const closed = this.consoleId
+        this.consoleId = null
+        this.onExit(p.code, { closedBy: p.closedBy || null, id: closed })
+        return
+      }
       if (p.type === 'meta') { if (p.console) this.onMeta(p.console); return }
       const w = this._waiting
       if (p.type === 'fail') {

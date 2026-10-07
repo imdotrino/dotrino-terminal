@@ -84,6 +84,8 @@ const M = {
     console_free: 'suelta',
     console_local: 'ventana abierta en la máquina',
     console_gone: 'Esta consola ya no existe en la máquina: se cerró, o el agente se reinició.',
+    closed_by_other: (n) => `Otra pantalla cerró la consola ${n}. Esta es otra.`,
+    closed_by_other_new: (n) => `Otra pantalla cerró la consola ${n}. Esta es una nueva.`,
     self_choice_title: '¿Cómo quieres entrar?',
     self_choice_intro: 'Para abrir una consola en tus máquinas necesitas certificarlas con una identidad. Elige dónde vive esa identidad:',
     self_choice_vault: 'Conectar tu bóveda',
@@ -160,6 +162,8 @@ const M = {
     console_free: 'detached',
     console_local: 'window open on the machine',
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
+    closed_by_other: (n) => `Another screen closed console ${n}. This is another one.`,
+    closed_by_other_new: (n) => `Another screen closed console ${n}. This is a new one.`,
     self_choice_title: 'How do you want to sign in?',
     self_choice_intro: 'To open a console on your machines you need to certify them with an identity. Choose where that identity lives:',
     self_choice_vault: 'Connect your vault',
@@ -409,7 +413,10 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.view.replaceChildren()
     s.term.open(s.view); s.fit.fit()
     s.agent.onData = (d) => s.term.write(d)
-    s.agent.onExit = (code) => { s.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s) }
+    s.agent.onExit = (code, why) => {
+      if (why?.closedBy === 'other') return closedByOther(s, why.id)
+      s.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s)
+    }
     s.agent.onMeta = (info) => follow(s, info)
     s.term.onData((d) => s.agent.input(d))
     // Cambió el espacio de la consola (girar el teléfono, redimensionar, aparecer o colapsar el
@@ -553,18 +560,40 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     refresh(s); s.term.focus()
   }
 
+  /**
+   * Dejar la consola `id` por otra. A una que YA existe: primero una que no mire nadie; si todas
+   * se miran, la primera igual. Una NUEVA solo si la máquina se queda sin ninguna (dueño,
+   * 2026-10-07: vale para todo cliente remoto). Si la elegida ya no existía (el panel iba un
+   * instante por detrás), se vuelve a elegir con la lista fresca, una vez. Devuelve si abrió una nueva.
+   */
+  async function moveAway (s, id, fresh = false) {
+    const list = fresh ? await s.agent.list().catch(() => []) : (s.list || [])
+    const rest = list.filter((c) => c.id !== id)
+    const other = rest.find((c) => !(c.watchers || []).length) || rest[0]
+    await switchTo(s, other?.id || null)
+    const now = s.agent.consoleId
+    if (now && now !== id) return !other
+    if (fresh) return false
+    return moveAway(s, id, true)
+  }
+
   /** Cerrar una consola. Si es la de esta pestaña, primero se pasa a otra (o a una nueva). */
   async function killConsole (s, id) {
-    if (id === s.agent.consoleId) {
-      // A una consola que YA existe: primero una que no mire nadie; si todas se miran, la primera
-      // igual. Una NUEVA solo si la máquina se queda sin ninguna (dueño, 2026-10-07: vale para
-      // todo cliente remoto).
-      const rest = (s.list || []).filter((c) => c.id !== id)
-      const other = rest.find((c) => !(c.watchers || []).length) || rest[0]
-      await switchTo(s, other?.id || null)
-    }
+    if (id === s.agent.consoleId) await moveAway(s, id)
     s.agent.kill(id)
     setTimeout(() => refresh(s), 200)
+  }
+
+  /**
+   * OTRA pantalla cerró la consola de esta pestaña (el teléfono, una ventana de la máquina). La
+   * pestaña no se queda muerta: pasa a una consola que ya existe, o a una nueva, y lo dice —
+   * la misma regla que la ventana de la máquina (agente 0.24.1).
+   */
+  async function closedByOther (s, id) {
+    const n = (s.list || []).find((c) => c.id === id)?.n ?? '?'
+    const isNew = await moveAway(s, id, true)
+    persist()
+    if (active === s) hint.textContent = t(isNew ? 'closed_by_other_new' : 'closed_by_other', n)
   }
 
   /**

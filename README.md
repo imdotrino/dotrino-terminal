@@ -33,8 +33,12 @@ solo añade la shell:
 Las shells son **consolas** que viven en el agente, aparte de las conexiones
 (`agent/consoles.js`): cerrar o recargar el navegador solo las suelta, y cualquier aparato
 de la cuenta puede volver a ellas y ver la pantalla como estaba (una terminal sin pantalla,
-`@xterm/headless`, la reconstruye; todo en memoria). La × de la pestaña sí la mata. Si el
-agente se reinicia, se pierden.
+`@xterm/headless`, la reconstruye; todo en memoria). La × de la pestaña sí la mata: desde
+ese momento la consola ya no existe para nadie (no se lista, no se puede volver a ella y su
+número queda libre), y si la shell no se va con el SIGHUP se insiste con SIGTERM y SIGKILL
+(agente ≥ 0.27.0). Si otra pantalla cierra la consola que una pestaña mira, la pestaña pasa a
+otra consola que ya exista (una nueva solo si no queda ninguna). Si el agente se reinicia, se
+pierden.
 
 El mismo protocolo sirve a las dos puntas: las ventanas locales (JSON por líneas en
 `~/.dotrino/agent/terminal-agent/<perfil>/terminal.sock`) y los aparatos remotos (dentro de la

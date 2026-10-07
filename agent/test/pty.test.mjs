@@ -318,3 +318,63 @@ test('cada consola dice en qué carpeta está AHORA, aunque el título no lo dig
   await until(() => h.list()[0].cwd === dir)
   h.killAll()
 })
+
+test('cerrar una consola cuya shell ignora SIGHUP la cierra igual: se insiste con SIGTERM y SIGKILL', async () => {
+  const h = makeHub(loadPty(), { shell: '/bin/bash' })
+  const s = fakeSession(); serveSession(s, h)
+  s.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => s.sent.some((p) => p.type === 'attached'))
+  const id = s.sent.find((p) => p.type === 'attached').id
+  s.deliver({ type: 'input', data: 'trap "" HUP TERM; echo listo; sleep 100\r' })
+  await until(() => s.out().includes('listo\r\n'))
+  s.deliver({ type: 'kill', id })
+  // Hasta SIGKILL hay ~3 s; antes, la × no hacía nada y la consola se quedaba para siempre.
+  await until(() => s.sent.some((p) => p.type === 'exit'), 6000)
+  assert.equal(h.list().length, 0)
+})
+
+test('desde que se pide cerrarla, la consola no se lista ni se puede volver a ella, y su número lo hereda la que la reemplaza', async () => {
+  const h = hub()
+  const s = fakeSession(); serveSession(s, h)
+  s.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => s.sent.some((p) => p.type === 'attached'))
+  const id = s.sent.find((p) => p.type === 'attached').id
+  assert.equal(h.list()[0].n, 1)
+  // Lo que hace cualquier cliente al cerrar la consola que mira y no queda otra: abre una NUEVA y
+  // después mata la suya. La nueva tiene que ser la 1, no la 2.
+  s.deliver({ type: 'kill', id })
+  assert.equal(h.list().length, 0, 'ya no se lista, aunque la shell tarde en morir')
+  const b = fakeSession(); serveSession(b, h)
+  b.deliver({ type: 'attach', id, cols: 80, rows: 24 })
+  await until(() => b.sent.some((p) => p.type === 'fail'))
+  assert.equal(b.sent.find((p) => p.type === 'fail').code, 'no-console')
+  s.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => s.sent.filter((p) => p.type === 'attached').length === 2)
+  assert.deepEqual(h.list().map((c) => c.n), [1])
+  // La vieja muere por detrás (quien la cerró ya la había soltado, así que no recibe su `exit`).
+  await new Promise((r) => setTimeout(r, 500))
+  assert.deepEqual(h.list().map((c) => c.n), [1], 'la que murió no se lleva a la nueva por delante')
+  h.killAll()
+})
+
+test('si la sesión se va mientras se engancha, no queda mirando (antes dejaba un mirón fantasma)', async () => {
+  const h = hub()
+  const s = fakeSession(); serveSession(s, h)
+  s.deliver({ type: 'open', cols: 80, rows: 24 })
+  s.close()                                              // se fue antes de recibir `attached`
+  await until(() => h.list().length === 1)
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(h.list()[0].viewers, 0, 'nadie la mira')
+  assert.deepEqual(h.list()[0].watchers, [])
+  assert.ok(!s.sent.some((p) => p.type === 'attached'), 'no se contesta a quien ya se fue')
+  // Y lo mismo si en vez de irse pide OTRA consola antes de que termine el enganche.
+  const a = fakeSession(); serveSession(a, h)
+  a.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => a.sent.some((p) => p.type === 'attached'))
+  const first = h.list().find((c) => c.viewers === 0)
+  a.deliver({ type: 'attach', id: first.id, cols: 80, rows: 24 })
+  a.deliver({ type: 'detach' })
+  await new Promise((r) => setTimeout(r, 300))
+  assert.deepEqual(h.list().map((c) => c.viewers), [0, 0], 'soltó las dos')
+  h.killAll()
+})
