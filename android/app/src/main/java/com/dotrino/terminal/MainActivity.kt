@@ -276,11 +276,12 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(strip) })
             addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(composeBar())
             addView(extraKeys())
         })
         drawer = null
         renderTabs(); renderNote(); renderPanel()
-        tv.showKeyboard()
+        if (composing) composeInput?.let { it.requestFocus(); ime().showSoftInput(it, 0) } else tv.showKeyboard()
         // The panel says what happens on the machine (other screens, titles): ask every 2 s while on screen.
         poll?.cancel()
         poll = scope.launch { while (true) { kotlinx.coroutines.delay(2_000); if (view === tv) active?.list() else break } }
@@ -518,9 +519,88 @@ class MainActivity : Activity() {
         dialog.show(); input.requestFocus()
     }
 
+    // ---------- writing here, sending at once ----------
+    //
+    // Over a slow connection every key travels to the machine and back before it shows. With the
+    // writing line on (✎ in the extra row; remembered), what you type shows HERE at once and goes
+    // to the machine whole, with Enter. The extra keys (arrows, Ctrl, Esc, Tab) still go straight.
+    // Off, everything goes key by key, as full-screen programs (vim, htop) need.
+
+    private var composeRow: View? = null
+    private var composeInput: android.widget.EditText? = null
+    private var composeKey: TextView? = null
+    private val prefs by lazy { getSharedPreferences("terminal", Context.MODE_PRIVATE) }
+    private var composing: Boolean
+        get() = prefs.getBoolean("compose", false)
+        set(v) { prefs.edit().putBoolean("compose", v).apply() }
+    private fun ime() = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+
+    private fun composeBar(): View {
+        val input = android.widget.EditText(this).apply {
+            tag = "compose-input"; hint = t("compose.hint"); isSingleLine = true
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            typeface = android.graphics.Typeface.MONOSPACE; setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTextColor(col(R.color.t_text)); setHintTextColor(col(R.color.t_muted))
+            background = rounded(col(R.color.t_bg), px(10), px(1), col(R.color.t_line))
+            setPadding(px(12), px(9), px(12), px(9))
+        }
+        val send = {
+            // The line and Enter, in ONE message. Empty, it is just Enter.
+            active?.input(input.text.toString() + "\r"); input.setText("")
+        }
+        input.setOnEditorActionListener { _, _, _ -> send(); true }
+        // Backspace on an empty line goes to the console: it is how you fix what is already there.
+        input.setOnKeyListener { _, code, ev ->
+            if (ev.action == android.view.KeyEvent.ACTION_DOWN && code == android.view.KeyEvent.KEYCODE_DEL && input.text.isEmpty()) { view?.key("backspace"); true }
+            else if (ev.action == android.view.KeyEvent.ACTION_DOWN && code == android.view.KeyEvent.KEYCODE_ENTER) { send(); true }
+            else false
+        }
+        // With Ctrl or Alt lit, the next character is a key for the console (Ctrl+C), not text.
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(e: android.text.Editable) {
+                val v = view ?: return
+                if ((v.ctrl || v.alt) && e.isNotEmpty()) { val c = e.last().toString(); e.delete(e.length - 1, e.length); v.type(c) }
+            }
+        })
+        composeInput = input
+        val bar = LinearLayout(this).apply {
+            tag = "compose-bar"; gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(col(R.color.t_panel)); setPadding(px(6), px(6), px(6), px(2))
+            addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(label("⏎", 18f, col(R.color.t_on_accent), bold = true).apply {
+                tag = "compose-send"; contentDescription = t("compose.send"); gravity = Gravity.CENTER
+                background = rounded(col(R.color.t_accent), px(10)); setPadding(px(14), px(7), px(14), px(7))
+                isClickable = true; setOnClickListener { send() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = px(6) })
+            visibility = if (composing) View.VISIBLE else View.GONE
+        }
+        composeRow = bar
+        return bar
+    }
+
+    /** ✎: the writing line on or off. The one change of size here is asked for, and remembered. */
+    private fun toggleCompose() {
+        composing = !composing
+        composeRow?.visibility = if (composing) View.VISIBLE else View.GONE
+        composeKey?.background = rounded(col(if (composing) R.color.t_accent else R.color.t_panel2), px(8))
+        composeKey?.setTextColor(col(if (composing) R.color.t_on_accent else R.color.t_text))
+        if (composing) composeInput?.let { it.requestFocus(); ime().showSoftInput(it, 0) }
+        else { composeInput?.setText(""); view?.showKeyboard() }
+    }
+
     private fun extraKeys(): View {
         modKeys.clear()
         val row = LinearLayout(this).apply { setPadding(px(4), px(4), px(4), px(4)) }
+        composeKey = label("✎", 14f, col(if (composing) R.color.t_on_accent else R.color.t_text), bold = true).apply {
+            tag = "key-compose"; contentDescription = t("compose.toggle"); gravity = Gravity.CENTER; minWidth = px(44)
+            setPadding(px(10), px(9), px(10), px(9))
+            background = rounded(col(if (composing) R.color.t_accent else R.color.t_panel2), px(8))
+            isClickable = true; setOnClickListener { toggleCompose() }
+        }
+        row.addView(composeKey, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(4) })
         for (k in EXTRA_KEYS) {
             val key = label(KEY_LABELS[k] ?: when (k) { "ctrl" -> t("key.ctrl"); "alt" -> t("key.alt"); else -> k }, 14f, bold = true).apply {
                 tag = "key-$k"; gravity = Gravity.CENTER; minWidth = px(44)
