@@ -62,6 +62,10 @@ class MainActivity : Activity() {
     }
 
     override fun onResume() { super.onResume(); if (Consoles.profile == null && !Consoles.demo) boot() }
+    // Back from the background the connection is checked at once, and it is said on screen.
+    private var wasStopped = false
+    override fun onStop() { super.onStop(); wasStopped = true }
+    override fun onStart() { super.onStart(); if (wasStopped) { wasStopped = false; Consoles.wake() } }
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
 
     @Deprecated("Activity without AndroidX: the back button still comes here")
@@ -465,7 +469,7 @@ class MainActivity : Activity() {
     private fun renderNote() {
         val note = tabNote ?: return; val tab = active ?: return
         val text = when (tab.state) {
-            Consoles.Tab.State.OPEN -> null
+            Consoles.Tab.State.OPEN -> if (tab.checking) t("tab.checking") else null
             Consoles.Tab.State.CONNECTING -> t("tab.connecting")
             Consoles.Tab.State.LOCKED -> t("code.note")
             Consoles.Tab.State.LOST -> t("tab.lost")

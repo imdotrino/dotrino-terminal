@@ -184,4 +184,17 @@ class TabTest {
         assertEquals("wait", tab.codeProblem); assertEquals(90_000L, tab.codeWaitMs)
         assertNull(Consoles.codes[tab.machine.pubkey])
     }
+
+    @Test fun backFromTheBackgroundTheTabSaysItIsCheckingUntilTheMachineAnswers() {
+        val (tab, ch) = tab()
+        val c = console("a", 1, 50, 20, watchers = 1, by = me)
+        ch.agent(consoles()); ch.agent(attached(c))
+        assertEquals(Consoles.Tab.State.OPEN, tab.state); assertFalse(tab.checking)
+        val before = ch.sent.size
+        tab.check()
+        assertTrue(tab.checking)
+        assertEquals("list", ch.types().last()); assertEquals(before + 1, ch.sent.size)
+        ch.agent(consoles(c))                                        // any answer: the connection is alive
+        assertFalse(tab.checking)
+    }
 }

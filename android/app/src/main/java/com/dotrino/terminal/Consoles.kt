@@ -167,6 +167,31 @@ object Consoles {
         c
     }
 
+    /** How long the machine has to answer, coming back from the background, before the connection is taken for dead. */
+    const val WAKE_MS = 2500L
+
+    /**
+     * The app came back to the front. Android may have frozen it and the socket may be dead
+     * without anyone knowing yet (it took seconds to find out, with the screen deaf meanwhile).
+     * So it is ASKED: every open tab says «checking» at once and pings its machine; if one gets
+     * no answer in [WAKE_MS] the connection is dropped here, and the usual way back starts.
+     */
+    fun wake() {
+        if (demo || profile == null) return
+        val asked = tabs.filter { it.state == Tab.State.OPEN }
+        for (t in asked) t.check()
+        scope.launch {
+            // No connection at all (it dropped while asleep): try now, not when the back-off says.
+            if (conn == null && tabs.any { it.state == Tab.State.LOST }) {
+                try { connection() } catch (_: Exception) { return@launch }
+                for (t in tabs.toList()) if (t.state == Tab.State.LOST) resume(t)
+                return@launch
+            }
+            delay(WAKE_MS)
+            if (asked.any { it.checking }) connLock.withLock { conn }?.close()
+        }
+    }
+
     private suspend fun reconnect() {
         var wait = 1_000L
         while (profile != null && tabs.any { it.state != Tab.State.EXITED }) {
@@ -266,6 +291,8 @@ object Consoles {
         private var resuming = false                                  // coming back to the console it had, over a new session
         private var trying: String? = null                            // the code sent, waiting for the agent's answer
         private var triedKept = false                                 // the remembered code was already sent on this lock
+        /** Back from the background: the machine was asked and has not answered yet ([Consoles.wake]). */
+        var checking = false; private set
         /** While LOCKED: why the last code was not taken (`bad-code`, `wait`), or null if none was tried. */
         var codeProblem: String? = null; private set
         /** With `wait`: how long the machine makes everyone wait, in ms. */
@@ -305,7 +332,11 @@ object Consoles {
         /** Ask the agent for the machine's consoles (the panel). */
         fun list() { try { channel?.send(buildJsonObject { put("type", "list") }) } catch (_: Exception) {} }
 
+        /** Ask the machine anything, to know the connection is alive. Any answer clears [checking]. */
+        internal fun check() { if (state != State.OPEN) return; checking = true; onChange(); list() }
+
         internal fun handle(m: JsonObject) {
+            if (checking) { checking = false; onChange() }
             when ((m["type"] as? JsonPrimitive)?.content) {
                 "consoles" -> {
                     consoles = (m["list"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::consoleOf) }.sortedBy { it.n }
@@ -442,7 +473,7 @@ object Consoles {
         internal fun release() { off?.invoke(); offError?.invoke(); off = null; offError = null; channel?.close(); channel = null }
 
         /** The connection dropped under this tab: it comes back by itself. */
-        internal fun lost() { if (state == State.OPEN || state == State.CONNECTING) { release(); state = State.LOST; onChange() } }
+        internal fun lost() { checking = false; if (state == State.OPEN || state == State.CONNECTING) { release(); state = State.LOST; onChange() } }
 
         internal fun lostWith(why: String?) { release(); state = State.LOST; note = why; onChange(); scope.launch { resume(this@Tab) } }
 
