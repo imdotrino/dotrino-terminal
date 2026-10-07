@@ -195,7 +195,7 @@ enum Pending {
     Close,
     /// Actualizar el cliente en esta misma ventana: la consola se suelta (sigue viva en el
     /// agente), corre `script` en una TTY nueva, y al acabar la ventana vuelve a `back`.
-    Update { script: String, back: Option<String> },
+    Update { script: String, back: Option<String>, what: String },
 }
 
 /// Qué corre en la TTY de la ventana.
@@ -206,7 +206,8 @@ enum Mode {
     Linking { linked_before: Vec<String> },
     /// «Actualizar dotrino-terminal…»: `script` corre en la TTY de esta ventana y, al acabar, la
     /// ventana vuelve a la consola que tenía (`back`) o abre una.
-    Updating { script: String, back: Option<String> },
+    /// `what` es el título de la ventana mientras dura.
+    Updating { script: String, back: Option<String>, what: String },
 }
 
 struct Win {
@@ -808,6 +809,25 @@ impl App {
         }
     }
 
+    /// Corre `script` en ESTA ventana, en otra TTY, y al acabar la ventana vuelve a su consola.
+    /// Con una consola del agente a la vista se le pide al cliente que la suelte (Ctrl+] d) y,
+    /// cuando sale, `ended` arranca el script: así no se pierde.
+    fn run_aside(&mut self, id: window::Id, script: String, what: String) -> Task<Message> {
+        let back = self.mine(id);
+        let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
+        let in_console = matches!(win.mode, Mode::Console) && win.profile.is_some() && win.term.is_some();
+        if in_console {
+            win.pending = Some(Pending::Update { script, back, what });
+            if let Some(term) = win.term.as_mut() {
+                term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(b"\x1dd".to_vec())));
+            }
+            return self.focus(id);
+        }
+        // Sin consola del agente (sin perfil, o con un error a la vista): directo.
+        self.start(id, Mode::Updating { script, back: None, what });
+        self.focus(id)
+    }
+
     fn pin_ready(&self) -> bool {
         self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= PIN_CLIENT)
     }
@@ -1056,8 +1076,8 @@ impl App {
                 let win = self.windows.get_mut(&id).expect("window");
                 match win.pending.take() {
                     // La consola ya está suelta: ahora sí, la actualización en esta ventana.
-                    Some(Pending::Update { script, back }) => {
-                        self.start(id, Mode::Updating { script, back });
+                    Some(Pending::Update { script, back, what }) => {
+                        self.start(id, Mode::Updating { script, back, what });
                         return self.focus(id);
                     }
                     Some(Pending::Attach(cid)) => win.attach = Some(cid),
@@ -1182,21 +1202,7 @@ impl App {
                     sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&close)
                 );
                 self.awaiting_client = true;
-                let back = self.mine(id);
-                let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
-                // Con una consola del agente a la vista: se le pide al cliente que la suelte
-                // (Ctrl+] d) y, cuando sale, `ended` arranca la actualización. Así no se pierde.
-                let in_console = matches!(win.mode, Mode::Console) && win.profile.is_some() && win.term.is_some();
-                if in_console {
-                    win.pending = Some(Pending::Update { script, back });
-                    if let Some(term) = win.term.as_mut() {
-                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(b"\x1dd".to_vec())));
-                    }
-                    return self.focus(id);
-                }
-                // Sin consola del agente (sin perfil, o con un error a la vista): directo.
-                self.start(id, Mode::Updating { script, back: None });
-                self.focus(id)
+                self.run_aside(id, script, t("Actualizar", "Update"))
             }
             Message::CheckClient => {
                 // Se mira hasta que haya un cliente que entienda el panel (o, si no había ninguno,
@@ -1236,15 +1242,21 @@ impl App {
                 self.focus(id)
             }
             Message::Vscode(id, set) => {
-                // Como la clave: la orden corre en TU consola, a la vista, y ahí dice qué editores
-                // tocó. Quitarlo no depende del perfil.
-                if let Some(win) = self.windows.get_mut(&id) {
-                    if let (Some(profile), Some(term)) = (win.profile.clone(), win.term.as_mut()) {
-                        let order = if set { format!("dotrino-terminal vscode --name {profile}\r") } else { "dotrino-terminal vscode --off\r".to_string() };
-                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
-                    }
-                }
-                self.focus(id)
+                // Como «Actualizar»: en ESTA ventana y en otra TTY, con la salida a la vista hasta
+                // Enter. Quitarlo no depende del perfil.
+                let Ok(launch) = self.launch.clone() else { return Task::none() };
+                let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
+                let args = match (set, profile) {
+                    (true, Some(p)) => format!("vscode --name {}", sh_quote(&p)),
+                    (true, None) => "vscode".to_string(),
+                    (false, _) => "vscode --off".to_string(),
+                };
+                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
+                let script = format!(
+                    "PATH={}; export PATH; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
+                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
+                );
+                self.run_aside(id, script, "VS Code".to_string())
             }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
@@ -1436,7 +1448,7 @@ impl App {
         profiles.push(Item::new(entry(t("Quitar la clave", "Remove the code"), "", can_lock.then_some(Message::Lock(id, false)))));
         // La terminal embebida de VS Code (y variantes) abre consolas de este perfil.
         let vscode_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= VSCODE_CLIENT);
-        let can_vscode = can_lock && vscode_ready;
+        let can_vscode = !linking && vscode_ready;
         profiles.push(Item::new(entry(t("Usar en la terminal de VS Code", "Use in VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, true)))));
         profiles.push(Item::new(entry(t("Quitar de la terminal de VS Code", "Remove from VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, false)))));
         if self.launch.is_ok() && !vscode_ready {
@@ -1736,9 +1748,9 @@ impl App {
 
     fn title(&self, id: window::Id) -> String {
         let Some(win) = self.windows.get(&id) else { return String::new() };
-        let what = match win.mode {
+        let what = match &win.mode {
             Mode::Linking { .. } => t("Enrolar", "Enroll"),
-            Mode::Updating { .. } => t("Actualizar", "Update"),
+            Mode::Updating { what, .. } => what.clone(),
             Mode::Console if win.title.is_empty() => "Dotrino Terminal".to_string(),
             Mode::Console => win.title.clone(),
         };
