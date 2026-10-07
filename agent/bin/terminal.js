@@ -192,7 +192,11 @@ function askHidden (q) {
   return new Promise((resolve) => {
     let typed = ''
     const onData = (b) => {
-      for (const ch of b.toString('utf8')) {
+      // Una tecla que no es texto (flechas, Fin, el teclado numérico SIN Bloq Num) llega como una
+      // secuencia de escape: se descarta entera. Antes solo se saltaba el ESC y el resto («[F»)
+      // entraba en la clave sin que se viera, así que la clave guardada no era la tecleada.
+      const typedText = b.toString('utf8').replace(/\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.|.)?/g, '')
+      for (const ch of typedText) {
         if (ch === '\r' || ch === '\n') {
           process.stdin.off('data', onData); process.stdin.setRawMode(false); process.stdin.pause()
           process.stdout.write('\n'); resolve(typed); return
