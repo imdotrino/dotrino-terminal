@@ -132,10 +132,10 @@ struct ConsoleInfo {
     done_at: Option<u64>,
 }
 
-/// Lo que el panel dice de una consola, cada cosa en SU línea (dueño, 2026-10-07): quién y dónde
-/// (`usuario@máquina`), la carpeta, y el título que puso el programa. Una shell titula
-/// «usuario@máquina: carpeta», así que le salen las dos primeras; un programa que se nombra solo
-/// (Claude: su sesión) no trae máquina, y le salen la carpeta y el título.
+/// Lo que el panel dice de una consola, cada cosa en SU línea: la máquina (`usuario@máquina`)
+/// solo si es OTRA, la carpeta, y el título que puso el programa. Una shell titula
+/// «usuario@máquina: carpeta»: en local le queda la carpeta; un programa que se nombra solo
+/// (Claude: su sesión) muestra la carpeta y su título.
 fn panel_lines(title: &str, cwd: Option<&str>, me: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
     let title = title.trim();
     let (host, rest) = match title.split_once(':') {
@@ -146,12 +146,13 @@ fn panel_lines(title: &str, cwd: Option<&str>, me: Option<&str>) -> (Option<Stri
     // Sin carpeta del agente (uno viejo, o macOS), la de una shell es lo que sigue a la máquina.
     let dir = cwd.or(host.map(|_| rest).filter(|r| !r.is_empty()));
     let name = Some(rest).filter(|r| !r.is_empty() && Some(*r) != dir);
-    // Un programa que se nombra solo no dice la máquina: es esta (las consolas del panel son de aquí).
-    (host.or(me).map(String::from), dir.map(String::from), name.map(String::from))
+    // La máquina solo cuando NO es esta (dueño, 2026-10-07): en local sobra, y tras un `ssh` es
+    // justo lo que hay que ver.
+    (host.filter(|h| Some(*h) != me).map(String::from), dir.map(String::from), name.map(String::from))
 }
 
 /// `usuario@máquina` de ESTA máquina, como lo pone el prompt de una shell (`\u@\h`: el nombre
-/// hasta el primer punto). Para la consola cuyo programa puso su propio título.
+/// hasta el primer punto). Para saber si el título de una consola habla de otra.
 fn user_at_host() -> Option<String> {
     static ME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     ME.get_or_init(|| {
@@ -179,13 +180,18 @@ mod tests {
 
     #[test]
     fn the_panel_gives_host_folder_and_title_a_line_each() {
-        let me = Some("yo@aqui");
-        assert_eq!(panel_lines("seyacat@loca: ~", Some("~"), me), (s("seyacat@loca"), s("~"), None));
-        assert_eq!(panel_lines("seyacat@loca: ~/p/dotrino", None, me), (s("seyacat@loca"), s("~/p/dotrino"), None)); // an older agent
-        // A program that names itself keeps the machine line: it is this one.
-        assert_eq!(panel_lines("✳ Sefjr improvement", Some("/mnt/sda1/Dotrino"), me), (s("yo@aqui"), s("/mnt/sda1/Dotrino"), s("✳ Sefjr improvement")));
-        assert_eq!(panel_lines("vim: notas.txt", Some("~"), me), (s("yo@aqui"), s("~"), s("vim: notas.txt")));
-        assert_eq!(panel_lines("", Some("~"), None), (None, s("~"), None));
+        let me = Some("seyacat@loca");
+        // Local: the machine line is left out, the folder leads.
+        assert_eq!(panel_lines("seyacat@loca: ~", Some("~"), me), (None, s("~"), None));
+        assert_eq!(panel_lines("seyacat@loca: ~/p/dotrino", None, me), (None, s("~/p/dotrino"), None)); // an older agent
+        assert_eq!(panel_lines("✳ Sefjr improvement", Some("/mnt/sda1/Dotrino"), me), (None, s("/mnt/sda1/Dotrino"), s("✳ Sefjr improvement")));
+        assert_eq!(panel_lines("vim: notas.txt", Some("~"), me), (None, s("~"), s("vim: notas.txt")));
+        // After an ssh the title names ANOTHER machine: that is shown. The agent's folder is the
+        // local ssh process's, so the remote one stays as the title.
+        assert_eq!(panel_lines("dotrino@proxy1: /var/www", Some("~"), me), (s("dotrino@proxy1"), s("~"), s("/var/www")));
+        assert_eq!(panel_lines("dotrino@proxy1: ~", None, me), (s("dotrino@proxy1"), s("~"), None));
+        // Without knowing this machine's name, a host in the title is shown.
+        assert_eq!(panel_lines("seyacat@loca: ~", Some("~"), None), (s("seyacat@loca"), s("~"), None));
         assert_eq!(panel_lines("", None, None), (None, None, None));
     }
 }
