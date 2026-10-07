@@ -79,7 +79,7 @@ class DemoConsolesActivity : Activity() {
             }
         }
 
-        private fun list() = reply(buildJsonObject { put("type", "consoles"); put("list", buildJsonArray { consoles.sortedBy { it.n }.forEach { add(info(it)) } }) })
+        private fun list() = reply(buildJsonObject { put("type", "consoles"); put("list", buildJsonArray { consoles.forEach { add(info(it)) } }) })
         private fun meta(c: C) = reply(buildJsonObject { put("type", "meta"); put("console", info(c)) })
 
         /** The phone's size applies only if the phone decides. */
@@ -125,6 +125,14 @@ class DemoConsolesActivity : Activity() {
                 }
                 "input" -> reply(buildJsonObject { put("type", "out"); put("data", (payload["data"] as JsonPrimitive).content.replace("\r", "\r\n$ ")) })
                 "kill" -> { consoles.removeAll { it.id == (payload["id"] as JsonPrimitive).content }; list() }
+                // The panel's order, as the agent keeps it: `id` goes right before `before` (or last).
+                "move" -> {
+                    val c = consoles.firstOrNull { it.id == (payload["id"] as JsonPrimitive).content } ?: return
+                    consoles.remove(c)
+                    val at = consoles.indexOfFirst { it.id == (payload["before"] as? JsonPrimitive)?.content }
+                    if (at < 0) consoles.add(c) else consoles.add(at, c)
+                    list()
+                }
                 "close" -> { current?.let { consoles.remove(it) }; current = null }
             }
         }

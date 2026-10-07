@@ -105,6 +105,20 @@ fun shortTitle(title: String, max: Int = 24): String {
     return "…/" + if (out.length > max - 2) "…" + out.takeLast(max - 3) else out
 }
 
+/**
+ * Where a console dragged in the panel goes when dropped on another: it takes THAT one's place.
+ * Upwards it lands in front of it; downwards, behind it (in front of the next one, or at the end:
+ * null inside). The same as the PWA's `dropTarget`. [ids]: the consoles in the panel's order.
+ * Returns null when nothing moves (the same one, or one of them is gone).
+ */
+data class DropTarget(val before: String?)
+
+fun dropTarget(ids: List<String>, id: String, over: String): DropTarget? {
+    val from = ids.indexOf(id); val to = ids.indexOf(over)
+    if (from < 0 || to < 0 || from == to) return null
+    return DropTarget(if (to < from) over else ids.getOrNull(to + 1))
+}
+
 /** What the open panel says of a console, a line each (any may be missing). */
 data class PanelLines(val host: String?, val dir: String?, val name: String?)
 
@@ -296,7 +310,7 @@ object Consoles {
         var state = State.CONNECTING; private set
         /** The console on screen. */
         var consoleId: String? = null; private set
-        /** The machine's consoles, sorted by their number. */
+        /** The machine's consoles, in the panel's order: the machine's (by number until someone moves one). */
         var consoles: List<ConsoleInfo> = emptyList(); private set
         /** Why it failed, or the exit code as text. */
         var note: String? = null; private set
@@ -384,7 +398,7 @@ object Consoles {
             if (checking) { checking = false; onChange() }
             when ((m["type"] as? JsonPrimitive)?.content) {
                 "consoles" -> {
-                    consoles = (m["list"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::consoleOf) }.sortedBy { it.n }
+                    consoles = (m["list"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::consoleOf) }
                     if (choosing) {
                         choosing = false
                         val pick = pick(null)
@@ -443,7 +457,8 @@ object Consoles {
         }
 
         private fun upsert(info: ConsoleInfo) {
-            consoles = (consoles.filter { it.id != info.id } + info).sortedBy { it.n }
+            // In its place (the order is the machine's); one not seen yet goes last until the next list.
+            consoles = if (consoles.any { it.id == info.id }) consoles.map { if (it.id == info.id) info else it } else consoles + info
         }
 
         /** The emulator takes the console's size: if another screen has it, this one shows it at that size. */
@@ -504,6 +519,21 @@ object Consoles {
             if (id == consoleId) switchTo(pick(id)?.id)
             try { channel?.send(buildJsonObject { put("type", "kill"); put("id", id) }) } catch (_: Exception) {}
             list()
+        }
+
+        /**
+         * The panel's order, by dragging: [id] takes the place of [over]. The order is the machine's
+         * (agent ≥ 0.26), so every screen sees it; it is shown here at once and the machine's answer
+         * (the list, in order) confirms it.
+         */
+        fun move(id: String, over: String) {
+            val to = dropTarget(consoles.map { it.id }, id, over) ?: return
+            val moved = consoles.first { it.id == id }
+            val rest = consoles.filter { it.id != id }
+            val at = to.before?.let { b -> rest.indexOfFirst { it.id == b } } ?: rest.size
+            consoles = rest.take(at) + moved + rest.drop(at)
+            try { channel?.send(buildJsonObject { put("type", "move"); put("id", id); to.before?.let { put("before", it) } }) } catch (_: Exception) {}
+            onChange()
         }
 
         /** The tab's ×: closes the console on screen on the machine too (as the PWA's × does), and the tab. */

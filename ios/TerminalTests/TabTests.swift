@@ -183,4 +183,13 @@ final class TabTests: XCTestCase {
         same(panelLines("", "~", nil), nil, "~", nil)
         same(panelLines("", nil, nil), nil, nil, nil)
     }
+
+    func testAConsoleDroppedOnAnotherTakesItsPlace() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(dropTarget(ids, "c", "a")?.before, "a")       // up: in front of it
+        XCTAssertEqual(dropTarget(ids, "a", "c")?.before, "d")       // down: behind it
+        XCTAssertNotNil(dropTarget(ids, "a", "d")); XCTAssertNil(dropTarget(ids, "a", "d")?.before)   // to the last: the end
+        XCTAssertNil(dropTarget(ids, "b", "b"))
+        XCTAssertNil(dropTarget(ids, "x", "b"))
+    }
 }

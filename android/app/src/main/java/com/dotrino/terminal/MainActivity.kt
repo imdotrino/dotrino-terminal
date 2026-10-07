@@ -379,6 +379,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderPanel() {
+        if (dragging != null) return        // mid-drag the panel is not redrawn: it would take the row away
         val side = panel ?: return
         val tab = active ?: return
         side.removeAllViews()
@@ -411,6 +412,51 @@ class MainActivity : Activity() {
         if (panelOpen) openDrawer(true)
     }
 
+    /** The console being dragged in the open panel to change its place, or null. */
+    private var dragging: String? = null
+
+    /**
+     * The grip of a console's row: dragging it up or down moves the console in the panel (dropped
+     * on another, it takes its place). A line marks where it would land. A grip and not the row
+     * itself, so the row still opens the console, long-presses for its actions and scrolls the panel.
+     */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun grip(tab: Consoles.Tab, id: String, rows: List<Pair<String, View>>): View = label("⠿", 15f, col(R.color.t_muted)).apply {
+        tag = "console-grip"; contentDescription = t("console.move"); setPadding(px(6), px(8), px(2), px(8))
+        var over: String? = null
+        fun mark(target: String?) {
+            for ((rid, row) in rows) {
+                row.alpha = if (rid == id) 0.5f else 1f
+                val to = if (rid == target) dropTarget(rows.map { it.first }, id, rid) else null
+                // A 2 px line of the accent colour: above (it lands in front) or below (behind).
+                row.foreground = to?.let {
+                    val gap = (row.height - px(2)).coerceAtLeast(0)
+                    if (it.before == rid) android.graphics.drawable.InsetDrawable(android.graphics.drawable.ColorDrawable(col(R.color.t_accent)), 0, 0, 0, gap)
+                    else android.graphics.drawable.InsetDrawable(android.graphics.drawable.ColorDrawable(col(R.color.t_accent)), 0, gap, 0, 0)
+                }
+            }
+        }
+        setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { dragging = id; over = null; v.parent?.requestDisallowInterceptTouchEvent(true); mark(null); true }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    // The row under the finger; above the first or below the last, that one.
+                    val at = IntArray(2)
+                    over = (rows.firstOrNull { (_, row) -> row.getLocationOnScreen(at); e.rawY < at[1] + row.height } ?: rows.lastOrNull())?.first
+                    mark(over); true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    val target = over.takeIf { e.actionMasked == android.view.MotionEvent.ACTION_UP }
+                    dragging = null; over = null
+                    for ((_, row) in rows) { row.alpha = 1f; row.foreground = null }
+                    if (target != null && target != id) tab.move(id, target) else renderPanel()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
     /** The open panel: beside the console, in the strip's place, with the titles, where each one is, and who has the size. */
     private fun openDrawer(open: Boolean) {
         val stage = drawerHost ?: return
@@ -438,10 +484,13 @@ class MainActivity : Activity() {
                 addView(sizeButton(tab), LinearLayout.LayoutParams(px(32), px(32)))
             })
         }
+        val rows = ArrayList<Pair<String, View>>()
         for (c in tab.consoles) {
             val on = c.id == tab.consoleId
             list.addView(LinearLayout(this).apply {
                 tag = "drawer-console"; gravity = Gravity.CENTER_VERTICAL
+                rows.add(c.id to this)
+                addView(grip(tab, c.id, rows))
                 // The status as in the collapsed strip: a BORDER in its colour (amber = working,
                 // green = finished), not only a coloured line of text.
                 val act = actColor(c)
@@ -452,7 +501,7 @@ class MainActivity : Activity() {
                     else -> null
                 }
                 addView(LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL; setPadding(px(8), px(5), px(4), px(5))
+                    orientation = LinearLayout.VERTICAL; setPadding(px(4), px(5), px(4), px(5))
                     // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
                     addView(label((if (on) "● " else "") + "${c.n}", 13f, bold = true))
                     // ONE line each, never wrapped (a long path would push every row down); what does

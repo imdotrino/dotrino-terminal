@@ -55,7 +55,7 @@ final class DemoAgent: Channel {
         return .object(o)
     }
 
-    private func list() { reply(["type": "consoles", "list": .array(consoles.sorted { $0.n < $1.n }.map(info))]) }
+    private func list() { reply(["type": "consoles", "list": .array(consoles.map(info))]) }
     private func meta(_ c: C) { reply(["type": "meta", "console": info(c)]) }
     /// The phone's size applies only if the phone decides.
     private func applySize(_ c: C) { if decider(c) == "phone" { c.cols = cols; c.rows = rows } }
@@ -96,6 +96,12 @@ final class DemoAgent: Channel {
             }
         case "input": reply(["type": "out", "data": .string((p["data"]?.string ?? "").replacingOccurrences(of: "\r", with: "\r\n$ "))])
         case "kill": consoles.removeAll { $0.id == p["id"]?.string }; list()
+        // The panel's order, as the agent keeps it: `id` goes right before `before` (or last).
+        case "move":
+            guard let i = consoles.firstIndex(where: { $0.id == p["id"]?.string }) else { return }
+            let c = consoles.remove(at: i)
+            consoles.insert(c, at: consoles.firstIndex { $0.id == p["before"]?.string } ?? consoles.count)
+            list()
         case "close": if let c = current { consoles.removeAll { $0 === c } }; current = nil
         default: break
         }

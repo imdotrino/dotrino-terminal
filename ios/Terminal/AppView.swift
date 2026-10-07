@@ -204,6 +204,11 @@ private struct ConsoleScreen: View {
     let toMachines: () -> Void
     @State private var view: TerminalView?
     @State private var drawer = false
+    /// Ordering the panel by dragging: the console being dragged, the one it would land on, and
+    /// where each row is (in the panel's own space).
+    @State private var dragId: String?
+    @State private var dragOver: String?
+    @State private var rowFrames: [String: CGRect] = [:]
     @State private var actions: ConsoleInfo?
     @State private var toast: String?
     @State private var mods = (ctrl: false, alt: false)
@@ -416,6 +421,22 @@ private struct ConsoleScreen: View {
                 ForEach(tab.consoles) { c in
                     let on = c.id == tab.consoleId
                     HStack {
+                        // The grip: dragging it moves the console in the panel (dropped on another, it
+                        // takes its place). A grip and not the row, so the row still opens the console,
+                        // long-presses for its actions and scrolls the panel.
+                        Text("⠿").foregroundColor(Palette.muted).padding(.vertical, 8).padding(.trailing, 2).contentShape(Rectangle())
+                            .accessibilityLabel(t("console.move")).accessibilityIdentifier("console-grip")
+                            .highPriorityGesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("drawer-rows"))
+                                .onChanged { v in
+                                    dragId = c.id
+                                    // The row under the finger; above the first or below the last, that one.
+                                    let rows = tab.consoles.compactMap { r in rowFrames[r.id].map { (r.id, $0) } }
+                                    dragOver = (rows.first { v.location.y < $0.1.maxY } ?? rows.last)?.0
+                                }
+                                .onEnded { _ in
+                                    if let over = dragOver, over != c.id { tab.move(c.id, over: over) }
+                                    dragId = nil; dragOver = nil
+                                })
                         VStack(alignment: .leading, spacing: 2) {
                             // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
                             Text((on ? "● " : "") + "\(c.n)").font(.footnote.bold()).foregroundColor(Palette.text)
@@ -437,15 +458,27 @@ private struct ConsoleScreen: View {
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .background(RoundedRectangle(cornerRadius: 8).fill(on ? Palette.accentSoft : Color.clear))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
+                    .opacity(dragId == c.id ? 0.5 : 1)
+                    // A line of the accent colour where the dragged one would land: above (in front) or below (behind).
+                    .overlay(alignment: dropEdge(tab, c.id) ?? .top) { if dropEdge(tab, c.id) != nil { Rectangle().fill(Palette.accent).frame(height: 2) } }
+                    .background(GeometryReader { g in Color.clear.preference(key: RowFrames.self, value: [c.id: g.frame(in: .named("drawer-rows"))]) })
                     .accessibilityIdentifier("drawer-console")
                 }
             }
             .padding(8)
+            .coordinateSpace(name: "drawer-rows")
+            .onPreferenceChange(RowFrames.self) { rowFrames = $0 }
         }
         .frame(width: 270)
         .frame(maxHeight: .infinity)
         .background(Palette.panel)
         .accessibilityIdentifier("drawer")
+    }
+
+    /// Where the line goes on the row `id` while a console is dragged over it, or nil.
+    private func dropEdge(_ tab: Tab, _ id: String) -> Alignment? {
+        guard let dragId, dragOver == id, let to = dropTarget(tab.consoles.map(\.id), dragId, id) else { return nil }
+        return to.before == id ? .top : .bottom
     }
 
     /// The keys a phone keyboard lacks. Ctrl and Alt stay lit until the next key uses them.
@@ -486,4 +519,10 @@ private struct ConsoleScreen: View {
         default: v.type(k)
         }
     }
+}
+
+/// Where each row of the consoles panel is, so a drag knows which one it is over.
+private struct RowFrames: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue()) { $1 } }
 }

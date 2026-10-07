@@ -30,5 +30,12 @@ final class ConsolesUITests: XCTestCase {
         let drawer = app.descendants(matching: .any)["drawer"].firstMatch
         XCTAssertTrue(drawer.frame.contains(app.buttons["panel-open"].frame), "the open panel covers the strip")
         shot("4-panel")
+
+        // Ordering by dragging: the third console's grip, dropped on the first, takes its place.
+        let grips = app.descendants(matching: .any).matching(identifier: "console-grip")
+        XCTAssertGreaterThanOrEqual(grips.count, 3)
+        grips.element(boundBy: 2).press(forDuration: 0.2, thenDragTo: grips.element(boundBy: 0))
+        sleep(1)
+        shot("5-reordered")
     }
 }

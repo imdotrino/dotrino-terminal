@@ -244,4 +244,32 @@ class TabTest {
         assertEquals(PanelLines(null, "~", null), panelLines("", "~", null))
         assertEquals(PanelLines(null, null, null), panelLines("", null, null))
     }
+
+    @Test fun aConsoleDroppedOnAnotherTakesItsPlace() {
+        val ids = listOf("a", "b", "c", "d")
+        assertEquals(DropTarget("a"), dropTarget(ids, "c", "a"))     // up: in front of it
+        assertEquals(DropTarget("d"), dropTarget(ids, "a", "c"))     // down: behind it
+        assertEquals(DropTarget(null), dropTarget(ids, "a", "d"))    // down to the last: the end
+        assertEquals(null, dropTarget(ids, "b", "b"))
+        assertEquals(null, dropTarget(ids, "x", "b"))
+    }
+
+    @Test fun thePanelKeepsTheMachinesOrderAndMovingAConsoleAsksTheMachine() {
+        val (t, ch) = tab()
+        val a = console("a", 1, 80, 24); val b = console("b", 2, 80, 24); val c = console("c", 3, 80, 24)
+        ch.agent(consoles(c, a, b))                                  // someone ordered them by hand
+        assertEquals("the machine's order, not by number", listOf("c", "a", "b"), t.consoles.map { it.id })
+        ch.agent(buildJsonObject { put("type", "meta"); put("console", console("a", 1, 100, 30)) })
+        assertEquals("news of one keeps its place", listOf("c", "a", "b"), t.consoles.map { it.id })
+        t.move("b", "c")
+        assertEquals("shown at once", listOf("b", "c", "a"), t.consoles.map { it.id })
+        val m = ch.last("move")!!
+        assertEquals("b", (m["id"] as JsonPrimitive).content); assertEquals("c", (m["before"] as JsonPrimitive).content)
+        t.move("b", "a")
+        assertEquals(listOf("c", "a", "b"), t.consoles.map { it.id })
+        assertEquals("to the end: no `before`", null, ch.last("move")!!["before"])
+        val sent = ch.sent.size
+        t.move("b", "b")
+        assertEquals("on itself nothing is asked", sent, ch.sent.size)
+    }
 }

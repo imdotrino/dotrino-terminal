@@ -64,6 +64,14 @@ func consoleOf(_ o: JSON) -> ConsoleInfo? {
                        busy: o["activity"]?.string == "busy", doneAt: o["doneAt"]?.int)
 }
 
+/// Where a console dragged in the panel goes when dropped on another: it takes THAT one's place.
+/// Upwards it lands in front of it; downwards, behind it (in front of the next one, or at the end:
+/// `before` nil). nil when nothing moves. The same as the PWA's `dropTarget`.
+func dropTarget(_ ids: [String], _ id: String, _ over: String) -> (before: String?, ())? {
+    guard let from = ids.firstIndex(of: id), let to = ids.firstIndex(of: over), from != to else { return nil }
+    return (to < from ? over : (to + 1 < ids.count ? ids[to + 1] : nil), ())
+}
+
 /// What the open panel says of a console, each thing on ITS line: the machine (`user@host`) only
 /// when it is ANOTHER one, the folder, and the title the program set. A shell titles itself
 /// «user@host: folder»: on its machine the folder is left, and after an `ssh` where it went shows
@@ -248,7 +256,7 @@ final class Tab: ObservableObject, Identifiable {
     @Published private(set) var state = State.connecting
     /// The console on screen.
     @Published private(set) var consoleId: String?
-    /// The machine's consoles, sorted by their number.
+    /// The machine's consoles, in the panel's order: the machine's (by number until someone moves one).
     @Published private(set) var consoles: [ConsoleInfo] = []
     /// Why it failed, or the exit code as text.
     @Published private(set) var note: String?
@@ -311,10 +319,13 @@ final class Tab: ObservableObject, Identifiable {
     func handle(_ m: JSON) {
         switch m["type"]?.string {
         case "consoles":
-            consoles = (m["list"]?.array ?? []).compactMap(consoleOf).sorted { $0.n < $1.n }
+            // In the panel's order: the machine's (by number until someone moves one).
+            consoles = (m["list"]?.array ?? []).compactMap(consoleOf)
             if choosing {
                 choosing = false
-                if let free = consoles.first(where: { $0.watchers == 0 }) { send("attach", free.id) } else { send("open", nil) }
+                // One that ALREADY exists: first one nobody watches; if all are watched, the first
+                // anyway. A NEW one only when the machine has none (owner, 2026-10-07).
+                if let pick = consoles.first(where: { $0.watchers == 0 }) ?? consoles.first { send("attach", pick.id) } else { send("open", nil) }
             }
             if let c = current { follow(c) }
         // The screen as the agent keeps it, in pieces: a clean emulator first, then the pieces.
@@ -361,7 +372,10 @@ final class Tab: ObservableObject, Identifiable {
         }
     }
 
-    private func upsert(_ c: ConsoleInfo) { consoles = (consoles.filter { $0.id != c.id } + [c]).sorted { $0.n < $1.n } }
+    /// In its place (the order is the machine's); one not seen yet goes last until the next list.
+    private func upsert(_ c: ConsoleInfo) {
+        if let i = consoles.firstIndex(where: { $0.id == c.id }) { consoles[i] = c } else { consoles.append(c) }
+    }
 
     /// The emulator takes the console's size: if another screen has it, this one shows it at that size.
     private func follow(_ c: ConsoleInfo) {
@@ -423,6 +437,19 @@ final class Tab: ObservableObject, Identifiable {
         }
         try? channel?.send(["type": "kill", "id": .string(id)])
         list()
+    }
+
+    /// The panel's order, by dragging: `id` takes the place of `over`. The order is the machine's
+    /// (agent ≥ 0.26), so every screen sees it; it is shown here at once and the machine's answer
+    /// (the list, in order) confirms it.
+    func move(_ id: String, over: String) {
+        guard let to = dropTarget(consoles.map(\.id), id, over), let from = consoles.firstIndex(where: { $0.id == id }) else { return }
+        let moved = consoles.remove(at: from)
+        consoles.insert(moved, at: to.before.flatMap { b in consoles.firstIndex { $0.id == b } } ?? consoles.count)
+        var o: [String: JSON] = ["type": "move", "id": .string(id)]
+        if let b = to.before { o["before"] = .string(b) }
+        try? channel?.send(.object(o))
+        onChange()
     }
 
     /// The tab's ×: closes the console on screen on the machine too (as the PWA's × does), and the tab.
