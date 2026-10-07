@@ -169,16 +169,16 @@ final class TabTests: XCTestCase {
         XCTAssertEqual(ch2.types.filter { $0 == "open" }.count, opens2 + 1)   // it was the last one
     }
 
-    func testThePanelGivesTheFolderAndTheTitleALineEachAndTheMachineOnlyWhenItIsAnother() {
+    func testThePanelGivesTheMachineTheFolderAndTheTitleALineEachTheMachineAlwaysFirst() {
         let me = "seyacat@loca"
         func same(_ l: (host: String?, dir: String?, name: String?), _ host: String?, _ dir: String?, _ name: String?, line: UInt = #line) {
             XCTAssertEqual(l.host, host, line: line); XCTAssertEqual(l.dir, dir, line: line); XCTAssertEqual(l.name, name, line: line)
         }
-        // Local: the machine line is left out, the folder leads.
-        same(panelLines("seyacat@loca: ~", "~", me), nil, "~", nil)
-        same(panelLines("seyacat@loca: ~/p/dotrino", nil, me), nil, "~/p/dotrino", nil)                 // an older agent
-        same(panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino", me), nil, "/mnt/sda1/Dotrino", "✳ Sefjr improvement")
-        same(panelLines("vim: notas.txt", "~", me), nil, "~", "vim: notas.txt")
+        // Local: the machine leads (the title's, or the console's when the title names a program).
+        same(panelLines("seyacat@loca: ~", "~", me), me, "~", nil)
+        same(panelLines("seyacat@loca: ~/p/dotrino", nil, me), me, "~/p/dotrino", nil)                 // an older agent
+        same(panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino", me), me, "/mnt/sda1/Dotrino", "✳ Sefjr improvement")
+        same(panelLines("vim: notas.txt", "~", me), me, "~", "vim: notas.txt")
         // After an ssh the title names ANOTHER machine: that is shown.
         same(panelLines("dotrino@proxy1: /var/www", "~", me), "dotrino@proxy1", "~", "/var/www")
         same(panelLines("dotrino@proxy1: ~", nil, me), "dotrino@proxy1", "~", nil)

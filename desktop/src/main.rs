@@ -115,6 +115,9 @@ struct ConsoleInfo {
     /// La carpeta en la que está AHORA (agente ≥ 0.22, solo donde hay /proc); con `~`.
     #[serde(default)]
     cwd: Option<String>,
+    /// `usuario@máquina` de la máquina en la que corre (agente ≥ 0.24).
+    #[serde(default)]
+    host: Option<String>,
     #[serde(default)]
     watchers: Vec<Watcher>,
     /// Quién tiene el tamaño: quien lo fijó (⤢) o el último que se enganchó (agente ≥ 0.14).
@@ -136,7 +139,7 @@ struct ConsoleInfo {
 /// solo si es OTRA, la carpeta, y el título que puso el programa. Una shell titula
 /// «usuario@máquina: carpeta»: en local le queda la carpeta; un programa que se nombra solo
 /// (Claude: su sesión) muestra la carpeta y su título.
-fn panel_lines(title: &str, cwd: Option<&str>, me: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
+fn panel_lines(title: &str, cwd: Option<&str>, machine: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
     let title = title.trim();
     let (host, rest) = match title.split_once(':') {
         Some((h, r)) if h.contains('@') && !h.contains(char::is_whitespace) => (Some(h), r.trim()),
@@ -146,9 +149,9 @@ fn panel_lines(title: &str, cwd: Option<&str>, me: Option<&str>) -> (Option<Stri
     // Sin carpeta del agente (uno viejo, o macOS), la de una shell es lo que sigue a la máquina.
     let dir = cwd.or(host.map(|_| rest).filter(|r| !r.is_empty()));
     let name = Some(rest).filter(|r| !r.is_empty() && Some(*r) != dir);
-    // La máquina solo cuando NO es esta (dueño, 2026-10-07): en local sobra, y tras un `ssh` es
-    // justo lo que hay que ver.
-    (host.filter(|h| Some(*h) != me).map(String::from), dir.map(String::from), name.map(String::from))
+    // La máquina SIEMPRE y primero (dueño, 2026-10-07: callada cuando era la propia, el panel no decía
+    // de quién es cada consola): la del título, y si no la trae, la de la consola (la dice el agente).
+    (host.or(machine).map(String::from), dir.map(String::from), name.map(String::from))
 }
 
 /// `usuario@máquina` de ESTA máquina, como lo pone el prompt de una shell (`\u@\h`: el nombre
@@ -191,11 +194,11 @@ mod tests {
     #[test]
     fn the_panel_gives_host_folder_and_title_a_line_each() {
         let me = Some("seyacat@loca");
-        // Local: the machine line is left out, the folder leads.
-        assert_eq!(panel_lines("seyacat@loca: ~", Some("~"), me), (None, s("~"), None));
-        assert_eq!(panel_lines("seyacat@loca: ~/p/dotrino", None, me), (None, s("~/p/dotrino"), None)); // an older agent
-        assert_eq!(panel_lines("✳ Sefjr improvement", Some("/mnt/sda1/Dotrino"), me), (None, s("/mnt/sda1/Dotrino"), s("✳ Sefjr improvement")));
-        assert_eq!(panel_lines("vim: notas.txt", Some("~"), me), (None, s("~"), s("vim: notas.txt")));
+        // Local: the machine leads (the title's, or the console's when the title names a program).
+        assert_eq!(panel_lines("seyacat@loca: ~", Some("~"), me), (s("seyacat@loca"), s("~"), None));
+        assert_eq!(panel_lines("seyacat@loca: ~/p/dotrino", None, me), (s("seyacat@loca"), s("~/p/dotrino"), None)); // an older agent
+        assert_eq!(panel_lines("✳ Sefjr improvement", Some("/mnt/sda1/Dotrino"), me), (s("seyacat@loca"), s("/mnt/sda1/Dotrino"), s("✳ Sefjr improvement")));
+        assert_eq!(panel_lines("vim: notas.txt", Some("~"), me), (s("seyacat@loca"), s("~"), s("vim: notas.txt")));
         // After an ssh the title names ANOTHER machine: that is shown. The agent's folder is the
         // local ssh process's, so the remote one stays as the title.
         assert_eq!(panel_lines("dotrino@proxy1: /var/www", Some("~"), me), (s("dotrino@proxy1"), s("~"), s("/var/www")));
@@ -1802,7 +1805,7 @@ impl App {
             for (i, c) in list.iter().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let is_mine = mine.as_deref() == Some(c.id.as_str());
-                let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), user_at_host().as_deref());
+                let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref().or(user_at_host().as_deref()));
                 let tip = [host, dir, name].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 let tip = if tip.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { tip };
                 let b = button(centered(format!("{n}"), 12))

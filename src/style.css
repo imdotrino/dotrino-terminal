@@ -224,6 +224,7 @@ a.btn.primary { background: var(--brand); border-color: var(--brand); color: #ff
 .home-remote { color: var(--muted); margin-top: 28px; }
 
 /* Ordenar las consolas arrastrando: el asa (para el dedo), la que se lleva y dónde caería. */
+.sbtn.num { touch-action: none; }
 .srow.item .grip { color: var(--muted); opacity: .55; font-size: 12px; padding: 4px 0 4px 2px; cursor: grab; touch-action: none; user-select: none; }
 .side.dragging, .side.dragging * { cursor: grabbing !important; user-select: none; }
 .side .dragged { opacity: .45; }

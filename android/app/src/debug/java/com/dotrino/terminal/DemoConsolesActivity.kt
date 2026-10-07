@@ -60,7 +60,7 @@ class DemoConsolesActivity : Activity() {
         private fun decider(c: C) = c.chosenBy ?: c.holder
 
         private fun info(c: C) = buildJsonObject {
-            put("id", c.id); put("n", c.n); put("title", c.title); put("origin", "local")
+            put("id", c.id); put("n", c.n); put("title", c.title); put("origin", "local"); put("host", "seyacat@loca")
             put("cwd", if (c.id == "c1") "/mnt/sda1/Dotrino/dotrino-terminal/android/app/src/main" else c.title.substringAfter(": "))
             put("cols", c.cols); put("rows", c.rows); put("lastActive", System.currentTimeMillis())
             // 2 is working and 3 finished without anyone looking, to see the panel's colours.

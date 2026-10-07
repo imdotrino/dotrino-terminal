@@ -5,17 +5,17 @@ import { panelLines, dropTarget } from '../src/panel.js'
 const me = 'seyacat@loca'
 const L = (host, dir, name) => ({ host, dir, name })
 
-test('the panel gives the folder and the title a line each, and the machine only when it is another', () => {
-  // Local: the machine line is left out, the folder leads.
-  assert.deepEqual(panelLines('seyacat@loca: ~', '~', me), L(null, '~', null))
-  assert.deepEqual(panelLines('seyacat@loca: ~/p/dotrino', null, me), L(null, '~/p/dotrino', null)) // an older agent
-  assert.deepEqual(panelLines('✳ Sefjr improvement', '/mnt/sda1/Dotrino', me), L(null, '/mnt/sda1/Dotrino', '✳ Sefjr improvement'))
-  assert.deepEqual(panelLines('vim: notas.txt', '~', me), L(null, '~', 'vim: notas.txt'))
+test('the panel gives the machine, the folder and the title a line each, the machine always first', () => {
+  // Local: the machine leads (the title's, or the console's when the title names a program).
+  assert.deepEqual(panelLines('seyacat@loca: ~', '~', me), L(me, '~', null))
+  assert.deepEqual(panelLines('seyacat@loca: ~/p/dotrino', null, me), L(me, '~/p/dotrino', null)) // an older agent
+  assert.deepEqual(panelLines('✳ Sefjr improvement', '/mnt/sda1/Dotrino', me), L(me, '/mnt/sda1/Dotrino', '✳ Sefjr improvement'))
+  assert.deepEqual(panelLines('vim: notas.txt', '~', me), L(me, '~', 'vim: notas.txt'))
   // After an ssh the title names ANOTHER machine: that is shown. The folder the agent gives is the
   // local ssh process's, so the remote one stays as the title.
   assert.deepEqual(panelLines('dotrino@proxy1: /var/www', '~', me), L('dotrino@proxy1', '~', '/var/www'))
   assert.deepEqual(panelLines('dotrino@proxy1: ~', null, me), L('dotrino@proxy1', '~', null))
-  // Without knowing the machine's name, a host in the title is shown.
+  // Without the machine's name (an older agent), only a host in the title can be shown.
   assert.deepEqual(panelLines('seyacat@loca: ~', '~', null), L('seyacat@loca', '~', null))
   assert.deepEqual(panelLines('', '~', null), L(null, '~', null))
   assert.deepEqual(panelLines('', null, null), L(null, null, null))

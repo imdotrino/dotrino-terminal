@@ -209,6 +209,7 @@ private struct ConsoleScreen: View {
     @State private var dragId: String?
     @State private var dragOver: String?
     @State private var rowFrames: [String: CGRect] = [:]
+    @State private var stripFrames: [String: CGRect] = [:]
     @State private var actions: ConsoleInfo?
     @State private var toast: String?
     @State private var mods = (ctrl: false, alt: false)
@@ -361,13 +362,33 @@ private struct ConsoleScreen: View {
                     Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
                         .frame(width: 30, height: 28).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Color.clear))
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
+                        .overlay(alignment: dropEdge(tab, c.id) ?? .top) {
+                            if dropEdge(tab, c.id) != nil { Rectangle().fill(Palette.accent).frame(height: 2) }
+                        }
+                        .opacity(dragId == c.id ? 0.5 : 1)
+                        .contentShape(Rectangle())
                         .onTapGesture { tab.switchTo(c.id) }
                         .onLongPressGesture { actions = c }
+                        // The number itself drags (no room for a grip, as in the PWA's strip): a tap
+                        // opens the console, a hold shows its actions, and moving reorders.
+                        .highPriorityGesture(DragGesture(minimumDistance: 8, coordinateSpace: .named("strip-rows"))
+                            .onChanged { v in
+                                dragId = c.id
+                                let rows = tab.consoles.compactMap { r in stripFrames[r.id].map { (r.id, $0) } }
+                                dragOver = (rows.first { v.location.y < $0.1.maxY } ?? rows.last)?.0
+                            }
+                            .onEnded { _ in
+                                if let over = dragOver, over != c.id { tab.move(c.id, over: over) }
+                                dragId = nil; dragOver = nil
+                            })
+                        .background(GeometryReader { g in Color.clear.preference(key: StripFrames.self, value: [c.id: g.frame(in: .named("strip-rows"))]) })
                         .accessibilityLabel(c.title.isEmpty ? t("console.n", ("n", c.n)) : c.title)
                         .accessibilityIdentifier("console-\(c.n)")
                 }
             }
             .padding(.vertical, 4)
+            .coordinateSpace(name: "strip-rows")
+            .onPreferenceChange(StripFrames.self) { stripFrames = $0 }
         }
         .frame(width: 40)
         .background(Palette.panel)
@@ -438,12 +459,15 @@ private struct ConsoleScreen: View {
                                     dragId = nil; dragOver = nil
                                 })
                         VStack(alignment: .leading, spacing: 2) {
-                            // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
-                            Text((on ? "● " : "") + "\(c.n)").font(.footnote.bold()).foregroundColor(Palette.text)
+                            // The number and the machine (`user@host`, always first) on the first row, as
+                            // the PWA's panel; the folder and the title on their OWN rows, whole: cut to
+                            // «…/…/nal» they said nothing.
+                            let lines = panelLines(c.title, c.cwd, c.host)
+                            Text((on ? "● " : "") + "\(c.n)" + (lines.host.map { " · \($0)" } ?? ""))
+                                .font(.footnote.bold()).foregroundColor(Palette.text).lineLimit(1).truncationMode(.tail)
                             // ONE line each, never wrapped (a long path would push every row down); what
                             // does not fit is cut at the START, so the end — the folder — stays.
-                            let lines = panelLines(c.title, c.cwd, c.host)
-                            ForEach([lines.host, lines.dir, lines.name].compactMap { $0 }, id: \.self) { line in
+                            ForEach([lines.dir, lines.name].compactMap { $0 }, id: \.self) { line in
                                 Text(line).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head)
                             }
                             Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
@@ -523,6 +547,11 @@ private struct ConsoleScreen: View {
 
 /// Where each row of the consoles panel is, so a drag knows which one it is over.
 private struct RowFrames: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue()) { $1 } }
+}
+
+private struct StripFrames: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue()) { $1 } }
 }

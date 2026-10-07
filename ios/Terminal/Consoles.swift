@@ -72,12 +72,13 @@ func dropTarget(_ ids: [String], _ id: String, _ over: String) -> (before: Strin
     return (to < from ? over : (to + 1 < ids.count ? ids[to + 1] : nil), ())
 }
 
-/// What the open panel says of a console, each thing on ITS line: the machine (`user@host`) only
-/// when it is ANOTHER one, the folder, and the title the program set. A shell titles itself
-/// «user@host: folder»: on its machine the folder is left, and after an `ssh` where it went shows
-/// too. A program that names itself (Claude: its session) shows the folder and its title. The same
-/// split as the PWA, the desktop and Android. `me`: `user@host` of the console's machine (agent ≥ 0.24).
-func panelLines(_ title: String, _ cwd: String?, _ me: String? = nil) -> (host: String?, dir: String?, name: String?) {
+/// What the open panel says of a console, each thing on ITS line: the machine (`user@host`) ALWAYS
+/// and first (owner, 2026-10-07: hidden when it was the console's own, the panel no longer said
+/// whose each console was), the folder, and the title the program set. A shell titles itself
+/// «user@host: folder»: that machine is shown, so after an `ssh` where it went shows. When the title
+/// has none (Claude names its session), the console's machine, which the agent gives. The same
+/// split as the PWA, the desktop and Android. `machine`: `user@host` of the console's machine (agent ≥ 0.24).
+func panelLines(_ title: String, _ cwd: String?, _ machine: String? = nil) -> (host: String?, dir: String?, name: String?) {
     let title = title.trimmingCharacters(in: .whitespaces)
     var host: String? = nil
     var rest = title
@@ -88,7 +89,7 @@ func panelLines(_ title: String, _ cwd: String?, _ me: String? = nil) -> (host: 
     // Without the machine's folder (an older agent, or macOS), a shell's is what follows the host.
     var dir = cwd?.trimmingCharacters(in: .whitespaces)
     if dir?.isEmpty ?? true { dir = host != nil && !rest.isEmpty ? rest : nil }
-    return (host == me ? nil : host, dir, rest.isEmpty || rest == dir ? nil : rest)
+    return (host ?? machine, dir, rest.isEmpty || rest == dir ? nil : rest)
 }
 
 /// The title of a console for the panel. The shell sets it as «user@host: path»; what matters is

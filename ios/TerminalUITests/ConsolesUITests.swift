@@ -24,6 +24,11 @@ final class ConsolesUITests: XCTestCase {
         sleep(1)
         shot("3-size-here")
 
+        // Ordering by dragging in the STRIP: the number itself drags (there is no grip there).
+        app.staticTexts["console-3"].press(forDuration: 0.2, thenDragTo: app.staticTexts["console-1"])
+        sleep(1)
+        shot("3b-strip-reordered")
+
         app.buttons["panel-open"].tap()
         XCTAssertTrue(app.buttons["panel-close"].waitForExistence(timeout: 5))
         // The open panel takes the strip's place: the strip's » button is gone while it is open.

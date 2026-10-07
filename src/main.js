@@ -653,14 +653,15 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
     // ORDENAR ARRASTRANDO: una consola se suelta sobre otra y toma su sitio. Con ratón se arrastra
     // la fila entera (o su número, con el panel plegado); con el dedo, por el asa ⠿, para que el
-    // resto de la fila siga sirviendo para desplazar el panel. El orden es de la máquina.
+    // resto de la fila siga sirviendo para desplazar el panel — y con el panel plegado, el número
+    // mismo, que no tiene asa (como en Android e iOS). El orden es de la máquina.
     const ITEMS = '.srow.item, .sbtn.num'
     const unmark = () => { for (const el of s.side.querySelectorAll('.drop-before, .drop-after, .dragged')) el.classList.remove('drop-before', 'drop-after', 'dragged') }
     const endDrag = () => { s.drag = null; s.side.classList.remove('dragging'); unmark() }
     s.side.addEventListener('pointerdown', (e) => {
       const item = e.target.closest(ITEMS)
       if (!item || e.button !== 0 || e.target.closest('[data-kill]')) return
-      if (e.pointerType !== 'mouse' && !e.target.closest('.grip')) return
+      if (e.pointerType !== 'mouse' && !e.target.closest('.grip') && !item.matches('.sbtn.num')) return
       s.drag = { id: item.dataset.id, y: e.clientY, pointer: e.pointerId, on: false, over: null }
     })
     s.side.addEventListener('pointermove', (e) => {
@@ -700,8 +701,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
   /**
-   * Se engancha a la consola `target`, o abre una nueva si no hay `target` o ya no existe (lo
-   * dice en la pantalla).
+   * Se engancha a la consola `target`, o abre una nueva si no hay `target`. Si `target` ya no
+   * existe (la máquina se reinició, o alguien la cerró), lo dice en la pantalla y pasa a una que SÍ
+   * exista —una que no mire nadie y no esté en otra pestaña, o la primera—; una nueva solo si la
+   * máquina se quedó sin ninguna (dueño, 2026-10-07: vale para todo cliente remoto; antes aquí se
+   * abría siempre una nueva y la máquina acababa con consolas de más).
    */
   async function attachOrOpen (s, target) {
     const { cols, rows } = fitted(s)
@@ -710,9 +714,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       follow(s, p.console)
     } catch (e) {
       if (e.code !== 'no-console') throw e
-      // Ya no existe: se dice y se abre una nueva.
       s.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
-      follow(s, (await s.agent.open(cols, rows)).console)
+      const open = new Set(sessions.filter((x) => x !== s).map((x) => x.agent?.consoleId).filter(Boolean))
+      const list = (await s.agent.list().catch(() => [])).filter((c) => c.id !== target)
+      const other = list.find((c) => !(c.watchers || []).length && !open.has(c.id)) || list[0]
+      const p = other ? await s.agent.attach(other.id, cols, rows) : await s.agent.open(cols, rows)
+      follow(s, p.console)
     }
   }
 

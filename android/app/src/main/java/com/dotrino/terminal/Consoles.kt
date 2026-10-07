@@ -123,19 +123,20 @@ fun dropTarget(ids: List<String>, id: String, over: String): DropTarget? {
 data class PanelLines(val host: String?, val dir: String?, val name: String?)
 
 /**
- * What the open panel says of a console, each thing on ITS line: the machine (`user@host`) only
- * when it is ANOTHER one, the folder, and the title the program set. A shell titles itself
- * «user@host: folder»: on its machine the folder is left, and after an `ssh` where it went shows
- * too. A program that names itself (Claude: its session) shows the folder and its title. The same
- * split as the PWA, the desktop and iOS. [me]: `user@host` of the console's machine (agent ≥ 0.24).
+ * What the open panel says of a console, each thing on ITS line: the machine (`user@host`) ALWAYS
+ * and first (owner, 2026-10-07: hidden when it was the console's own, the panel no longer said
+ * whose each console was), the folder, and the title the program set. A shell titles itself
+ * «user@host: folder»: that machine is shown, so after an `ssh` where it went shows. When the title
+ * has none (Claude names its session), the console's machine, which the agent gives. The same
+ * split as the PWA, the desktop and iOS. [machine]: `user@host` of the console's machine (agent ≥ 0.24).
  */
-fun panelLines(title: String, cwd: String?, me: String? = null): PanelLines {
+fun panelLines(title: String, cwd: String?, machine: String? = null): PanelLines {
     val m = Regex("""^([^\s:]+@[^\s:]+):\s*(.*)$""").find(title.trim())
     val host = m?.groupValues?.get(1)
     val rest = (m?.groupValues?.get(2) ?: title).trim()
     // Without the machine's folder (an older agent, or macOS), a shell's is what follows the host.
     val dir = cwd?.trim()?.takeIf { it.isNotEmpty() } ?: rest.takeIf { host != null && it.isNotEmpty() }
-    return PanelLines(host?.takeIf { it != me }, dir, rest.takeIf { it.isNotEmpty() && it != dir })
+    return PanelLines(host ?: machine, dir, rest.takeIf { it.isNotEmpty() && it != dir })
 }
 
 object Consoles {

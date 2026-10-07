@@ -392,11 +392,13 @@ class MainActivity : Activity() {
         side.addView(btn("»", "panel-open", t("panel.open")) { openDrawer(true) }, LinearLayout.LayoutParams(full, ViewGroup.LayoutParams.WRAP_CONTENT))
         side.addView(btn("+", "console-new", t("console.new")) { tab.switchTo(null) }, LinearLayout.LayoutParams(full, ViewGroup.LayoutParams.WRAP_CONTENT))
         side.addView(sizeButton(tab), LinearLayout.LayoutParams(px(30), px(30)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = px(2); bottomMargin = px(4) })
+        val rows = ArrayList<Pair<String, View>>()
         for (c in tab.consoles) {
             val on = c.id == tab.consoleId
             // Amber while something works in it, green when it finished and nobody looked (as the PWA's panel).
             val act = actColor(c)
             side.addView(label("${c.n}", 13f, col(if (on) R.color.t_on_accent else act ?: R.color.t_text), bold = on || act != null).apply {
+                rows.add(c.id to this)
                 tag = "console-${c.n}"; contentDescription = c.title.ifBlank { t("console.n", "n" to c.n) } + actText(c)
                 gravity = Gravity.CENTER; setPadding(0, px(5), 0, px(5))
                 background = when {
@@ -405,11 +407,77 @@ class MainActivity : Activity() {
                     act != null -> rounded(col(R.color.t_panel), px(6), px(1), col(act))
                     else -> null
                 }
-                setOnClickListener { tab.switchTo(c.id) }
-                setOnLongClickListener { consoleActions(tab, c); true }
+                // The number itself drags (there is no room for a grip, as in the PWA's strip): a tap
+                // opens the console, a hold shows its actions, and moving a finger's width reorders.
+                dragOrTap(tab, c.id, rows, onTap = { tab.switchTo(c.id) }, onHold = { consoleActions(tab, c) })
             }, LinearLayout.LayoutParams(px(30), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(3) })
         }
         if (panelOpen) openDrawer(true)
+    }
+
+    /**
+     * Marks, while `id` is dragged, where it would land among `rows`: the dragged one fades and a
+     * 2 px line of the accent colour goes above the target (it lands in front) or below (behind).
+     */
+    private fun marker(id: String, rows: List<Pair<String, View>>): (String?) -> Unit = { target ->
+        for ((rid, row) in rows) {
+            row.alpha = if (rid == id) 0.5f else 1f
+            val to = if (rid == target) dropTarget(rows.map { it.first }, id, rid) else null
+            row.foreground = to?.let {
+                val gap = (row.height - px(2)).coerceAtLeast(0)
+                if (it.before == rid) android.graphics.drawable.InsetDrawable(android.graphics.drawable.ColorDrawable(col(R.color.t_accent)), 0, 0, 0, gap)
+                else android.graphics.drawable.InsetDrawable(android.graphics.drawable.ColorDrawable(col(R.color.t_accent)), 0, gap, 0, 0)
+            }
+        }
+    }
+
+    /** The row of `rows` under the finger (screen y); above the first or below the last, that one. */
+    private fun rowAt(rows: List<Pair<String, View>>, rawY: Float): String? {
+        val at = IntArray(2)
+        return (rows.firstOrNull { (_, row) -> row.getLocationOnScreen(at); rawY < at[1] + row.height } ?: rows.lastOrNull())?.first
+    }
+
+    /** Ends a drag of `id`: the marks go, and the console moves if it was dropped on another. */
+    private fun dropped(tab: Consoles.Tab, id: String, rows: List<Pair<String, View>>, target: String?) {
+        dragging = null
+        for ((_, row) in rows) { row.alpha = 1f; row.foreground = null }
+        if (target != null && target != id) tab.move(id, target) else renderPanel()
+    }
+
+    /**
+     * A view that is tapped, held or DRAGGED (the strip's numbers, which have no grip): a tap is
+     * `onTap`, a hold without moving is `onHold`, and moving further than the touch slop starts a
+     * drag that reorders among `rows`. The parent (a ScrollView) is told not to take the gesture once
+     * it is a drag, so until then the strip still scrolls.
+     */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun View.dragOrTap(tab: Consoles.Tab, id: String, rows: List<Pair<String, View>>, onTap: () -> Unit, onHold: () -> Unit) {
+        val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+        val holdMs = android.view.ViewConfiguration.getLongPressTimeout().toLong()
+        val mark = marker(id, rows)
+        var downY = 0f; var over: String? = null; var held = false
+        val hold = Runnable { held = true; onHold() }
+        setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { downY = e.rawY; over = null; held = false; v.postDelayed(hold, holdMs); true }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (dragging != id) {
+                        if (held || Math.abs(e.rawY - downY) < slop) return@setOnTouchListener true
+                        v.removeCallbacks(hold); dragging = id; v.parent?.requestDisallowInterceptTouchEvent(true); mark(null)
+                    }
+                    over = rowAt(rows, e.rawY); mark(over); true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    v.removeCallbacks(hold)
+                    when {
+                        dragging == id -> dropped(tab, id, rows, over.takeIf { e.actionMasked == android.view.MotionEvent.ACTION_UP })
+                        !held && e.actionMasked == android.view.MotionEvent.ACTION_UP -> onTap()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     /** The console being dragged in the open panel to change its place, or null. */
@@ -422,35 +490,16 @@ class MainActivity : Activity() {
      */
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     private fun grip(tab: Consoles.Tab, id: String, rows: List<Pair<String, View>>): View = label("⠿", 15f, col(R.color.t_muted)).apply {
-        tag = "console-grip"; contentDescription = t("console.move"); setPadding(px(6), px(8), px(2), px(8))
+        // Wide enough for a finger (it is the only thing that drags: the row opens and scrolls).
+        tag = "console-grip"; contentDescription = t("console.move"); gravity = Gravity.CENTER; minWidth = px(36); setPadding(px(6), px(14), px(4), px(14))
         var over: String? = null
-        fun mark(target: String?) {
-            for ((rid, row) in rows) {
-                row.alpha = if (rid == id) 0.5f else 1f
-                val to = if (rid == target) dropTarget(rows.map { it.first }, id, rid) else null
-                // A 2 px line of the accent colour: above (it lands in front) or below (behind).
-                row.foreground = to?.let {
-                    val gap = (row.height - px(2)).coerceAtLeast(0)
-                    if (it.before == rid) android.graphics.drawable.InsetDrawable(android.graphics.drawable.ColorDrawable(col(R.color.t_accent)), 0, 0, 0, gap)
-                    else android.graphics.drawable.InsetDrawable(android.graphics.drawable.ColorDrawable(col(R.color.t_accent)), 0, gap, 0, 0)
-                }
-            }
-        }
+        val mark = marker(id, rows)
         setOnTouchListener { v, e ->
             when (e.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> { dragging = id; over = null; v.parent?.requestDisallowInterceptTouchEvent(true); mark(null); true }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    // The row under the finger; above the first or below the last, that one.
-                    val at = IntArray(2)
-                    over = (rows.firstOrNull { (_, row) -> row.getLocationOnScreen(at); e.rawY < at[1] + row.height } ?: rows.lastOrNull())?.first
-                    mark(over); true
-                }
+                android.view.MotionEvent.ACTION_MOVE -> { over = rowAt(rows, e.rawY); mark(over); true }
                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                    val target = over.takeIf { e.actionMasked == android.view.MotionEvent.ACTION_UP }
-                    dragging = null; over = null
-                    for ((_, row) in rows) { row.alpha = 1f; row.foreground = null }
-                    if (target != null && target != id) tab.move(id, target) else renderPanel()
-                    true
+                    dropped(tab, id, rows, over.takeIf { e.actionMasked == android.view.MotionEvent.ACTION_UP }); over = null; true
                 }
                 else -> false
             }
@@ -502,15 +551,18 @@ class MainActivity : Activity() {
                 }
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL; setPadding(px(4), px(5), px(4), px(5))
-                    // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
-                    addView(label((if (on) "● " else "") + "${c.n}", 13f, bold = true))
+                    // The number and the machine (`user@host`, always first) on the first row, as the
+                    // PWA's panel; the folder and the title on their OWN rows, whole: cut to «…/…/nal»
+                    // they said nothing.
+                    val lines = panelLines(c.title, c.cwd, c.host)
+                    addView(label((if (on) "● " else "") + "${c.n}" + (lines.host?.let { " · $it" } ?: ""), 13f, bold = true).apply {
+                        tag = "drawer-host"; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END
+                    })
                     // ONE line each, never wrapped (a long path would push every row down); what does
                     // not fit is cut at the START, so the end — the folder you are in — stays.
                     fun oneLine(text: String, tagName: String, color: Int) = label(text, 12f, color).apply {
                         tag = tagName; setLineSpacing(0f, 1f); isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.START
                     }
-                    val lines = panelLines(c.title, c.cwd, c.host)
-                    lines.host?.let { addView(oneLine(it, "drawer-host", col(R.color.t_text))) }
                     lines.dir?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_text))) }
                     lines.name?.let { addView(oneLine(it, "drawer-title", col(R.color.t_text))) }
                     addView(label(where(tab, c) + actText(c), 11f, col(R.color.t_muted)))

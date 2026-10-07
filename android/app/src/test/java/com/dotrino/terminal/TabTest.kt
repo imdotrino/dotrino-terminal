@@ -232,10 +232,10 @@ class TabTest {
     @Test fun thePanelGivesTheFolderAndTheTitleALineEachAndTheMachineOnlyWhenItIsAnother() {
         val me = "seyacat@loca"
         // Local: the machine line is left out, the folder leads.
-        assertEquals(PanelLines(null, "~", null), panelLines("seyacat@loca: ~", "~", me))
-        assertEquals(PanelLines(null, "~/p/dotrino", null), panelLines("seyacat@loca: ~/p/dotrino", null, me))   // an older agent
-        assertEquals(PanelLines(null, "/mnt/sda1/Dotrino", "✳ Sefjr improvement"), panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino", me))
-        assertEquals(PanelLines(null, "~", "vim: notas.txt"), panelLines("vim: notas.txt", "~", me))
+        assertEquals(PanelLines(me, "~", null), panelLines("seyacat@loca: ~", "~", me))
+        assertEquals(PanelLines(me, "~/p/dotrino", null), panelLines("seyacat@loca: ~/p/dotrino", null, me))   // an older agent
+        assertEquals(PanelLines(me, "/mnt/sda1/Dotrino", "✳ Sefjr improvement"), panelLines("✳ Sefjr improvement", "/mnt/sda1/Dotrino", me))
+        assertEquals(PanelLines(me, "~", "vim: notas.txt"), panelLines("vim: notas.txt", "~", me))
         // After an ssh the title names ANOTHER machine: that is shown.
         assertEquals(PanelLines("dotrino@proxy1", "~", "/var/www"), panelLines("dotrino@proxy1: /var/www", "~", me))
         assertEquals(PanelLines("dotrino@proxy1", "~", null), panelLines("dotrino@proxy1: ~", null, me))
