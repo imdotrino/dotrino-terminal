@@ -411,7 +411,9 @@ private struct ConsoleScreen: View {
                     let on = c.id == tab.consoleId
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text((on ? "● " : "") + "\(c.n)" + (c.title.isEmpty ? "" : " · " + shortTitle(c.title))).font(.footnote).foregroundColor(Palette.text).lineLimit(1)
+                            // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
+                            Text((on ? "● " : "") + "\(c.n)").font(.footnote.bold()).foregroundColor(Palette.text)
+                            if !c.title.isEmpty { Text(c.title).font(.caption).foregroundColor(Palette.text).fixedSize(horizontal: false, vertical: true) }
                             Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

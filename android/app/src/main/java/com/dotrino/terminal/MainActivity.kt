@@ -448,8 +448,9 @@ class MainActivity : Activity() {
                 background = if (on) rounded(col(R.color.t_accent_soft), px(8)) else null
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL; setPadding(px(8), px(5), px(4), px(5))
-                    val name = (if (on) "● " else "") + "${c.n}" + if (c.title.isNotBlank()) " · " + shortTitle(c.title) else ""
-                    addView(label(name, 13f).apply { maxLines = 1 })
+                    // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
+                    addView(label((if (on) "● " else "") + "${c.n}", 13f, bold = true))
+                    if (c.title.isNotBlank()) addView(label(c.title, 12f).apply { tag = "drawer-title" })
                     addView(label(where(tab, c) + actText(c), 11f, col(actColor(c) ?: R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }
