@@ -81,6 +81,8 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   `npm install -g @dotrino/terminal-agent@latest` en la consola de la ventana, sin Enter (el
   `.deb` no lo trae: la instalación la dispara la persona, a la vista, §15); si faltaba el
   cliente, la app lo busca cada 3 s y activa los perfiles al aparecer.
+  «Perfil → Usar en / Quitar de la terminal de VS Code» corre `dotrino-terminal vscode --name <perfil>`
+  o `vscode --off` en la consola de la ventana (cliente ≥ 0.20.0).
   Como emulador de terminal: `--working-directory <dir>` (o abre donde la lanzan, que es lo que
   hace `exo-open` desde Thunar), `-x prog args…`, `-e "orden"`, `--name <perfil>`. El `.deb`
   instala `usr/share/xfce4/helpers/dotrino-terminal.desktop`, para elegirla en «Aplicaciones

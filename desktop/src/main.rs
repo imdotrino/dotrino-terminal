@@ -68,6 +68,8 @@ struct Launch {
 const PANEL_CLIENT: (u32, u32, u32) = (0, 11, 0);
 /// Desde qué versión entiende el cliente Ctrl+] p / u (fijar o soltar el tamaño).
 const PIN_CLIENT: (u32, u32, u32) = (0, 14, 0);
+/// El primer cliente con `dotrino-terminal vscode`.
+const VSCODE_CLIENT: (u32, u32, u32) = (0, 20, 0);
 
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
@@ -284,6 +286,9 @@ enum Message {
     Rename(window::Id),
     /// «Poner o cambiar la clave» (`true`) o «Quitar la clave» (`false`) del perfil de la ventana.
     Lock(window::Id, bool),
+    /// Poner (`true`) o quitar (`false`) Dotrino Terminal como terminal embebida de VS Code y
+    /// sus variantes, con el perfil de la ventana.
+    Vscode(window::Id, bool),
     /// Escribe en la consola de la ventana la orden que instala (o actualiza) el cliente.
     InstallClient(window::Id),
     /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
@@ -1230,6 +1235,17 @@ impl App {
                 }
                 self.focus(id)
             }
+            Message::Vscode(id, set) => {
+                // Como la clave: la orden corre en TU consola, a la vista, y ahí dice qué editores
+                // tocó. Quitarlo no depende del perfil.
+                if let Some(win) = self.windows.get_mut(&id) {
+                    if let (Some(profile), Some(term)) = (win.profile.clone(), win.term.as_mut()) {
+                        let order = if set { format!("dotrino-terminal vscode --name {profile}\r") } else { "dotrino-terminal vscode --off\r".to_string() };
+                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
+                    }
+                }
+                self.focus(id)
+            }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
                 let linked_before = linked_names(&self.profiles);
@@ -1418,6 +1434,14 @@ impl App {
         let can_lock = !linking && self.launch.is_ok() && win.profile.is_some() && win.term.is_some();
         profiles.push(Item::new(entry(t("Poner o cambiar la clave…", "Set or change the code…"), "", can_lock.then_some(Message::Lock(id, true)))));
         profiles.push(Item::new(entry(t("Quitar la clave", "Remove the code"), "", can_lock.then_some(Message::Lock(id, false)))));
+        // La terminal embebida de VS Code (y variantes) abre consolas de este perfil.
+        let vscode_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= VSCODE_CLIENT);
+        let can_vscode = can_lock && vscode_ready;
+        profiles.push(Item::new(entry(t("Usar en la terminal de VS Code", "Use in VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, true)))));
+        profiles.push(Item::new(entry(t("Quitar de la terminal de VS Code", "Remove from VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, false)))));
+        if self.launch.is_ok() && !vscode_ready {
+            profiles.push(Item::new(note(t("Para VS Code hace falta dotrino-terminal 0.20.0 o más reciente: actualízalo aquí abajo.", "VS Code needs dotrino-terminal 0.20.0 or newer: update it just below."))));
+        }
         // Sin el cliente no hay perfiles ni enrolar: se ve deshabilitado, y la razón a la vista.
         profiles.push(Item::new(entry(t("Enrolar…", "Enroll…"), "", (!linking && self.launch.is_ok()).then_some(Message::Enroll(id)))));
         if let Err(why) = &self.launch {
