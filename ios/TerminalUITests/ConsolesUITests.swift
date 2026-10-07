@@ -26,9 +26,8 @@ final class ConsolesUITests: XCTestCase {
 
         app.buttons["panel-open"].tap()
         XCTAssertTrue(app.buttons["panel-close"].waitForExistence(timeout: 5))
-        // The open panel covers the strip: its frame contains the strip's » button.
-        let drawer = app.descendants(matching: .any)["drawer"].firstMatch
-        XCTAssertTrue(drawer.frame.contains(app.buttons["panel-open"].frame), "the open panel covers the strip")
+        // The open panel takes the strip's place: the strip's » button is gone while it is open.
+        XCTAssertFalse(app.buttons["panel-open"].exists, "the open panel takes the strip's place")
         shot("4-panel")
 
         // Ordering by dragging: the third console's grip, dropped on the first, takes its place.

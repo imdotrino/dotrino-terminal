@@ -40,7 +40,7 @@ final class TabTests: XCTestCase {
         return (t, ch)
     }
 
-    func testPicksAFreeConsoleAndOpensOneWhenNoneIsFree() {
+    func testPicksAFreeConsoleAndOpensOneOnlyWhenThereIsNone() {
         let (t1, ch) = tab(); _ = t1
         XCTAssertEqual(ch.types, ["list"])
         t1.handle(consoles(console("a", 1, 80, 24, watchers: 1), console("b", 2, 80, 24)))
@@ -48,7 +48,11 @@ final class TabTests: XCTestCase {
         XCTAssertEqual(ch.last("attach")?["cols"]?.int, 50)
         let (t2, ch2) = tab()
         t2.handle(consoles(console("a", 1, 80, 24, watchers: 1)))
-        XCTAssertTrue(ch2.types.contains("open"))
+        XCTAssertEqual(ch2.last("attach")?["id"]?.string, "a")     // none free, but one exists: that one, not a new one
+        XCTAssertFalse(ch2.types.contains("open"))
+        let (t3, ch3) = tab()
+        t3.handle(consoles())
+        XCTAssertTrue(ch3.types.contains("open"))                  // the machine has none: a new one
     }
 
     func testTheEmulatorFollowsTheConsoleSizeNotTheScreen() {
