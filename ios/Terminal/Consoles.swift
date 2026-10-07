@@ -384,7 +384,12 @@ final class Tab: ObservableObject, Identifiable {
 
     /// Close a console on the machine. If it is the one on screen, first move to another free one (or a new one).
     func killConsole(_ id: String) {
-        if id == consoleId { switchTo(consoles.first { $0.id != id && $0.watchers == 0 }?.id) }
+        // To a console that ALREADY exists: first one nobody watches; if all are watched, the first
+        // anyway. A NEW one only when the machine has none left (owner, 2026-10-07: every remote client).
+        if id == consoleId {
+            let rest = consoles.filter { $0.id != id }
+            switchTo((rest.first { $0.watchers == 0 } ?? rest.first)?.id)
+        }
         try? channel?.send(["type": "kill", "id": .string(id)])
         list()
     }

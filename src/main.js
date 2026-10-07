@@ -547,7 +547,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Cerrar una consola. Si es la de esta pestaña, primero se pasa a otra (o a una nueva). */
   async function killConsole (s, id) {
     if (id === s.agent.consoleId) {
-      const other = (s.list || []).find((c) => c.id !== id && !(c.watchers || []).length)
+      // A una consola que YA existe: primero una que no mire nadie; si todas se miran, la primera
+      // igual. Una NUEVA solo si la máquina se queda sin ninguna (dueño, 2026-10-07: vale para
+      // todo cliente remoto).
+      const rest = (s.list || []).filter((c) => c.id !== id)
+      const other = rest.find((c) => !(c.watchers || []).length) || rest[0]
       await switchTo(s, other?.id || null)
     }
     s.agent.kill(id)

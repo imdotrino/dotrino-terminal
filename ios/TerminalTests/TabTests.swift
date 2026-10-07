@@ -146,4 +146,22 @@ final class TabTests: XCTestCase {
         XCTAssertNil(Tab.codes[other])
         Tab.codes = [:]
     }
+
+    func testClosingTheConsoleOnScreenGoesToAnExistingOneAndOpensOneOnlyIfItWasTheLast() {
+        let (t, ch) = tab()
+        let a = console("a", 1, 50, 20, watchers: 1)                 // watched somewhere else
+        let c = console("c", 3, 50, 20, watchers: 1, by: me)
+        t.handle(consoles(a, c)); t.handle(attached(c)); t.handle(consoles(a, c))
+        let opens = ch.types.filter { $0 == "open" }.count
+        t.killConsole("c")
+        XCTAssertEqual(ch.last("attach")?["id"]?.string, "a")
+        XCTAssertEqual(ch.types.filter { $0 == "open" }.count, opens)
+
+        let (t2, ch2) = tab()
+        let only = console("x", 1, 50, 20, watchers: 1, by: me)
+        t2.handle(consoles()); t2.handle(attached(only)); t2.handle(consoles(only))
+        let opens2 = ch2.types.filter { $0 == "open" }.count
+        t2.killConsole("x")
+        XCTAssertEqual(ch2.types.filter { $0 == "open" }.count, opens2 + 1)   // it was the last one
+    }
 }
