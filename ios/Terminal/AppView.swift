@@ -218,13 +218,12 @@ private struct ConsoleScreen: View {
         VStack(spacing: 0) {
             tabStrip
             ZStack(alignment: .topLeading) {
+                // The open panel takes the strip's place, BESIDE the console (owner, 2026-10-07): it
+                // does change the console's size, on purpose — over it, it covered what was being read.
                 HStack(spacing: 0) {
-                    strip
+                    if drawer { panel } else { strip }
                     TerminalScreen(tab: tab, view: $view)
                 }
-                // The open panel goes over the WHOLE row (strip included), so the strip and the panel
-                // are never seen at once; and over it, not beside it, so the console keeps its size.
-                if drawer { panel.transition(.move(edge: .leading)) }
                 // What the tab has to say («Conectando…», «pide su clave»): a card floating OVER the
                 // console. In the column it pushed the console down each time it showed.
                 if let note = noteText {
@@ -431,7 +430,7 @@ private struct ConsoleScreen: View {
         }
         .frame(width: 270)
         .frame(maxHeight: .infinity)
-        .background(Palette.panel.shadow(radius: 8))
+        .background(Palette.panel)
         .accessibilityIdentifier("drawer")
     }
 

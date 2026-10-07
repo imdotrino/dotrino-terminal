@@ -227,7 +227,8 @@ class MainActivity : Activity() {
 
     private var panel: LinearLayout? = null
     private var drawer: View? = null
-    private var drawerHost: FrameLayout? = null
+    private var drawerHost: LinearLayout? = null
+    private var stripHost: View? = null
     private var panelOpen = false
     private var poll: kotlinx.coroutines.Job? = null
 
@@ -263,14 +264,16 @@ class MainActivity : Activity() {
             addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(note, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { marginStart = px(24); marginEnd = px(24) })
         }
+        val stripScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(side) }
+        stripHost = stripScroll
         val body = LinearLayout(this).apply {
-            addView(ScrollView(context).apply { isVerticalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(side) }, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(stripScroll, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(stage, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         }
-        // The open panel goes over the WHOLE row (strip included), so the strip and the panel are
-        // never seen at once; and over it, not beside it, so the console keeps its size.
-        val row = FrameLayout(this).apply { addView(body, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
-        drawerHost = row
+        // The open panel takes the strip's place, BESIDE the console (owner, 2026-10-07): it does
+        // change the console's size, on purpose — over it, it covered what was being read.
+        val row = body
+        drawerHost = body
         c.removeAllViews()
         c.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -408,11 +411,12 @@ class MainActivity : Activity() {
         if (panelOpen) openDrawer(true)
     }
 
-    /** The open panel: over the console, with the titles, where each one is, and who has the size. */
+    /** The open panel: beside the console, in the strip's place, with the titles, where each one is, and who has the size. */
     private fun openDrawer(open: Boolean) {
         val stage = drawerHost ?: return
         drawer?.let { stage.removeView(it) }; drawer = null
         panelOpen = open
+        stripHost?.visibility = if (open) View.GONE else View.VISIBLE
         if (!open) return
         val tab = active ?: return
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(8), px(6), px(8), px(10)) }
@@ -453,8 +457,8 @@ class MainActivity : Activity() {
                 addView(label("×", 16f, col(R.color.t_muted)).apply { tag = "console-kill"; contentDescription = t("console.kill"); setPadding(px(10), px(4), px(8), px(4)); setOnClickListener { tab.killConsole(c.id) } })
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(2) })
         }
-        val d = ScrollView(this).apply { tag = "drawer"; setBackgroundColor(col(R.color.t_panel)); elevation = px(8).toFloat(); addView(list) }
-        stage.addView(d, FrameLayout.LayoutParams(px(270), ViewGroup.LayoutParams.MATCH_PARENT))
+        val d = ScrollView(this).apply { tag = "drawer"; setBackgroundColor(col(R.color.t_panel)); addView(list) }
+        stage.addView(d, 0, LinearLayout.LayoutParams(px(270), ViewGroup.LayoutParams.MATCH_PARENT))
         drawer = d
     }
 
