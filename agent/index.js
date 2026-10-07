@@ -30,7 +30,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { startRemoteAgent } from '@dotrino/remote-agent/agent'
 import { dataDir, loadLink, LABEL } from './link.js'
-import { ConsoleHub, REPLAY_CHUNK } from './consoles.js'
+import { ConsoleHub, REPLAY_CHUNK, isTyped } from './consoles.js'
 import { listenLocal } from './local.js'
 import { makeGate } from './access.js'
 
@@ -164,7 +164,10 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
     if (msg.type === 'detach') { owned = null; release(); return }
     if (msg.type === 'input') {
       if (!current) return
-      current.write(String(msg.data ?? ''))
+      const data = String(msg.data ?? '')
+      // Quien teclea gana el tamaño. Lo que la terminal contesta sola no cuenta.
+      if (isTyped(data)) current.typed(viewer)
+      current.write(data)
       return
     }
     if (msg.type === 'resize') { takeSize(msg); current?.sizeFrom(viewer); return }

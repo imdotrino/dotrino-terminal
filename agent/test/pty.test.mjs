@@ -144,10 +144,20 @@ test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (⤢) o el último qu
     await until(() => sizeOf(id) === '40x20')
     await until(() => pc.sent.some((p) => p.type === 'meta' && p.console.cols === 40), 2000)
 
-    pc.deliver({ type: 'input', data: 'x' })
     pc.deliver({ type: 'resize', cols: 130, rows: 40 })
+    // Lo que la terminal contesta sola (foco, posición del cursor, qué terminal es, ratón) no es teclear.
+    for (const data of ['\x1b[I', '\x1b[O', '\x1b[12;40R', '\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[<35;10;5M', '\x1b]11;rgb:0000/0000/0000\x1b\\', '\x1b[I\x1b[3;1R']) pc.deliver({ type: 'input', data })
     await new Promise((r) => setTimeout(r, 100))
-    assert.equal(sizeOf(id), '40x20', 'ni escribir ni redimensionar desde quien NO tiene el tamaño lo cambia')
+    assert.equal(sizeOf(id), '40x20', 'ni redimensionar ni las respuestas de la terminal, desde quien NO tiene el tamaño, lo cambian')
+
+    // Teclear sí: quien escribe gana el tamaño, y lo conserva al cambiar su ventana.
+    pc.deliver({ type: 'input', data: 'x' })
+    await until(() => sizeOf(id) === '130x40')
+    pc.deliver({ type: 'resize', cols: 131, rows: 40 })
+    await until(() => sizeOf(id) === '131x40')
+    tel.deliver({ type: 'input', data: '\x1b[A' })   // una flecha también es teclear
+    await until(() => sizeOf(id) === '40x20')
+    pc.deliver({ type: 'resize', cols: 130, rows: 40 })
 
     const tab = fakeSession(); tab.device = 'TAB'; serveSession(tab, h, { origin: 'remote' })
     tab.deliver({ type: 'attach', id, cols: 80, rows: 30 })
@@ -159,6 +169,12 @@ test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (⤢) o el último qu
     tab.deliver({ type: 'resize', cols: 90, rows: 30 })
     await new Promise((r) => setTimeout(r, 100))
     assert.equal(sizeOf(id), '40x20', 'con el teléfono fijado, la tablet no lo cambia')
+    // Teclear gana también a una pantalla fijada, que deja de estarlo.
+    tab.deliver({ type: 'input', data: 'a' })
+    await until(() => sizeOf(id) === '90x30')
+    assert.equal(h.get(id).info().sizeBy.pinned, false, 'teclear suelta lo que otro había fijado')
+    tel.deliver({ type: 'pin', on: true })
+    await until(() => sizeOf(id) === '40x20')
     tel.deliver({ type: 'resize', cols: 20, rows: 40 })
     await until(() => sizeOf(id) === '20x40')  // girar el teléfono fijado: se sigue
 

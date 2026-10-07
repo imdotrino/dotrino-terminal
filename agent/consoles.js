@@ -195,6 +195,19 @@ class Console {
     else this._meta()
   }
 
+  /**
+   * `viewer` tecleó: pasa a decidir el tamaño, también sobre una pantalla que lo tenía fijado
+   * (deja de estarlo). Es la única forma de ganarlo que tiene quien no puede fijarlo, como la
+   * terminal embebida de un editor.
+   */
+  typed (viewer) {
+    if (!this.viewers.has(viewer) || this.decider() === viewer) return
+    this.holder = viewer
+    if (this.pinKey !== viewerKey(viewer)) this.pinKey = null
+    if (viewer.size) this.resize(viewer.size.cols, viewer.size.rows)
+    else this._meta()
+  }
+
   /** ⤢: `viewer` fija (o suelta) el tamaño a su pantalla. */
   pin (viewer, on) {
     if (on) this.pinKey = viewerKey(viewer)
@@ -218,6 +231,23 @@ class Console {
 }
 
 /** Qué pantalla es un `viewer`: su ventana (`tag`) o su aparato, sin importar la conexión. */
+// Lo que una terminal manda SOLA, sin que nadie teclee: avisos de foco, respuestas a lo que le
+// pregunta el programa (posición del cursor, qué terminal es, modos, colores) y el ratón.
+const REPORTS = new RegExp([
+  '\\x1b\\[[IO]',                         // foco
+  '\\x1b\\[\\??[\\d;]*[Rn]',                 // cursor y estado
+  '\\x1b\\[[?>=][\\d;]*[cu]',               // qué terminal es; teclado
+  '\\x1b\\[\\??[\\d;]*\\$y',                 // modos
+  '\\x1b\\[[\\d;]*t',                       // tamaño de la ventana
+  '\\x1b\\[<[\\d;]+[Mm]',                   // ratón
+  '\\x1b\\[M[\\s\\S]{3}',
+  '\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)',   // colores y demás (OSC)
+  '\\x1bP[\\s\\S]*?\\x1b\\\\',               // DCS
+].join('|'), 'g')
+
+/** ¿Hay algo TECLEADO en `data`, o es solo lo que la terminal contesta por su cuenta? */
+export function isTyped (data) { return String(data).replace(REPORTS, '') !== '' }
+
 function viewerKey (v) { return `${v.origin || ''}|${v.device || ''}|${v.tag || ''}` }
 
 /** Las consolas de este agente. */

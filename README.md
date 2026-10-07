@@ -48,7 +48,8 @@ sesión cifrada).
 Cada consola dice su `origin` (`local`/`remote`), su `title` (el de la shell) y `watchers`
 (quién la mira: ventana local o aparato, con su llave, y la `tag` con la que se presentó; la app
 de escritorio la usa para saber qué consola muestra cada ventana). Con varios mirando, el tamaño lo pone
-el último que se enganchó o escribió. Una ventana local que abrió su consola la mata al
+el último que se enganchó o tecleó (lo que la terminal contesta sola —foco, cursor, ratón— no cuenta); teclear
+gana también a una pantalla que lo tenía fijado con ⤢, que deja de estarlo. Una ventana local que abrió su consola la mata al
 cerrarse; una que solo se enganchó, no.
 
 La PWA recuerda sus pestañas en `sessionStorage` y al recargar se vuelve a enganchar.
