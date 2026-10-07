@@ -80,6 +80,11 @@ dotrino-terminal lock --status [--name <perfil>] # dice si hay
 En la app de escritorio: menú **Perfil → Poner o cambiar la clave… / Quitar la clave**.
 
 - Es **del perfil**: todas sus consolas comparten la misma clave.
+- A los **tres fallos seguidos** toca esperar, cada vez más (freno local de este agente). Y si un
+  mismo aparato falla tres veces seguidas, el agente **reporta el incidente a la bóveda**
+  (`reportIncident` de `@dotrino/remote-agent` ≥ 0.16.0): los aparatos que aprueban lo ven y
+  eligen bloquear o ignorar. Bloqueado, no entra en ningún agente ni en la bóveda hasta
+  `dotrino-vault unblock <ID>`.
 - La piden **solo los otros aparatos** (web, teléfono). Las ventanas de esta máquina no.
 - Vale **al momento**, sin reiniciar el agente: quien ya estaba dentro tiene que escribirla
   en lo siguiente que haga.

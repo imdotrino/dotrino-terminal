@@ -142,3 +142,33 @@ test('en caliente: poner la clave con el agente en marcha cierra el paso a quien
   await until(() => s.sent.some((p) => p.type === 'consoles'))
   h.killAll()
 })
+
+test('tres fallos seguidos de UN aparato avisan una vez; acertar corta la racha', () => {
+  const dir = tmp(); setAccessCode(dir, 'buena')
+  const avisos = []
+  let t = 0
+  const g = makeGate(dir, { now: () => t, onIncident: (i) => avisos.push(i) })
+  const falla = (dev) => { try { g.check('mala', dev); assert.fail('tenía que fallar') } catch (e) { return e } }
+  // Dos aparatos distintos: los fallos se cuentan por aparato, el freno por agente.
+  falla('A'); falla('B')
+  // Tercer fallo del agente: empieza la espera local (bloqueo del servicio, nada más).
+  const tercero = falla('A')
+  assert.equal(tercero.code, 'bad-code')
+  assert.ok(tercero.retryMs > 0, 'a los tres fallos del agente ya toca esperar')
+  assert.equal(avisos.length, 0, 'A lleva dos: todavía no es incidente')
+  t = tercero.retryMs + 1
+  falla('A')
+  assert.deepEqual(avisos, [{ device: 'A', tries: 3 }], 'avisa de A, que es quien lleva tres')
+  t += 60 * 60_000
+  falla('A')
+  assert.equal(avisos.length, 1, 'no se repite en cada fallo')
+  // Acierta: la racha de A se corta y el próximo tercer fallo vuelve a avisar.
+  t += 2 * 60 * 60_000
+  g.check('buena', 'A')
+  falla('A'); falla('A'); falla('A')
+  assert.equal(avisos.length, 2)
+  // Sin aparato (la clave local) no hay a quién señalar.
+  t += 60 * 60_000
+  falla(null); falla(null); falla(null)
+  assert.equal(avisos.length, 2)
+})

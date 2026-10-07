@@ -134,7 +134,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
     if (msg.type === 'unlock') {
       if (origin !== 'remote' || !gate) { session.send({ type: 'unlocked' }); return }
       try {
-        if (gate.required()) gate.check(msg.code)
+        if (gate.required()) gate.check(msg.code, viewer.device)
         unlocked = true
         session.send({ type: 'unlocked' })
       } catch (e) { fail(e.code || 'access-unreadable', e.message, e.retryMs ? { retryMs: e.retryMs } : {}) }
@@ -204,9 +204,19 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
 export async function startAgent (opts = {}) {
   const dir = opts.dir || dataDir()
   const hub = makeHub(loadPty(), { ...opts, dir })
-  const gate = makeGate(dir)
-  const local = await listenLocal({ dir, serve: (session) => serveSession(session, hub, { origin: 'local' }) })
   let remote = null
+  // TRES CLAVES MAL SEGUIDAS DE UN MISMO APARATO: se reporta a la bóveda, que se lo pone en
+  // la mesa a quien aprueba (bloquear o ignorar). El freno local ya está puesto; esto es el
+  // aviso. Si no se puede reportar se dice: un aviso que no sale es un teléfono que no suena.
+  const gate = makeGate(dir, {
+    onIncident: ({ device, tries }) => {
+      if (!remote?.reportIncident) return
+      remote.reportIncident({ kind: 'bad-code', about: device, tries })
+        .then((r) => { if (!opts.quiet) console.log(`[terminal-agent] incident reported: ${r.id ? `request ${r.id} to ${r.approvers} approver(s)` : r.blocked ? 'that device is already blocked' : 'nobody can approve, nothing asked'}`) })
+        .catch((e) => console.error(`[terminal-agent] could not report the incident: ${e.message}`))
+    }
+  })
+  const local = await listenLocal({ dir, serve: (session) => serveSession(session, hub, { origin: 'local' }) })
   let stopped = false
   const startRemote = () => startRemoteAgent({
     label: LABEL,

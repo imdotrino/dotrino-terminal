@@ -10,7 +10,12 @@
  * sesión cifrada entre el aparato y el agente, así que el proxio no la ve.
  *
  * Los fallos se frenan POR AGENTE y no por sesión: quien prueba claves puede abrir otra
- * conexión, y eso no le da intentos nuevos.
+ * conexión, y eso no le da intentos nuevos. A los TRES seguidos (dueño, 2026-10-07) empieza
+ * la espera, que se dobla con cada fallo más: es un bloqueo LOCAL de este servicio, nada más.
+ *
+ * Y a los tres fallos seguidos de UN MISMO aparato se avisa (`onIncident`): la bóveda se lo
+ * pone en la mesa a quien aprueba, que bloquea o ignora desde el teléfono. Avisar no decide
+ * nada aquí; el freno de arriba sigue igual.
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -18,8 +23,10 @@ import path from 'node:path'
 
 export const ACCESS_FILE = 'access.json'
 export const MIN_LENGTH = 4
-/** Fallos seguidos que se dejan pasar sin esperar. */
-export const FREE_TRIES = 5
+/** Fallos seguidos que se dejan pasar sin esperar: al tercero empieza la espera. */
+export const FREE_TRIES = 3
+/** Fallos seguidos de un mismo aparato que disparan el aviso a la bóveda. */
+export const INCIDENT_AFTER = 3
 const BASE_WAIT_MS = 30_000
 const MAX_WAIT_MS = 60 * 60_000
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }
@@ -75,21 +82,33 @@ export function checkAccessCode (dir, secret) {
  * La puerta de un agente: comprueba la clave y frena los fallos seguidos. Una por agente,
  * compartida por todas sus sesiones.
  * @param {string} dir
- * @param {{ now?: () => number }} [opts]
+ * @param {{ now?: () => number, onIncident?: (i: { device: string, tries: number }) => void }} [opts]
+ *   `onIncident`: un mismo aparato (`device`, su pubkey) falló `INCIDENT_AFTER` veces seguidas.
+ *   Se llama UNA vez por racha; la racha se corta al acertar.
  */
-export function makeGate (dir, { now = Date.now } = {}) {
+export function makeGate (dir, { now = Date.now, onIncident = null } = {}) {
   let fails = 0
   let until = 0
+  /** Fallos seguidos por aparato: el aviso es sobre QUIÉN, y el freno sobre el agente. */
+  const byDevice = new Map()
   return {
     /** Si hay que escribir la clave para entrar. Lanza `access-unreadable` si no se puede saber. */
     required: () => hasAccessCode(dir),
-    /** Lanza `wait` (con `retryMs`) o `bad-code`; si no lanza, la clave era la buena. */
-    check (secret) {
+    /**
+     * Lanza `wait` (con `retryMs`) o `bad-code`; si no lanza, la clave era la buena.
+     * `device` es quién la escribió (pubkey), para contar sus fallos y avisar.
+     */
+    check (secret, device = null) {
       const left = until - now()
       if (left > 0) throw fail('wait', 'too many wrong codes', { retryMs: left })
-      if (checkAccessCode(dir, secret)) { fails = 0; until = 0; return }
+      if (checkAccessCode(dir, secret)) { fails = 0; until = 0; if (device) byDevice.delete(device); return }
       fails++
       if (fails >= FREE_TRIES) until = now() + Math.min(BASE_WAIT_MS * 2 ** (fails - FREE_TRIES), MAX_WAIT_MS)
+      if (device) {
+        const n = (byDevice.get(device) || 0) + 1
+        byDevice.set(device, n)
+        if (n === INCIDENT_AFTER && onIncident) { try { onIncident({ device, tries: n }) } catch (_) {} }
+      }
       throw fail('bad-code', 'wrong code', until ? { retryMs: until - now() } : {})
     }
   }
