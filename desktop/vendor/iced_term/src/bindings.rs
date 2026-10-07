@@ -251,6 +251,9 @@ fn default_keyboard_bindings() -> Vec<(Binding<InputKind>, BindingAction)> {
         ArrowLeft,  Modifiers::SHIFT; BindingAction::Esc("\x1b[1;2D".into());
         ArrowRight, Modifiers::SHIFT; BindingAction::Esc("\x1b[1;2C".into());
         // ALT
+        // Alt+Enter: ESC + CR, como xterm. Es el «salto de línea sin enviar» de las apps de
+        // consola (Claude Code, entre otras); sin esta línea la combinación no mandaba nada.
+        Enter,      Modifiers::ALT; BindingAction::Esc("\x1b\x0d".into());
         Backspace,  Modifiers::ALT; BindingAction::Esc("\x1b\x7f".into());
         End,        Modifiers::ALT; BindingAction::Esc("\x1b[1;3F".into());
         Home,       Modifiers::ALT; BindingAction::Esc("\x1b[1;3H".into());
