@@ -112,6 +112,9 @@ struct ConsoleInfo {
     origin: String,
     #[serde(default)]
     title: String,
+    /// La carpeta en la que está AHORA (agente ≥ 0.22, solo donde hay /proc); con `~`.
+    #[serde(default)]
+    cwd: Option<String>,
     #[serde(default)]
     watchers: Vec<Watcher>,
     /// Quién tiene el tamaño: quien lo fijó (⤢) o el último que se enganchó (agente ≥ 0.14).
@@ -127,6 +130,42 @@ struct ConsoleInfo {
     /// Terminó, o pidió atención, y nadie ha entrado ni tecleado desde entonces (ms).
     #[serde(default, rename = "doneAt")]
     done_at: Option<u64>,
+}
+
+/// Lo que el panel dice de una consola, cada cosa en SU línea (dueño, 2026-10-07): quién y dónde
+/// (`usuario@máquina`), la carpeta, y el título que puso el programa. Una shell titula
+/// «usuario@máquina: carpeta», así que le salen las dos primeras; un programa que se nombra solo
+/// (Claude: su sesión) no trae máquina, y le salen la carpeta y el título.
+fn panel_lines(title: &str, cwd: Option<&str>) -> (Option<String>, Option<String>, Option<String>) {
+    let title = title.trim();
+    let (host, rest) = match title.split_once(':') {
+        Some((h, r)) if h.contains('@') && !h.contains(char::is_whitespace) => (Some(h.to_string()), r.trim()),
+        _ => (None, title),
+    };
+    let cwd = cwd.map(str::trim).filter(|d| !d.is_empty());
+    // Sin carpeta del agente (uno viejo, o macOS), la de una shell es lo que sigue a la máquina.
+    let dir = cwd.or(host.as_ref().map(|_| rest).filter(|r| !r.is_empty()));
+    let name = Some(rest).filter(|r| !r.is_empty() && Some(*r) != dir);
+    (host, dir.map(String::from), name.map(String::from))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panel_lines;
+
+    fn s(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    #[test]
+    fn the_panel_gives_host_folder_and_title_a_line_each() {
+        assert_eq!(panel_lines("seyacat@loca: ~", Some("~")), (s("seyacat@loca"), s("~"), None));
+        assert_eq!(panel_lines("seyacat@loca: ~/p/dotrino", None), (s("seyacat@loca"), s("~/p/dotrino"), None)); // an older agent
+        assert_eq!(panel_lines("✳ Sefjr improvement", Some("/mnt/sda1/Dotrino")), (None, s("/mnt/sda1/Dotrino"), s("✳ Sefjr improvement")));
+        assert_eq!(panel_lines("vim: notas.txt", Some("~")), (None, s("~"), s("vim: notas.txt")));
+        assert_eq!(panel_lines("", Some("~")), (None, s("~"), None));
+        assert_eq!(panel_lines("", None), (None, None, None));
+    }
 }
 
 /// Qué hace una consola, para el color del panel.
@@ -1646,7 +1685,9 @@ impl App {
             for (i, c) in list.iter().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let is_mine = mine.as_deref() == Some(c.id.as_str());
-                let tip = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { c.title.clone() };
+                let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref());
+                let tip = [host, dir, name].into_iter().flatten().collect::<Vec<_>>().join("\n");
+                let tip = if tip.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { tip };
                 let b = button(centered(format!("{n}"), 12))
                     .width(24)
                     .padding([4, 0])
@@ -1733,11 +1774,15 @@ impl App {
                 Act::Idle => where_,
             };
             // Con número: dos consolas con el mismo título (el prompt) se distinguen igual.
-            let name = if c.title.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { format!("{n} · {}", c.title) };
-            let label = column![
-                text(format!("{}{name}", if is_mine { "● " } else { "" })).size(12),
-                text(where_).size(11).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) }),
-            ];
+            let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
+            let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref());
+            let mut lines = [host, dir, name].into_iter().flatten();
+            let first = lines.next().map(|l| format!("{n} · {l}")).unwrap_or_else(|| format!("{} {}", t("Consola", "Console"), n));
+            let mut label = column![text(format!("{}{first}", if is_mine { "● " } else { "" })).size(12)];
+            for l in lines {
+                label = label.push(text(l).size(12));
+            }
+            let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
