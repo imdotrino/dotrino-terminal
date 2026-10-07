@@ -31,7 +31,8 @@ final class ConsolesUITests: XCTestCase {
         shot("4-panel")
 
         // Ordering by dragging: the third console's grip, dropped on the first, takes its place.
-        let grips = app.descendants(matching: .any).matching(identifier: "console-grip")
+        // By its label: the row's identifier («drawer-console») covers its children's.
+        let grips = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["Mover la consola", "Move the console"]))
         XCTAssertGreaterThanOrEqual(grips.count, 3)
         grips.element(boundBy: 2).press(forDuration: 0.2, thenDragTo: grips.element(boundBy: 0))
         sleep(1)
