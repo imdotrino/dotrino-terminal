@@ -35,9 +35,9 @@ class TabTest {
         fun types() = sent.map { (it["type"] as JsonPrimitive).content }
     }
 
-    private fun console(id: String, n: Int, cols: Int, rows: Int, watchers: Int = 0, by: String? = null, pinned: Boolean = false, title: String = "") = buildJsonObject {
+    private fun console(id: String, n: Int, cols: Int, rows: Int, watchers: Int = 0, by: String? = null, pinned: Boolean = false, title: String = "", watcher: String? = null) = buildJsonObject {
         put("id", id); put("n", n); put("title", title); put("cols", cols); put("rows", rows); put("viewers", watchers)
-        putJsonArray("watchers") { repeat(watchers) { add(buildJsonObject { put("origin", "remote") }) } }
+        putJsonArray("watchers") { repeat(watchers) { add(buildJsonObject { put("origin", "remote"); if (watcher != null) put("device", watcher) }) } }
         if (by != null) putJsonObject("sizeBy") { put("origin", "remote"); put("device", by); put("pinned", pinned) }
     }
 
@@ -51,7 +51,7 @@ class TabTest {
         return t to ch
     }
 
-    @Test fun picksAFreeConsoleAndOpensOneWhenNoneIsFree() {
+    @Test fun picksAFreeConsoleAndOpensOneOnlyWhenThereIsNone() {
         val (_, ch) = tab()
         assertEquals("first it asks for the list", listOf("list"), ch.types())
         ch.agent(consoles(console("a", 1, 80, 24, watchers = 1), console("b", 2, 80, 24)))
@@ -60,7 +60,12 @@ class TabTest {
 
         val (_, ch2) = tab()
         ch2.agent(consoles(console("a", 1, 80, 24, watchers = 1)))
-        assertTrue("none free: a new one", ch2.types().contains("open"))
+        assertEquals("none free, but one exists: that one, not a new one", "a", (ch2.last("attach")!!["id"] as JsonPrimitive).content)
+        assertFalse(ch2.types().contains("open"))
+
+        val (_, ch3) = tab()
+        ch3.agent(consoles())
+        assertTrue("the machine has none: a new one", ch3.types().contains("open"))
     }
 
     @Test fun theEmulatorFollowsTheConsoleSizeNotTheScreen() {
@@ -196,5 +201,31 @@ class TabTest {
         assertEquals("list", ch.types().last()); assertEquals(before + 1, ch.sent.size)
         ch.agent(consoles(c))                                        // any answer: the connection is alive
         assertFalse(tab.checking)
+    }
+
+    @Test fun aConsoleOnlyThisPhoneWatchesIsNotOnAnotherDevice() {
+        // The phone's old session still attached on the machine (the app slept): it is ours.
+        val (t, ch) = tab()
+        ch.agent(consoles(console("a", 1, 80, 24, watchers = 1, watcher = other), console("b", 2, 80, 24, watchers = 1, watcher = me)))
+        assertEquals("b", (ch.last("attach")!!["id"] as JsonPrimitive).content)
+        assertEquals(0, t.othersWatching(t.consoles.first { it.id == "b" }))
+        assertEquals(1, t.othersWatching(t.consoles.first { it.id == "a" }))
+    }
+
+    @Test fun closingTheConsoleOnScreenGoesToAnExistingOneEvenIfWatchedAndOpensOneOnlyIfItWasTheLast() {
+        val (t, ch) = tab()
+        val a = console("a", 1, 50, 20, watchers = 1, watcher = other)
+        val c = console("c", 3, 50, 20, watchers = 1, by = me, watcher = me)
+        ch.agent(consoles(a, c)); ch.agent(attached(c)); ch.agent(consoles(a, c))
+        t.killConsole("c")
+        assertEquals("a", (ch.last("attach")!!["id"] as JsonPrimitive).content)
+        assertFalse(ch.types().contains("open"))
+
+        val (t2, ch2) = tab()
+        val only = console("x", 1, 50, 20, watchers = 1, by = me, watcher = me)
+        ch2.agent(consoles()); ch2.agent(attached(only)); ch2.agent(consoles(only))
+        val opens = ch2.types().count { it == "open" }
+        t2.killConsole("x")
+        assertEquals("it was the last one: a new one", opens + 1, ch2.types().count { it == "open" })
     }
 }

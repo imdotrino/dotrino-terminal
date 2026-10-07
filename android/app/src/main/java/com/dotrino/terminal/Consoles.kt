@@ -45,6 +45,8 @@ data class ConsoleInfo(
     val busy: Boolean = false,
     /** It finished (or rang the bell) and nobody has looked at it yet. */
     val doneAt: Long? = null,
+    /** The device of each one watching it (null for a window of the machine itself). */
+    val watcherDevices: List<String?> = emptyList(),
 ) {
     enum class Activity { IDLE, BUSY, DONE }
     val activity: Activity get() = if (busy) Activity.BUSY else if (doneAt != null) Activity.DONE else Activity.IDLE
@@ -79,6 +81,7 @@ fun consoleOf(o: JsonObject): ConsoleInfo? {
         (o["watchers"] as? JsonArray).orEmpty().any { ((it as? JsonObject)?.get("origin") as? JsonPrimitive)?.content == "local" },
         by, (o["lastActive"] as? JsonPrimitive)?.longOrNull ?: 0,
         str("activity") == "busy", (o["doneAt"] as? JsonPrimitive)?.longOrNull,
+        (o["watchers"] as? JsonArray).orEmpty().map { w -> (w as? JsonObject)?.let { str("device", it) } },
     )
 }
 
@@ -304,6 +307,23 @@ object Consoles {
             terminal.onBell = { onBell() }
         }
 
+        /**
+         * How many OTHERS watch a console: windows of the machine and other devices. This phone
+         * does not count, on screen or not: after the app slept, its old session stays attached on
+         * the machine for a while, and that made its own consoles look «open on another device».
+         */
+        fun othersWatching(c: ConsoleInfo): Int = c.watcherDevices.count { !Delegation.samePubkey(it, myDevice) }
+
+        /**
+         * The console to show when none was asked for (entering the machine, or closing the one on
+         * screen, [except]): one nobody else is watching; if all are watched, the first anyway. A
+         * NEW one only when the machine has none left (owner, 2026-10-07).
+         */
+        private fun pick(except: String?): ConsoleInfo? {
+            val rest = consoles.filter { it.id != except }
+            return rest.firstOrNull { othersWatching(it) == 0 } ?: rest.firstOrNull()
+        }
+
         /** The console on screen, as the agent last described it. */
         val current: ConsoleInfo? get() = consoles.firstOrNull { it.id == consoleId }
         /** Its number (fixed while it lives), or null. */
@@ -342,8 +362,8 @@ object Consoles {
                     consoles = (m["list"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::consoleOf) }.sortedBy { it.n }
                     if (choosing) {
                         choosing = false
-                        val free = consoles.firstOrNull { it.watchers == 0 }
-                        if (free != null) send("attach", free.id) else send("open", null)
+                        val pick = pick(null)
+                        if (pick != null) send("attach", pick.id) else send("open", null)
                     }
                     current?.let(::follow)
                     onChange()
@@ -456,7 +476,7 @@ object Consoles {
 
         /** Close a console on the machine. If it is the one on screen, first move to another free one (or a new one). */
         fun killConsole(id: String) {
-            if (id == consoleId) switchTo(consoles.firstOrNull { it.id != id && it.watchers == 0 }?.id)
+            if (id == consoleId) switchTo(pick(id)?.id)
             try { channel?.send(buildJsonObject { put("type", "kill"); put("id", id) }) } catch (_: Exception) {}
             list()
         }

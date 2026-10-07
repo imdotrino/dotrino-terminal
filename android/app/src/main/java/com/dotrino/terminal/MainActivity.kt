@@ -327,7 +327,7 @@ class MainActivity : Activity() {
     /** Where a console is, said for this screen (the same words as the PWA's panel). */
     private fun where(tab: Consoles.Tab, c: ConsoleInfo): String {
         val mine = c.id == tab.consoleId
-        val others = c.watchers - if (mine) 1 else 0
+        val others = tab.othersWatching(c)
         var w = when {
             c.watchedLocally -> t("where.local")
             others > 0 -> t("where.other")
