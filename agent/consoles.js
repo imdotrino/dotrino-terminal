@@ -13,6 +13,8 @@
  * Todo en MEMORIA: nada de lo que sale por una shell se escribe al disco. Si el agente se
  * reinicia, las consolas se pierden (y se dice: la app ve que ya no están).
  */
+import fs from 'node:fs'
+import os from 'node:os'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -38,6 +40,20 @@ const GAP_MS = 2000        // un hueco mayor que este corta la racha: eran cambi
 // Diez segundos: de sobra para un agente, y un comando que calle más se da por terminado pronto.
 export const QUIET_MS = Math.max(1, Number(process.env.DOTRINO_TERMINAL_IDLE_SECONDS) || 10) * 1000
 const MIN_TASK_MS = 3000   // menos que esto no fue «una tarea»: no se marca como terminada
+
+/**
+ * La carpeta en la que está AHORA el proceso de una consola (la shell), con `~` por la carpeta
+ * personal. El título no sirve para esto: lo pone el programa que corre dentro, y uno como Claude
+ * Code pone el nombre de su sesión, sin carpeta. En Linux se lee de /proc; donde no hay /proc
+ * (macOS) no se sabe, y se dice con `null` en vez de dar la carpeta de arranque por buena.
+ */
+export function cwdOf (pid) {
+  if (!pid) return null
+  let dir
+  try { dir = fs.readlinkSync(`/proc/${pid}/cwd`) } catch (_) { return null }
+  const home = os.homedir()
+  return dir === home ? '~' : dir.startsWith(home + '/') ? '~' + dir.slice(home.length) : dir
+}
 
 const randomId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
 
@@ -226,7 +242,7 @@ class Console {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
     const d = this.decider()
     const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null, pinned: !!d && d === this.pinnedViewer() } : null
-    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 

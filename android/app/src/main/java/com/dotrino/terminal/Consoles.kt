@@ -47,6 +47,8 @@ data class ConsoleInfo(
     val doneAt: Long? = null,
     /** The device of each one watching it (null for a window of the machine itself). */
     val watcherDevices: List<String?> = emptyList(),
+    /** The folder its shell is in now (agent ≥ 0.22, Linux); null when the machine does not say. */
+    val cwd: String? = null,
 ) {
     enum class Activity { IDLE, BUSY, DONE }
     val activity: Activity get() = if (busy) Activity.BUSY else if (doneAt != null) Activity.DONE else Activity.IDLE
@@ -82,6 +84,7 @@ fun consoleOf(o: JsonObject): ConsoleInfo? {
         by, (o["lastActive"] as? JsonPrimitive)?.longOrNull ?: 0,
         str("activity") == "busy", (o["doneAt"] as? JsonPrimitive)?.longOrNull,
         (o["watchers"] as? JsonArray).orEmpty().map { w -> (w as? JsonObject)?.let { str("device", it) } },
+        str("cwd"),
     )
 }
 

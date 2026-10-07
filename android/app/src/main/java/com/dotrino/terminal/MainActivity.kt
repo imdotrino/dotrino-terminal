@@ -450,7 +450,14 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.VERTICAL; setPadding(px(8), px(5), px(4), px(5))
                     // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
                     addView(label((if (on) "● " else "") + "${c.n}", 13f, bold = true))
-                    if (c.title.isNotBlank()) addView(label(c.title, 12f).apply { tag = "drawer-title" })
+                    // ONE line each, never wrapped (a long path would push every row down); what does
+                    // not fit is cut at the START, so the end — the folder you are in — stays.
+                    fun oneLine(text: String, tagName: String, color: Int) = label(text, 12f, color).apply {
+                        tag = tagName; setLineSpacing(0f, 1f); isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.START
+                    }
+                    if (c.title.isNotBlank()) addView(oneLine(c.title, "drawer-title", col(R.color.t_text)))
+                    // The folder, when the title does not already say it (Claude names its session, not its folder).
+                    c.cwd?.takeIf { it.isNotBlank() && !c.title.contains(it) }?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_muted))) }
                     addView(label(where(tab, c) + actText(c), 11f, col(actColor(c) ?: R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }

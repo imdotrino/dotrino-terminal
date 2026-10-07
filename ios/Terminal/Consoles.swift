@@ -27,6 +27,8 @@ struct ConsoleInfo: Equatable, Identifiable {
     let watchedLocally: Bool
     let sizeBy: SizeBy?
     let lastActive: Int64
+    /// The folder its shell is in now (agent ≥ 0.22, Linux); nil when the machine does not say.
+    var cwd: String? = nil
 }
 
 /// What a `Tab` needs from its session. A protocol so the protocol can be tested without a network.
@@ -49,7 +51,7 @@ func consoleOf(_ o: JSON) -> ConsoleInfo? {
     func int(_ k: String) -> Int { Int(o[k]?.int ?? 0) }
     return ConsoleInfo(id: id, n: int("n"), title: o["title"]?.string ?? "", origin: o["origin"]?.string, cols: int("cols"), rows: int("rows"),
                        viewers: int("viewers"), watchers: watchers.count, watchedLocally: watchers.contains { $0["origin"]?.string == "local" },
-                       sizeBy: by, lastActive: o["lastActive"]?.int ?? 0)
+                       sizeBy: by, lastActive: o["lastActive"]?.int ?? 0, cwd: o["cwd"]?.string)
 }
 
 /// The title of a console for the panel. The shell sets it as «user@host: path»; what matters is

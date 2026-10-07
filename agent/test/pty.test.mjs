@@ -273,3 +273,16 @@ test('ACTIVIDAD: contenido que cambia de seguido es trabajo, el eco de teclear n
 })
 
 
+
+test('cada consola dice en qué carpeta está AHORA, aunque el título no lo diga', { skip: process.platform !== 'linux' }, async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path')
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'term-cwd-')))
+  const h = hub()
+  const s = fakeSession(); serveSession(s, h)
+  s.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => s.sent.some((p) => p.type === 'attached'))
+  assert.equal(h.list()[0].cwd, '~', 'abre en la carpeta personal')
+  s.deliver({ type: 'input', data: `cd ${dir}\r` })
+  await until(() => h.list()[0].cwd === dir)
+  h.killAll()
+})

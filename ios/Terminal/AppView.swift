@@ -413,7 +413,11 @@ private struct ConsoleScreen: View {
                         VStack(alignment: .leading, spacing: 2) {
                             // The number, and the title on its OWN row, whole: cut to «…/…/nal» it said nothing.
                             Text((on ? "● " : "") + "\(c.n)").font(.footnote.bold()).foregroundColor(Palette.text)
-                            if !c.title.isEmpty { Text(c.title).font(.caption).foregroundColor(Palette.text).fixedSize(horizontal: false, vertical: true) }
+                            // ONE line each, never wrapped (a long path would push every row down); what
+                            // does not fit is cut at the START, so the end — the folder — stays.
+                            if !c.title.isEmpty { Text(c.title).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head) }
+                            // The folder, when the title does not already say it (Claude names its session, not its folder).
+                            if let cwd = c.cwd, !cwd.isEmpty, !c.title.contains(cwd) { Text(cwd).font(.caption).foregroundColor(Palette.muted).lineLimit(1).truncationMode(.head) }
                             Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
