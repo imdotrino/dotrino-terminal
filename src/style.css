@@ -177,6 +177,10 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .sbtn { background: transparent; border: 0; color: var(--text); padding: 3px 0; width: 24px; border-radius: 4px; font-size: 13px; cursor: pointer; }
 .sbtn:hover { background: var(--line); }
 .sbtn.num.on { background: var(--brand); color: var(--on-brand); }
+/* La flecha de la consola activa: sale del borde del panel y apunta a la terminal. */
+.cur-arrow { position: absolute; z-index: 3; width: 0; height: 0; margin-top: -7px; pointer-events: none;
+  border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 7px solid var(--brand); }
+.cur-arrow[hidden] { display: none; }
 /* La consola de OTRO panel de esta pestaña: marcada, sin ser la del foco. */
 .sbtn.num.here, .srow.item.here .pick { background: var(--brand-soft); }
 /* Qué hace cada consola: trabajando (ámbar, latiendo) · terminó sin atender (verde, fijo). El

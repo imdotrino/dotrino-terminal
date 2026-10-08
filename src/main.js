@@ -382,13 +382,15 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   function newPane (s, collapsed = true) {
     // Cada panel lleva SU panel de consolas (dueño, 2026-10-08): elige, abre y cierra para ese panel.
     const p = { id: ++paneCounter, s, collapsed }
-    p.el = el(`<div class="pane" data-testid="pane"><div class="side" data-testid="pane-side" hidden></div><div class="pane-tools">
+    p.el = el(`<div class="pane" data-testid="pane"><div class="side" data-testid="pane-side" hidden></div><span class="cur-arrow" data-testid="current-arrow" aria-hidden="true" hidden></span><div class="pane-tools">
       <button data-p="right" title="${esc(t('split_right'))}" aria-label="${esc(t('split_right'))}">◫</button>
       <button data-p="down" title="${esc(t('split_down'))}" aria-label="${esc(t('split_down'))}">⊟</button>
       <button data-p="close" title="${esc(t('close_pane'))}" aria-label="${esc(t('close_pane'))}">×</button>
     </div><div class="term"></div></div>`)
     p.view = p.el.querySelector('.term')
     p.side = p.el.querySelector('.side')
+    p.arrow = p.el.querySelector('.cur-arrow')
+    p.side.addEventListener('scroll', () => placeArrow(p), { passive: true })
     wireSide(s, p)
     p.el.addEventListener('pointerdown', () => focusPane(s, p), true)
     p.el.querySelector('.pane-tools').addEventListener('click', (e) => {
@@ -554,7 +556,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Esas líneas como filas del panel abierto; el número va con la primera. */
   function rows (c, i, mine) {
     const [first, ...more] = linesOf(c)
-    const head = `${c.id === mine ? '&gt; ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
+    const head = `${c.id === mine ? '● ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
     return `<span>${head}</span>` + more.map((l) => `<span>${esc(l)}</span>`).join('')
   }
 
@@ -620,6 +622,24 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** El panel de consolas de CADA panel de la pestaña: la lista es de la máquina, la marcada es la suya. */
   function renderSide (s) { for (const p of s.panes) renderPaneSide(s, p) }
 
+  /**
+   * La flecha de la consola activa: un triángulo que sale del borde del panel, a la altura de su
+   * consola, y apunta a la terminal. Va fuera del panel (que recorta lo que se sale) y lo sigue
+   * cuando se desplaza; si la activa queda fuera de la vista, no se enseña.
+   */
+  function placeArrow (p) {
+    const on = p.side.hidden ? null : p.side.querySelector('.sbtn.num.on, .srow.item.on')
+    if (!on) { p.arrow.hidden = true; return }
+    const box = p.el.getBoundingClientRect()
+    const side = p.side.getBoundingClientRect()
+    const r = on.getBoundingClientRect()
+    const mid = r.top + r.height / 2
+    if (mid < side.top || mid > side.bottom) { p.arrow.hidden = true; return }
+    p.arrow.style.top = `${mid - box.top}px`
+    p.arrow.style.left = `${side.right - box.left}px`
+    p.arrow.hidden = false
+  }
+
   function renderPaneSide (s, p) {
     if (p.drag?.on) return             // a media arrastrada no se repinta: se llevaría lo que se arrastra
     const list = s.list || []
@@ -635,7 +655,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${c.id === mine ? '&gt;' : ''}${numOf(c, i)}</button>`).join('')}`
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
@@ -647,6 +667,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
         </div>`).join('')}`
     }
+    placeArrow(p)
   }
 
   async function refresh (s) {
