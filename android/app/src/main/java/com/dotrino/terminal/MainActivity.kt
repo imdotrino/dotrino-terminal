@@ -697,7 +697,9 @@ class MainActivity : Activity() {
                         "ctrl" -> { v.ctrl = !v.ctrl; renderModifiers() }
                         "alt" -> { v.alt = !v.alt; renderModifiers() }
                         in KEY_LABELS.keys -> v.key(k)
-                        else -> v.type(k)
+                        // A character key (- / | ~) with the writing line on goes INTO the line, like
+                        // any letter (owner, 2026-10-07); off, straight to the console.
+                        else -> if (composing && composeInput != null) composeInput!!.append(k) else v.type(k)
                     }
                 }
             }

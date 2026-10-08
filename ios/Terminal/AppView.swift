@@ -577,7 +577,10 @@ private struct ConsoleScreen: View {
         case "ctrl": v.ctrl.toggle(); syncMods()
         case "alt": v.alt.toggle(); syncMods()
         case _ where Self.labels[k] != nil: v.key(k)
-        default: v.type(k)
+        // A character key (- / | ~) with the writing line on goes INTO the line, like any letter
+        // (owner, 2026-10-07); off, straight to the console.
+        default:
+            if composing, let f = composeBox.field { f.insertText(k) } else { v.type(k) }
         }
     }
 }
