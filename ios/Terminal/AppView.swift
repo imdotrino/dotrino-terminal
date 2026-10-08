@@ -209,12 +209,7 @@ private struct ConsoleScreen: View {
     @State private var dragId: String?
     @State private var dragOver: String?
     @State private var rowFrames: [String: CGRect] = [:]
-    @State private var stripFrames: [String: CGRect] = [:]
-    /// The strip's content, seen from the strip (negative minY = scrolled down), and the strip's height.
-    @State private var stripContent: CGRect = .zero
-    @State private var stripHeight: CGFloat = 0
     /// The strip number whose hold just showed the actions: lifting it is not a tap.
-    @State private var heldId: String?
     @State private var actions: ConsoleInfo?
     @State private var toast: String?
     @State private var mods = (ctrl: false, alt: false)
@@ -362,93 +357,34 @@ private struct ConsoleScreen: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if toast == s { toast = nil } }
     }
 
-    /// The consoles panel, collapsed: a strip on the left (», +, ⤢ and the numbers). ▲/▼ over it
-    /// when it overflows (owner, 2026-10-07: a finger on a number sorts, so the strip is not scrolled
-    /// by dragging); each goes when its end is reached.
+    /// The consoles panel, collapsed: a strip on the left (», +, ⤢ and the numbers). It scrolls with
+    /// the finger: nothing is sorted here (owner, 2026-10-07; sorting is the open panel's grip).
     private var strip: some View {
-        ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 4) {
-                    Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2)) }
-                        .accessibilityLabel(t("panel.open")).accessibilityIdentifier("panel-open").id("strip-top")
-                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2)) }
-                        .accessibilityLabel(t("console.new")).accessibilityIdentifier("console-new")
-                    // ALL the strip's buttons the same height (56) and each with a subtle background
-                    // that shows its area (owner, 2026-10-07).
-                    sizeButton(32, height: 56, fill: Palette.panel2)
-                    ForEach(tab.consoles) { c in
-                        let on = c.id == tab.consoleId
-                        // Tall (56 pt, twice the old 28): at 28, and at 40, they were hard to hit (owner, 2026-10-07).
-                        Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
-                            .frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Palette.panel2))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
-                            .overlay(alignment: dropEdge(tab, c.id) ?? .top) {
-                                if dropEdge(tab, c.id) != nil { Rectangle().fill(Palette.accent).frame(height: 2) }
-                            }
-                            .opacity(dragId == c.id ? 0.5 : 1)
-                            .contentShape(Rectangle())
-                            // The number itself drags (no room for a grip, as in the PWA's strip). ONE
-                            // gesture for the tap and the drag: a tap gesture on the same view would
-                            // swallow the drag. Lifting without having moved opens the console; moving
-                            // reorders; a hold (simultaneous, cancelled by moving) shows its actions.
-                            .simultaneousGesture(LongPressGesture().onEnded { _ in heldId = c.id; actions = c })
-                            .highPriorityGesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("strip-rows"))
-                                .onChanged { v in
-                                    guard abs(v.translation.height) >= 8 || dragId == c.id else { return }
-                                    dragId = c.id
-                                    let rows = tab.consoles.compactMap { r in stripFrames[r.id].map { (r.id, $0) } }
-                                    dragOver = (rows.first { v.location.y < $0.1.maxY } ?? rows.last)?.0
-                                }
-                                .onEnded { _ in
-                                    if dragId == c.id { if let over = dragOver, over != c.id { tab.move(c.id, over: over) } }
-                                    else if heldId != c.id { tab.switchTo(c.id) }
-                                    dragId = nil; dragOver = nil; heldId = nil
-                                })
-                            .background(GeometryReader { g in Color.clear.preference(key: StripFrames.self, value: [c.id: g.frame(in: .named("strip-rows"))]) })
-                            .accessibilityLabel(c.title.isEmpty ? t("console.n", ("n", c.n)) : c.title)
-                            .accessibilityIdentifier("console-\(c.n)")
-                            .id(c.id)
-                    }
-                    Color.clear.frame(height: 1).id("strip-bottom")
-                }
-                .padding(.vertical, 4)
-                .coordinateSpace(name: "strip-rows")
-                .onPreferenceChange(StripFrames.self) { stripFrames = $0 }
-                // Where the content's ends are, seen from the strip: says whether there is more above or below.
-                .background(GeometryReader { g in Color.clear.preference(key: StripContent.self, value: g.frame(in: .named("strip"))) })
-            }
-            .coordinateSpace(name: "strip")
-            .onPreferenceChange(StripContent.self) { stripContent = $0 }
-            .background(GeometryReader { g in Color.clear.onAppear { stripHeight = g.size.height }.onChange(of: g.size.height) { stripHeight = $0 } })
-            .overlay(alignment: .top) {
-                if stripContent.minY < -1 {
-                    Button { withAnimation { proxy.scrollTo(stripUpTarget, anchor: .top) } } label: { Text("▲").font(.system(size: 10)).foregroundColor(Palette.text).frame(width: 40, height: 22).background(Palette.panel) }
-                        .accessibilityLabel(t("strip.up")).accessibilityIdentifier("strip-up")
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 4) {
+                Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2)) }
+                    .accessibilityLabel(t("panel.open")).accessibilityIdentifier("panel-open")
+                Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2)) }
+                    .accessibilityLabel(t("console.new")).accessibilityIdentifier("console-new")
+                // ALL the strip's buttons the same height (56) and each with a subtle background
+                // that shows its area (owner, 2026-10-07).
+                sizeButton(32, height: 56, fill: Palette.panel2)
+                ForEach(tab.consoles) { c in
+                    let on = c.id == tab.consoleId
+                    Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
+                        .frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Palette.panel2))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
+                        .contentShape(Rectangle())
+                        .onTapGesture { tab.switchTo(c.id) }
+                        .onLongPressGesture { actions = c }
+                        .accessibilityLabel(c.title.isEmpty ? t("console.n", ("n", c.n)) : c.title)
+                        .accessibilityIdentifier("console-\(c.n)")
                 }
             }
-            .overlay(alignment: .bottom) {
-                if stripContent.maxY > stripHeight + 1 {
-                    Button { withAnimation { proxy.scrollTo(stripDownTarget, anchor: .bottom) } } label: { Text("▼").font(.system(size: 10)).foregroundColor(Palette.text).frame(width: 40, height: 22).background(Palette.panel) }
-                        .accessibilityLabel(t("strip.down")).accessibilityIdentifier("strip-down")
-                }
-            }
+            .padding(.vertical, 4)
         }
         .frame(width: 40)
         .background(Palette.panel)
-    }
-
-    /// ▲: the console about 60 % of the strip above the first one fully shown (or the top).
-    private var stripUpTarget: String {
-        let step = stripHeight * 0.6
-        let rows = tab.consoles.compactMap { c in stripFrames[c.id].map { (c.id, $0.minY + stripContent.minY) } }
-        return rows.last { $0.1 < -step }?.0 ?? "strip-top"
-    }
-
-    /// ▼: the console about 60 % of the strip below the last one fully shown (or the bottom).
-    private var stripDownTarget: String {
-        let step = stripHeight * 0.6
-        let rows = tab.consoles.compactMap { c in stripFrames[c.id].map { (c.id, $0.maxY + stripContent.minY) } }
-        return rows.first { $0.1 > stripHeight + step }?.0 ?? "strip-bottom"
     }
 
     private func sizeWho(_ c: ConsoleInfo) -> String {
@@ -704,12 +640,3 @@ private struct RowFrames: PreferenceKey {
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue()) { $1 } }
 }
 
-private struct StripContent: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
-}
-
-private struct StripFrames: PreferenceKey {
-    static var defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue()) { $1 } }
-}

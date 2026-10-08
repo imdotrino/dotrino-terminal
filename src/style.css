@@ -247,14 +247,9 @@ a.btn.primary { background: var(--brand); border-color: var(--brand); color: #ff
 .home-remote { color: var(--muted); margin-top: 28px; }
 
 /* Ordenar las consolas arrastrando: el asa (para el dedo), la que se lleva y dónde caería. */
-.sbtn.num { touch-action: none; }
-/* ▲/▼ de la franja plegada: pegados arriba y abajo, solo mientras haya a dónde ir. */
+/* La franja plegada se desplaza con el dedo, sin barra. */
 .side.collapsed { scrollbar-width: none; }
 .side.collapsed::-webkit-scrollbar { display: none; }
-.sbtn.scroll-up, .sbtn.scroll-down { position: sticky; z-index: 1; background: var(--panel); font-size: 10px; padding: 2px 0; display: none; flex: none; }
-.sbtn.scroll-up { top: 0; }
-.sbtn.scroll-down { bottom: 0; margin-top: auto; }
-.sbtn.scroll-up.show, .sbtn.scroll-down.show { display: block; }
 /* En la franja plegada TODOS los botones miden lo mismo y cada uno enseña su área con un fondo sutil
    (dueño, 2026-10-07); con el dedo, altos (a 20 px costaba acertar). */
 .side.collapsed .sbtn { background: var(--panel-high); min-height: 28px; }

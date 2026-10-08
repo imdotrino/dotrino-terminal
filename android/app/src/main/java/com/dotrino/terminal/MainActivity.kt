@@ -264,30 +264,12 @@ class MainActivity : Activity() {
             addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(note, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { marginStart = px(24); marginEnd = px(24) })
         }
+        // The strip scrolls with the finger: nothing is sorted here (owner, 2026-10-07; sorting is the
+        // open panel's grip).
         val stripScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(side) }
-        // ▲/▼ over the strip when it overflows (owner, 2026-10-07: a finger on a number sorts, so the
-        // strip is not scrolled by dragging); each goes when its end is reached.
-        fun arrow(text: String, dir: Int, tagName: String, desc: String) = label(text, 10f, col(R.color.t_text)).apply {
-            tag = tagName; contentDescription = desc; gravity = Gravity.CENTER; setBackgroundColor(col(R.color.t_panel))
-            setPadding(0, px(4), 0, px(4)); visibility = View.GONE; isClickable = true
-            setOnClickListener { stripScroll.smoothScrollBy(0, dir * stripScroll.height * 6 / 10) }
-        }
-        val up = arrow("▲", -1, "strip-up", t("strip.up")); val down = arrow("▼", 1, "strip-down", t("strip.down"))
-        val arrows = {
-            val max = (side.height - stripScroll.height).coerceAtLeast(0)
-            up.visibility = if (stripScroll.scrollY > 0) View.VISIBLE else View.GONE
-            down.visibility = if (stripScroll.scrollY < max) View.VISIBLE else View.GONE
-        }
-        stripScroll.setOnScrollChangeListener { _, _, _, _, _ -> arrows() }
-        stripScroll.viewTreeObserver.addOnGlobalLayoutListener { arrows() }
-        val stripFrame = FrameLayout(this).apply {
-            addView(stripScroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(up, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
-            addView(down, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
-        }
-        stripHost = stripFrame
+        stripHost = stripScroll
         val body = LinearLayout(this).apply {
-            addView(stripFrame, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(stripScroll, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(stage, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         }
         // The open panel takes the strip's place, BESIDE the console (owner, 2026-10-07): it does
@@ -413,13 +395,11 @@ class MainActivity : Activity() {
         side.addView(btn("»", "panel-open", t("panel.open")) { openDrawer(true) }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
         side.addView(btn("+", "console-new", t("console.new")) { tab.switchTo(null) }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
         side.addView(sizeButton(tab).apply { if (background == null) background = rounded(col(R.color.t_panel2), px(6)) }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
-        val rows = ArrayList<Pair<String, View>>()
         for (c in tab.consoles) {
             val on = c.id == tab.consoleId
             // Amber while something works in it, green when it finished and nobody looked (as the PWA's panel).
             val act = actColor(c)
             side.addView(label("${c.n}", 13f, col(if (on) R.color.t_on_accent else act ?: R.color.t_text), bold = on || act != null).apply {
-                rows.add(c.id to this)
                 tag = "console-${c.n}"; contentDescription = c.title.ifBlank { t("console.n", "n" to c.n) } + actText(c)
                 gravity = Gravity.CENTER; setPadding(0, px(5), 0, px(5))
                 background = when {
@@ -428,9 +408,8 @@ class MainActivity : Activity() {
                     act != null -> rounded(col(R.color.t_panel2), px(6), px(1), col(act))
                     else -> rounded(col(R.color.t_panel2), px(6))
                 }
-                // The number itself drags (there is no room for a grip, as in the PWA's strip): a tap
-                // opens the console, a hold shows its actions, and moving a finger's width reorders.
-                dragOrTap(tab, c.id, rows, onTap = { tab.switchTo(c.id) }, onHold = { consoleActions(tab, c) })
+                setOnClickListener { tab.switchTo(c.id) }
+                setOnLongClickListener { consoleActions(tab, c); true }
                 // Tall (44 dp): at 30 they were hard to hit (owner, 2026-10-07).
             }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
         }
@@ -464,42 +443,6 @@ class MainActivity : Activity() {
         dragging = null
         for ((_, row) in rows) { row.alpha = 1f; row.foreground = null }
         if (target != null && target != id) tab.move(id, target) else renderPanel()
-    }
-
-    /**
-     * A view that is tapped, held or DRAGGED (the strip's numbers, which have no grip): a tap is
-     * `onTap`, a hold without moving is `onHold`, and moving further than the touch slop starts a
-     * drag that reorders among `rows`. The parent (a ScrollView) is told not to take the gesture once
-     * it is a drag, so until then the strip still scrolls.
-     */
-    @android.annotation.SuppressLint("ClickableViewAccessibility")
-    private fun View.dragOrTap(tab: Consoles.Tab, id: String, rows: List<Pair<String, View>>, onTap: () -> Unit, onHold: () -> Unit) {
-        val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
-        val holdMs = android.view.ViewConfiguration.getLongPressTimeout().toLong()
-        val mark = marker(id, rows)
-        var downY = 0f; var over: String? = null; var held = false
-        val hold = Runnable { held = true; onHold() }
-        setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> { downY = e.rawY; over = null; held = false; v.parent?.requestDisallowInterceptTouchEvent(true); v.postDelayed(hold, holdMs); true }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    if (dragging != id) {
-                        if (held || Math.abs(e.rawY - downY) < slop) return@setOnTouchListener true
-                        v.removeCallbacks(hold); dragging = id; v.parent?.requestDisallowInterceptTouchEvent(true); mark(null)
-                    }
-                    over = rowAt(rows, e.rawY); mark(over); true
-                }
-                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                    v.removeCallbacks(hold)
-                    when {
-                        dragging == id -> dropped(tab, id, rows, over.takeIf { e.actionMasked == android.view.MotionEvent.ACTION_UP })
-                        !held && e.actionMasked == android.view.MotionEvent.ACTION_UP -> onTap()
-                    }
-                    true
-                }
-                else -> false
-            }
-        }
     }
 
     /** The console being dragged in the open panel to change its place, or null. */

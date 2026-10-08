@@ -84,7 +84,6 @@ const M = {
     console_other: 'abierta en otro aparato',
     console_free: 'suelta',
     console_local: 'ventana abierta en la máquina',
-    scroll_up: 'Subir', scroll_down: 'Bajar',
     split_right: 'Dividir a la derecha', split_down: 'Dividir abajo', open_right: 'Abrir a la derecha', open_down: 'Abrir abajo', close_pane: 'Cerrar este panel', pane_last: 'Es el único panel: cierra la pestaña',
     console_gone: 'Esta consola ya no existe en la máquina: se cerró, o el agente se reinició.',
     closed_by_other: (n) => `Otra pantalla cerró la consola ${n}. Esta es otra.`,
@@ -164,7 +163,6 @@ const M = {
     console_other: 'open on another device',
     console_free: 'detached',
     console_local: 'window open on the machine',
-    scroll_up: 'Scroll up', scroll_down: 'Scroll down',
     split_right: 'Split right', split_down: 'Split down', open_right: 'Open to the right', open_down: 'Open below', close_pane: 'Close this pane', pane_last: 'The only pane: close the tab instead',
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
     closed_by_other: (n) => `Another screen closed console ${n}. This is another one.`,
@@ -635,16 +633,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     const side = s.side
     side.classList.toggle('collapsed', s.collapsed)
     if (s.collapsed) {
-      // ▲/▼ to scroll the strip when it overflows (dueño, 2026-10-07: con el dedo, mover un número
-      // ordena, así que la franja no se desplaza arrastrando); each goes when its end is reached.
       side.innerHTML = `
-        <button class="sbtn scroll-up" data-act="scroll-up" aria-label="${esc(t('scroll_up'))}" title="${esc(t('scroll_up'))}">▲</button>
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}
-        <button class="sbtn scroll-down" data-act="scroll-down" aria-label="${esc(t('scroll_down'))}" title="${esc(t('scroll_down'))}">▼</button>`
-      stripArrows(s)
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
@@ -656,15 +649,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
         </div>`).join('')}`
     }
-  }
-
-  /** ▲/▼ of the collapsed strip: each shows only while there is somewhere to go in its direction. */
-  function stripArrows (s) {
-    const side = s.side
-    const up = side.querySelector('.scroll-up'); const down = side.querySelector('.scroll-down')
-    if (!up || !down) return
-    up.classList.toggle('show', side.scrollTop > 1)
-    down.classList.toggle('show', side.scrollTop + side.clientHeight < side.scrollHeight - 1)
   }
 
   async function refresh (s) {
@@ -776,9 +760,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       if (s.dragged) { s.dragged = false; return }   // soltar tras arrastrar no es un clic
       const b = e.target.closest('button'); if (!b) return
       if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { s.collapsed = !s.collapsed; renderSide(s); return }
-      if (b.dataset.act === 'scroll-up' || b.dataset.act === 'scroll-down') {
-        s.side.scrollBy({ top: (b.dataset.act === 'scroll-up' ? -1 : 1) * s.side.clientHeight * 0.6, behavior: 'smooth' }); return
-      }
       if (b.dataset.act === 'new') return switchTo(s, null)
       if (b.dataset.act === 'pin') return togglePin(s)
       if (b.dataset.kill) return killConsole(s, b.dataset.kill)
@@ -793,15 +774,15 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
     // ORDENAR ARRASTRANDO: una consola se suelta sobre otra y toma su sitio. Con ratón se arrastra
     // la fila entera (o su número, con el panel plegado); con el dedo, por el asa ⠿, para que el
-    // resto de la fila siga sirviendo para desplazar el panel — y con el panel plegado, el número
-    // mismo, que no tiene asa (como en Android e iOS). El orden es de la máquina.
+    // resto de la fila siga sirviendo para desplazar el panel. Con el panel plegado, el dedo NO ordena
+    // (dueño, 2026-10-07): desplaza la franja; con ratón sí se arrastra el número. El orden es de la máquina.
     const ITEMS = '.srow.item, .sbtn.num'
     const unmark = () => { for (const el of s.side.querySelectorAll('.drop-before, .drop-after, .dragged')) el.classList.remove('drop-before', 'drop-after', 'dragged') }
     const endDrag = () => { s.drag = null; s.side.classList.remove('dragging'); unmark() }
     s.side.addEventListener('pointerdown', (e) => {
       const item = e.target.closest(ITEMS)
       if (!item || e.button !== 0 || e.target.closest('[data-kill]')) return
-      if (e.pointerType !== 'mouse' && !e.target.closest('.grip') && !item.matches('.sbtn.num')) return
+      if (e.pointerType !== 'mouse' && !e.target.closest('.grip')) return
       s.drag = { id: item.dataset.id, y: e.clientY, pointer: e.pointerId, on: false, over: null }
     })
     s.side.addEventListener('pointermove', (e) => {
@@ -838,8 +819,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       renderSide(s)
     })
     s.side.addEventListener('pointercancel', () => { if (s.drag) { endDrag(); renderSide(s) } })
-    s.side.addEventListener('scroll', () => stripArrows(s), { passive: true })
-    new ResizeObserver(() => stripArrows(s)).observe(s.side)
   }
 
   /**
