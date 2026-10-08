@@ -269,13 +269,14 @@ impl ConsoleInfo {
 }
 
 /// El cuadrito de una consola con un punto verde en su esquina superior derecha cuando `on`.
+/// `faint`: el medio ciclo apagado del parpadeo (terminó y nadie la ha atendido).
 /// El punto no recibe el ratón: los clics llegan al botón de debajo.
-fn dotted<'a>(under: Element<'a, Message>, on: bool) -> Element<'a, Message> {
+fn dotted<'a>(under: Element<'a, Message>, on: bool, faint: bool) -> Element<'a, Message> {
     if !on {
         return under;
     }
     // 5 px, a 3 del borde: en la esquina, sin tocar el borde ni montarse sobre el número.
-    let dot = container(space()).width(5).height(5).style(|_: &Theme| container::Style { background: Some(OPEN_COLOR.into()), border: Border::default().rounded(2.5), ..Default::default() });
+    let dot = container(space()).width(5).height(5).style(move |_: &Theme| container::Style { background: Some(OPEN_COLOR.scale_alpha(if faint { 0.15 } else { 1.0 }).into()), border: Border::default().rounded(2.5), ..Default::default() });
     iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(3)].into()
 }
 
@@ -388,6 +389,8 @@ struct App {
     /// consola); volver a entrar en ella en ese hueco hacía que el cierre se llevara la ventana.
     dying: std::collections::HashSet<String>,
     next_tag: u64,
+    /// El medio ciclo apagado del punto que parpadea (consola que terminó y nadie ha atendido).
+    blink_off: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -426,6 +429,7 @@ enum Message {
     MenuRoot,
     /// Leer otra vez las consolas abiertas (panel lateral).
     Poll,
+    Blink,
     /// Panel lateral: ver esta consola en la ventana.
     ShowConsole(window::Id, String),
     /// Panel lateral: abrir una consola nueva en la ventana.
@@ -745,7 +749,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0 };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1351,6 +1355,10 @@ impl App {
                 self.poll_consoles();
                 Task::none()
             }
+            Message::Blink => {
+                self.blink_off = !self.blink_off;
+                Task::none()
+            }
             Message::ShowConsole(id, cid) => {
                 if self.mine(id).as_deref() == Some(cid.as_str()) {
                     return self.focus(id);
@@ -1734,7 +1742,7 @@ impl App {
                     .style(console_button(is_mine, c.act()))
                     .on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
                 let open = is_mine || c.open_in_a_window();
-                let b = self.console_menu(id, c.id.clone(), is_mine, container(dotted(b.into(), open)).center_x(Length::Fill).into());
+                let b = self.console_menu(id, c.id.clone(), is_mine, container(dotted(b.into(), open, self.blink_off && c.act() == Act::Done)).center_x(Length::Fill).into());
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
                     Act::Done => format!("{tip} · {}", t("terminó", "finished")),
@@ -1811,7 +1819,7 @@ impl App {
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
-            let pick = dotted(pick.into(), is_mine || c.open_in_a_window());
+            let pick = dotted(pick.into(), is_mine || c.open_in_a_window(), self.blink_off && c.act() == Act::Done);
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             items = items.push(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill));
         }
@@ -1839,7 +1847,10 @@ impl App {
         // El panel lateral: las consolas abiertas se releen cada poco mientras se ve.
         let polling = self.windows.values().any(|w| w.sidebar && w.profile.is_some())
             .then(|| iced::time::every(std::time::Duration::from_millis(1500)).map(|_| Message::Poll));
-        Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting).chain(polling))
+        // El punto parpadea solo mientras haya alguno que deba: sin eso, nada se repinta de más.
+        let blinking = (polling.is_some() && self.consoles.values().flatten().any(|c| c.act() == Act::Done && c.open_in_a_window()))
+            .then(|| iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::Blink));
+        Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting).chain(polling).chain(blinking))
     }
 }
 
