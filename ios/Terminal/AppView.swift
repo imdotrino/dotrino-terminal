@@ -367,17 +367,18 @@ private struct ConsoleScreen: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 4) {
-                    Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 56) }
+                    Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2)) }
                         .accessibilityLabel(t("panel.open")).accessibilityIdentifier("panel-open").id("strip-top")
-                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 56) }
+                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2)) }
                         .accessibilityLabel(t("console.new")).accessibilityIdentifier("console-new")
-                    // All the strip's buttons the same height as the numbers (owner, 2026-10-07).
-                    sizeButton(32, height: 56)
+                    // ALL the strip's buttons the same height (56) and each with a subtle background
+                    // that shows its area (owner, 2026-10-07).
+                    sizeButton(32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2))
                     ForEach(tab.consoles) { c in
                         let on = c.id == tab.consoleId
                         // Tall (56 pt, twice the old 28): at 28, and at 40, they were hard to hit (owner, 2026-10-07).
                         Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
-                            .frame(width: 30, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Color.clear))
+                            .frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Palette.panel2))
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
                             .overlay(alignment: dropEdge(tab, c.id) ?? .top) {
                                 if dropEdge(tab, c.id) != nil { Rectangle().fill(Palette.accent).frame(height: 2) }

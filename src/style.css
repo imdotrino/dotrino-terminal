@@ -255,8 +255,12 @@ a.btn.primary { background: var(--brand); border-color: var(--brand); color: #ff
 .sbtn.scroll-up { top: 0; }
 .sbtn.scroll-down { bottom: 0; margin-top: auto; }
 .sbtn.scroll-up.show, .sbtn.scroll-down.show { display: block; }
-/* Con el dedo: números altos (a 20 px costaba acertar). */
-@media (pointer: coarse) { .sbtn.num { min-height: 40px; } }
+/* En la franja plegada TODOS los botones miden lo mismo y cada uno enseña su área con un fondo sutil
+   (dueño, 2026-10-07); con el dedo, altos (a 20 px costaba acertar). */
+.side.collapsed .sbtn { background: var(--panel-high); min-height: 28px; }
+.side.collapsed .sbtn:hover { background: var(--line); }
+.side.collapsed .sbtn.num.on { background: var(--brand); }
+@media (pointer: coarse) { .side.collapsed .sbtn { min-height: 40px; } }
 .srow.item .grip { color: var(--muted); opacity: .55; font-size: 12px; padding: 4px 0 4px 2px; cursor: grab; touch-action: none; user-select: none; }
 .side.dragging, .side.dragging * { cursor: grabbing !important; user-select: none; }
 .side .dragged { opacity: .45; }

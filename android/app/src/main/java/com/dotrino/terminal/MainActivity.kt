@@ -370,7 +370,7 @@ class MainActivity : Activity() {
             setColorFilter(col(if (on) R.color.t_accent else R.color.t_muted))
             imageAlpha = if (n == null) 70 else 255
             background = if (on) rounded(col(R.color.t_accent_soft), px(6)) else null
-            setPadding(px(7), px(7), px(7), px(7))
+            setPadding(px(7), px(7), px(7), px(7)); scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
             contentDescription = if (n == null) t("size.use", "n" to "") else if (on) t("size.release", "n" to n) else t("size.use", "n" to n)
             isEnabled = n != null
             setOnClickListener { toggleSize(tab) }
@@ -403,15 +403,16 @@ class MainActivity : Activity() {
         val side = panel ?: return
         val tab = active ?: return
         side.removeAllViews()
+        // ALL the strip's buttons the same height (44 dp) and each with a subtle background that
+        // shows its area (owner, 2026-10-07).
         fun btn(text: String, tagName: String, desc: String, onClick: () -> Unit) = label(text, 15f, col(R.color.t_text)).apply {
             tag = tagName; contentDescription = desc; gravity = Gravity.CENTER
-            setPadding(0, px(6), 0, px(6)); isClickable = true
+            background = rounded(col(R.color.t_panel2), px(6)); isClickable = true
             setOnClickListener { onClick() }
         }
-        val full = ViewGroup.LayoutParams.MATCH_PARENT
-        side.addView(btn("»", "panel-open", t("panel.open")) { openDrawer(true) }, LinearLayout.LayoutParams(full, ViewGroup.LayoutParams.WRAP_CONTENT))
-        side.addView(btn("+", "console-new", t("console.new")) { tab.switchTo(null) }, LinearLayout.LayoutParams(full, ViewGroup.LayoutParams.WRAP_CONTENT))
-        side.addView(sizeButton(tab), LinearLayout.LayoutParams(px(30), px(30)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = px(2); bottomMargin = px(4) })
+        side.addView(btn("»", "panel-open", t("panel.open")) { openDrawer(true) }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
+        side.addView(btn("+", "console-new", t("console.new")) { tab.switchTo(null) }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
+        side.addView(sizeButton(tab).apply { if (background == null) background = rounded(col(R.color.t_panel2), px(6)) }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
         val rows = ArrayList<Pair<String, View>>()
         for (c in tab.consoles) {
             val on = c.id == tab.consoleId
@@ -424,8 +425,8 @@ class MainActivity : Activity() {
                 background = when {
                     on && act != null -> rounded(col(R.color.t_accent), px(6), px(2), col(act))
                     on -> rounded(col(R.color.t_accent), px(6))
-                    act != null -> rounded(col(R.color.t_panel), px(6), px(1), col(act))
-                    else -> null
+                    act != null -> rounded(col(R.color.t_panel2), px(6), px(1), col(act))
+                    else -> rounded(col(R.color.t_panel2), px(6))
                 }
                 // The number itself drags (there is no room for a grip, as in the PWA's strip): a tap
                 // opens the console, a hold shows its actions, and moving a finger's width reorders.
