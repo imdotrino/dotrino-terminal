@@ -40,7 +40,7 @@ final class ConsolesUITests: XCTestCase {
         app.buttons["compose-send"].tap()
         sleep(1)
         // The whole line reached the console (the demo agent echoes what it gets).
-        let screen = app.otherElements["terminal"].firstMatch.value as? String ?? ""
+        let screen = app.descendants(matching: .any).matching(identifier: "terminal").firstMatch.value as? String ?? ""
         XCTAssertTrue(screen.contains("pantalla echo una línea"), "a long line is sent whole: \(screen.suffix(200))")
         compose.typeText("ls")
         app.buttons["compose-send"].tap()

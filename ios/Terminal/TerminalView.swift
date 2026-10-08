@@ -60,6 +60,8 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))))
         addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:))))
         accessibilityIdentifier = "terminal"
+        // One element with the screen as its value: a UI test can read what the console shows.
+        isAccessibilityElement = true
     }
 
     required init?(coder: NSCoder) { fatalError("not from a storyboard") }
