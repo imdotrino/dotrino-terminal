@@ -590,6 +590,8 @@ private struct ComposeField: UIViewRepresentable {
 
     final class Field: UITextField {
         var onEmptyBackspace: () -> Void = {}
+        /// No intrinsic WIDTH: SwiftUI would size the row by the text and push ⏎ off the screen.
+        override var intrinsicContentSize: CGSize { CGSize(width: UIView.noIntrinsicMetric, height: super.intrinsicContentSize.height) }
         override func deleteBackward() {
             if text?.isEmpty ?? true { onEmptyBackspace() }
             super.deleteBackward()
