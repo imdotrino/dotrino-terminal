@@ -178,6 +178,15 @@ mod tests {
     use super::{drop_target, panel_lines};
 
     #[test]
+    fn only_another_local_window_counts_as_open_elsewhere() {
+        let c = |watchers: &str| serde_json::from_str::<super::ConsoleInfo>(&format!(r#"{{"id":"a","watchers":{watchers}}}"#)).unwrap();
+        assert!(!c("[]").open_in_another_window("me"));
+        assert!(!c(r#"[{"origin":"local","tag":"me"}]"#).open_in_another_window("me"));
+        assert!(!c(r#"[{"origin":"local","tag":"me"},{"origin":"remote"}]"#).open_in_another_window("me"));
+        assert!(c(r#"[{"origin":"local","tag":"me"},{"origin":"local","tag":"other"}]"#).open_in_another_window("me"));
+    }
+
+    #[test]
     fn a_console_dropped_on_another_takes_its_place() {
         let ids = ["a", "b", "c", "d"];
         assert_eq!(drop_target(&ids, "c", "a"), Some(Some("a".to_string()))); // up: in front of it
@@ -251,6 +260,26 @@ impl ConsoleInfo {
 /// Ámbar = trabajando · verde = terminó sin atender. Los mismos de la PWA.
 const BUSY_COLOR: Color = Color::from_rgb(0.961, 0.761, 0.420);
 const DONE_COLOR: Color = Color::from_rgb(0.478, 0.843, 0.761);
+
+/// Verde = abierta en otra ventana de ESTA máquina.
+const ELSEWHERE_COLOR: Color = Color::from_rgb(0.298, 0.851, 0.392);
+
+impl ConsoleInfo {
+    /// ¿La muestra otra ventana de esta máquina? Lo abierto en otro aparato no cuenta.
+    fn open_in_another_window(&self, my_tag: &str) -> bool {
+        self.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref() != Some(my_tag))
+    }
+}
+
+/// El cuadrito de una consola con un punto verde en su esquina superior derecha cuando `on`.
+/// El punto no recibe el ratón: los clics llegan al botón de debajo.
+fn dotted<'a>(under: Element<'a, Message>, on: bool) -> Element<'a, Message> {
+    if !on {
+        return under;
+    }
+    let dot = container(space()).width(6).height(6).style(|_: &Theme| container::Style { background: Some(ELSEWHERE_COLOR.into()), border: Border::default().rounded(3.0), ..Default::default() });
+    iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(2)].into()
+}
 
 /// El botón de una consola en el panel, con el borde del color de lo que está haciendo.
 fn console_button(selected: bool, act: Act) -> impl Fn(&Theme, button::Status) -> button::Style {
@@ -1813,12 +1842,14 @@ impl App {
                     .padding([4, 0])
                     .style(console_button(is_mine, c.act()))
                     .on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
-                let b = self.console_menu(id, c.id.clone(), is_mine, container(b).center_x(Length::Fill).into());
+                let elsewhere = c.open_in_another_window(&my_tag);
+                let b = self.console_menu(id, c.id.clone(), is_mine, container(dotted(b.into(), elsewhere)).center_x(Length::Fill).into());
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
                     Act::Done => format!("{tip} · {}", t("terminó", "finished")),
                     Act::Idle => tip,
                 };
+                let tip = if elsewhere { format!("{tip} · {}", t("abierta en otra ventana", "open in another window")) } else { tip };
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
                 let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(draggable(&c.id, tipped, Length::Fixed(24.0)));
@@ -1891,6 +1922,7 @@ impl App {
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
+            let pick = dotted(pick.into(), c.open_in_another_window(&my_tag));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             items = items.push(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill));
         }
