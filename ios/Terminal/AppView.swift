@@ -185,6 +185,25 @@ struct Pill: View {
 
 // MARK: a console
 
+/// The arrow of the current console: a triangle that comes out of the panel's edge, level with its
+/// console, pointing at the terminal. It lives in a gutter of `CurrentArrow.width` beside the panel,
+/// painted with the terminal's background, and scrolls with its row.
+struct CurrentArrow: Shape {
+    static let width: CGFloat = 6
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.minY)); p.addLine(to: CGPoint(x: r.maxX, y: r.midY)); p.addLine(to: CGPoint(x: r.minX, y: r.maxY)); p.closeSubpath()
+        return p
+    }
+    /// The arrow on a row whose right edge is `gap` short of the panel's edge.
+    static func mark(_ on: Bool, gap: CGFloat) -> some View {
+        CurrentArrow().fill(Palette.accent).frame(width: width, height: width * 2).offset(x: gap + width)
+            .opacity(on ? 1 : 0).accessibilityHidden(true)
+    }
+    /// The panel's background, leaving the arrow's gutter in the terminal's colour.
+    static var back: some View { HStack(spacing: 0) { Palette.panel; Palette.bg.frame(width: width) } }
+}
+
 /// The ⤢ icon: a double diagonal arrow, drawn (the same path as the PWA, Android and the desktop app).
 struct SizeIcon: Shape {
     func path(in r: CGRect) -> Path {
@@ -377,7 +396,7 @@ private struct ConsoleScreen: View {
                 sizeButton(32, height: 56, fill: Palette.panel2)
                 ForEach(tab.consoles) { c in
                     let on = c.id == tab.consoleId
-                    Text((on ? ">" : "") + "\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
+                    Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
                         .frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Palette.panel2))
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
                         .contentShape(Rectangle())
@@ -385,12 +404,15 @@ private struct ConsoleScreen: View {
                         .onLongPressGesture { actions = c }
                         .accessibilityLabel(c.title.isEmpty ? t("console.n", ("n", c.n)) : c.title)
                         .accessibilityIdentifier("console-\(c.n)")
+                        .overlay(alignment: .trailing) { CurrentArrow.mark(on, gap: 4) }
                 }
             }
             .padding(.vertical, 4)
+            .frame(width: 40)
+            .frame(width: 40 + CurrentArrow.width, alignment: .leading)
         }
-        .frame(width: 40)
-        .background(Palette.panel)
+        .frame(width: 40 + CurrentArrow.width)
+        .background(CurrentArrow.back)
     }
 
     private func sizeWho(_ c: ConsoleInfo) -> String {
@@ -462,7 +484,7 @@ private struct ConsoleScreen: View {
                             // the PWA's panel; the folder and the title on their OWN rows, whole: cut to
                             // «…/…/nal» they said nothing.
                             let lines = panelLines(c.title, c.cwd, c.host)
-                            Text((on ? "> " : "") + "\(c.n)" + (lines.host.map { " · \($0)" } ?? ""))
+                            Text((on ? "● " : "") + "\(c.n)" + (lines.host.map { " · \($0)" } ?? ""))
                                 .font(.footnote.bold()).foregroundColor(Palette.text).lineLimit(1).truncationMode(.tail)
                             // ONE line each, never wrapped (a long path would push every row down); what
                             // does not fit is cut at the START, so the end — the folder — stays.
@@ -486,15 +508,18 @@ private struct ConsoleScreen: View {
                     .overlay(alignment: dropEdge(tab, c.id) ?? .top) { if dropEdge(tab, c.id) != nil { Rectangle().fill(Palette.accent).frame(height: 2) } }
                     .background(GeometryReader { g in Color.clear.preference(key: RowFrames.self, value: [c.id: g.frame(in: .named("drawer-rows"))]) })
                     .accessibilityIdentifier("drawer-console")
+                    .overlay(alignment: .trailing) { CurrentArrow.mark(on, gap: 8) }
                 }
             }
             .padding(8)
             .coordinateSpace(name: "drawer-rows")
             .onPreferenceChange(RowFrames.self) { rowFrames = $0 }
+            .frame(width: 270)
+            .frame(width: 270 + CurrentArrow.width, alignment: .leading)
         }
-        .frame(width: 270)
+        .frame(width: 270 + CurrentArrow.width)
         .frame(maxHeight: .infinity)
-        .background(Palette.panel)
+        .background(CurrentArrow.back)
         .accessibilityIdentifier("drawer")
     }
 

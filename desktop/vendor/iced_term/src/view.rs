@@ -325,10 +325,25 @@ impl<'a> TerminalView<'a> {
             },
             iced::keyboard::Event::KeyPressed {
                 key,
+                modified_key,
+                location,
                 modifiers,
                 text,
                 ..
-            } => match &key {
+            } => match {
+                // Parche de Dotrino: el teclado numérico. `key` es la tecla SIN modificadores, y
+                // Bloq Num cuenta como uno: para el «1» del numpad llega «Fin» (o nada reconocible)
+                // con o sin Bloq Num. Lo que vale ahí es la tecla ya modificada: un carácter se
+                // escribe tal cual, y lo demás (flechas, Inicio, Intro) sigue por los atajos.
+                if *location == iced::keyboard::Location::Numpad {
+                    if let (Key::Character(_), Some(c)) = (modified_key, text) {
+                        return Some(Command::Write(c.as_bytes().to_vec()));
+                    }
+                    modified_key
+                } else {
+                    key
+                }
+            } {
                 // Use the physical character key for bindings even when text is None (e.g., Ctrl/Cmd combos)
                 Key::Character(k) => {
                     let lower = k.to_ascii_lowercase();

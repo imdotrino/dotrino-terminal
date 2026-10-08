@@ -33,6 +33,8 @@ import kotlinx.coroutines.launch
  */
 class MainActivity : Activity() {
     private companion object {
+        /** How far the current console's arrow sticks out of the panel's edge, in dp. */
+        const val ARROW_DP = 6
         const val WIKI = "https://wiki.dotrino.com"
         /** The keys a phone keyboard lacks. A name [TerminalView.key] knows, or a literal character. */
         val EXTRA_KEYS = listOf("esc", "tab", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~")
@@ -258,7 +260,7 @@ class MainActivity : Activity() {
         tabNote = note
         // The consoles panel, as in the PWA: a strip on the left; open, it slides over the console
         // (on a phone, pushing the console aside would change its size).
-        val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, px(4), 0, px(4)) }
+        val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(5), px(4), 0, px(4)) }
         panel = side
         val stage = FrameLayout(this).apply {
             addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -266,10 +268,10 @@ class MainActivity : Activity() {
         }
         // The strip scrolls with the finger: nothing is sorted here (owner, 2026-10-07; sorting is the
         // open panel's grip).
-        val stripScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(side) }
+        val stripScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; background = panelWithGutter(); addView(side) }
         stripHost = stripScroll
         val body = LinearLayout(this).apply {
-            addView(stripScroll, LinearLayout.LayoutParams(px(40), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(stripScroll, LinearLayout.LayoutParams(px(40 + ARROW_DP), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(stage, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         }
         // The open panel takes the strip's place, BESIDE the console (owner, 2026-10-07): it does
@@ -380,6 +382,25 @@ class MainActivity : Activity() {
         ConsoleInfo.Activity.IDLE -> ""
     }
 
+    /**
+     * The arrow of the current console: a triangle that comes out of the panel's edge, level with
+     * its console, pointing at the terminal. It lives in a gutter of ARROW_DP beside the panel,
+     * painted with the terminal's background, and scrolls with its row.
+     */
+    private fun arrow(): View = object : View(this) {
+        private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = col(R.color.t_accent) }
+        private val path = android.graphics.Path()
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            path.reset(); path.moveTo(0f, 0f); path.lineTo(width.toFloat(), height / 2f); path.lineTo(0f, height.toFloat()); path.close()
+            canvas.drawPath(path, paint)
+        }
+    }.apply { tag = "current-arrow" }
+
+    /** The panel's background, leaving the arrow's gutter in the terminal's colour. */
+    private fun panelWithGutter() = android.graphics.drawable.LayerDrawable(arrayOf(
+        android.graphics.drawable.ColorDrawable(col(R.color.t_bg)), android.graphics.drawable.ColorDrawable(col(R.color.t_panel)),
+    )).apply { setLayerInset(1, 0, 0, px(ARROW_DP), 0) }
+
     private fun renderPanel() {
         if (dragging != null) return        // mid-drag the panel is not redrawn: it would take the row away
         val side = panel ?: return
@@ -399,7 +420,8 @@ class MainActivity : Activity() {
             val on = c.id == tab.consoleId
             // Amber while something works in it, green when it finished and nobody looked (as the PWA's panel).
             val act = actColor(c)
-            side.addView(label((if (on) ">" else "") + "${c.n}", 13f, col(if (on) R.color.t_on_accent else act ?: R.color.t_text), bold = on || act != null).apply {
+            val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            row.addView(label("${c.n}", 13f, col(if (on) R.color.t_on_accent else act ?: R.color.t_text), bold = on || act != null).apply {
                 tag = "console-${c.n}"; contentDescription = c.title.ifBlank { t("console.n", "n" to c.n) } + actText(c)
                 gravity = Gravity.CENTER; setPadding(0, px(5), 0, px(5))
                 background = when {
@@ -411,7 +433,9 @@ class MainActivity : Activity() {
                 setOnClickListener { tab.switchTo(c.id) }
                 setOnLongClickListener { consoleActions(tab, c); true }
                 // Tall (44 dp): at 30 they were hard to hit (owner, 2026-10-07).
-            }, LinearLayout.LayoutParams(px(30), px(44)).apply { topMargin = px(3) })
+            }, LinearLayout.LayoutParams(px(30), px(44)))
+            if (on) row.addView(arrow(), LinearLayout.LayoutParams(px(ARROW_DP), px(ARROW_DP * 2)).apply { marginStart = px(5) })
+            side.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(3) })
         }
         if (panelOpen) openDrawer(true)
     }
@@ -479,7 +503,7 @@ class MainActivity : Activity() {
         stripHost?.visibility = if (open) View.GONE else View.VISIBLE
         if (!open) return
         val tab = active ?: return
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(8), px(6), px(8), px(10)) }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(8), px(6), 0, px(10)) }
         list.addView(LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(label("«", 16f, col(R.color.t_text)).apply { tag = "panel-close"; contentDescription = t("panel.close"); setPadding(px(6), px(4), px(10), px(4)); setOnClickListener { openDrawer(false) } })
@@ -498,10 +522,13 @@ class MainActivity : Activity() {
                 addView(sizeButton(tab), LinearLayout.LayoutParams(px(32), px(32)))
             })
         }
+        // What is above the consoles stops short of the arrow's gutter; the consoles' rows reach it.
+        for (i in 0 until list.childCount) (list.getChildAt(i).layoutParams as LinearLayout.LayoutParams).marginEnd = px(8 + ARROW_DP)
         val rows = ArrayList<Pair<String, View>>()
         for (c in tab.consoles) {
             val on = c.id == tab.consoleId
-            list.addView(LinearLayout(this).apply {
+            val line = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; if (!on) setPadding(0, 0, px(ARROW_DP), 0) }
+            line.addView(LinearLayout(this).apply {
                 tag = "drawer-console"; gravity = Gravity.CENTER_VERTICAL
                 rows.add(c.id to this)
                 addView(grip(tab, c.id, rows))
@@ -520,7 +547,7 @@ class MainActivity : Activity() {
                     // PWA's panel; the folder and the title on their OWN rows, whole: cut to «…/…/nal»
                     // they said nothing.
                     val lines = panelLines(c.title, c.cwd, c.host)
-                    addView(label((if (on) "> " else "") + "${c.n}" + (lines.host?.let { " · $it" } ?: ""), 13f, bold = true).apply {
+                    addView(label((if (on) "● " else "") + "${c.n}" + (lines.host?.let { " · $it" } ?: ""), 13f, bold = true).apply {
                         tag = "drawer-host"; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END
                     })
                     // ONE line each, never wrapped (a long path would push every row down); what does
@@ -535,10 +562,12 @@ class MainActivity : Activity() {
                     setOnLongClickListener { consoleActions(tab, c); true }
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(label("×", 16f, col(R.color.t_muted)).apply { tag = "console-kill"; contentDescription = t("console.kill"); setPadding(px(10), px(4), px(8), px(4)); setOnClickListener { tab.killConsole(c.id) } })
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(5) })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = px(8) })
+            if (on) line.addView(arrow(), LinearLayout.LayoutParams(px(ARROW_DP), px(ARROW_DP * 2)))
+            list.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = px(5) })
         }
-        val d = ScrollView(this).apply { tag = "drawer"; setBackgroundColor(col(R.color.t_panel)); addView(list) }
-        stage.addView(d, 0, LinearLayout.LayoutParams(px(270), ViewGroup.LayoutParams.MATCH_PARENT))
+        val d = ScrollView(this).apply { tag = "drawer"; background = panelWithGutter(); addView(list) }
+        stage.addView(d, 0, LinearLayout.LayoutParams(px(270 + ARROW_DP), ViewGroup.LayoutParams.MATCH_PARENT))
         drawer = d
     }
 

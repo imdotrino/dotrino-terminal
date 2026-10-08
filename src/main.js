@@ -678,9 +678,8 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Pasar a otra consola (o a una nueva) en la misma conexión: toma el tamaño de esta pantalla. */
   async function switchTo (s, id, p = s.focus) {
     if (id && id === p.agent.consoleId) return
-    // Si esa consola ya está en otro panel de esta pestaña, se va a ese panel en vez de verla dos veces.
-    const already = id && s.panes.find((x) => x !== p && x.agent?.consoleId === id)
-    if (already) { focusPane(s, already); return }
+    // Cada panel elige por su cuenta (dueño, 2026-10-08): la misma consola puede verse en dos
+    // paneles a la vez, como en dos pantallas.
     const { cols, rows } = fitted(p)
     try {
       p.term.reset()
@@ -714,8 +713,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   /** Cerrar una consola. Si está en un panel de esta pestaña, ese panel pasa antes a otra (o a una nueva). */
   async function killConsole (s, id) {
-    const p = s.panes.find((x) => x.agent?.consoleId === id)
-    if (p) await moveAway(s, p, id)
+    for (const p of s.panes.filter((x) => x.agent?.consoleId === id)) await moveAway(s, p, id)
     s.agent.kill(id)
     setTimeout(() => refresh(s), 200)
   }
@@ -756,11 +754,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Clic derecho (o mantener pulsado) sobre una consola: lo que se puede hacer con ella. */
   function consoleMenu (s, p, id, x, y) {
     document.querySelector('.cmenu')?.remove()
-    const inPane = s.panes.some((x) => x.agent?.consoleId === id)
+    // «Abrir aquí» solo sobra si este panel ya la tiene; a la derecha o abajo vale siempre.
+    const mine = p.agent?.consoleId === id
     const m = el(`<div class="cmenu" style="left:${x}px;top:${y}px">
-      <button data-a="here" ${inPane ? 'disabled' : ''}>${t('open_here')}</button>
-      <button data-a="right" ${inPane ? 'disabled' : ''}>${t('open_right')}</button>
-      <button data-a="down" ${inPane ? 'disabled' : ''}>${t('open_down')}</button>
+      <button data-a="here" ${mine ? 'disabled' : ''}>${t('open_here')}</button>
+      <button data-a="right">${t('open_right')}</button>
+      <button data-a="down">${t('open_down')}</button>
       <button data-a="kill">${t('kill_console')}</button>
     </div>`)
     m.addEventListener('click', (e) => {

@@ -294,6 +294,32 @@ fn dotted<'a>(under: Element<'a, Message>, on: bool, faint: bool) -> Element<'a,
     iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(3)].into()
 }
 
+/// Lo que la flecha de la consola activa sobresale del borde del panel.
+const ARROW_W: f32 = 6.0;
+const ARROW: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 12"><path d="M0 0l6 6-6 6z" fill="black"/></svg>"#;
+
+/// La flecha de la consola activa: un triángulo que sale del borde del panel, a la altura de su
+/// consola, y apunta a la terminal. Se pinta sobre la fila, pegado a su derecha, en la franja
+/// de `ARROW_W` que el panel deja libre junto a la terminal.
+fn arrowed<'a>(under: Element<'a, Message>, on: bool) -> Element<'a, Message> {
+    let under = container(under).padding(iced::Padding { right: ARROW_W, ..Default::default() });
+    if !on {
+        return under.into();
+    }
+    let arrow = iced::widget::svg(iced::widget::svg::Handle::from_memory(ARROW)).width(ARROW_W).height(ARROW_W * 2.0).style(|theme: &Theme, _| iced::widget::svg::Style { color: Some(theme.palette().primary) });
+    iced::widget::stack![under, container(arrow).width(Length::Fill).height(Length::Fill).align_x(iced::alignment::Horizontal::Right).align_y(iced::alignment::Vertical::Center)].into()
+}
+
+/// El panel con su franja para la flecha: el fondo del panel a su ancho y, al lado, `ARROW_W` con
+/// el fondo de la terminal; encima, el contenido, que se desplaza con la flecha dentro.
+fn with_arrow_gutter<'a>(content: Element<'a, Message>, width: f32, pad: iced::Padding, term_bg: Color) -> Element<'a, Message> {
+    let back = row![
+        container(space()).width(width).height(Length::Fill).style(|theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() }),
+        container(space()).width(ARROW_W).height(Length::Fill).style(move |_: &Theme| container::Style { background: Some(term_bg.into()), ..Default::default() }),
+    ];
+    iced::widget::stack![back, container(iced::widget::scrollable(content)).width(width + ARROW_W).height(Length::Fill).padding(pad)].into()
+}
+
 /// El botón de una consola en el panel, con el borde del color de lo que está haciendo.
 fn console_button(selected: bool, act: Act) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme, status| {
@@ -1750,6 +1776,12 @@ impl App {
         let panel_style = |theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() };
         // Colapsado: una franja estrecha, un botón numerado por consola (el título, al pasar).
         let collapsed = self.windows.get(&id).is_some_and(|w| w.sidebar_collapsed);
+        // La franja de la flecha lleva el fondo de la terminal: se lee como parte de ella.
+        let term_bg = {
+            let h = self.palette.background.trim_start_matches('#');
+            let part = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).unwrap_or(0);
+            Color::from_rgb8(part(0), part(2), part(4))
+        };
         // Con un cliente viejo, nada de lo que cambia de consola funciona: deshabilitado, y por qué.
         let ready = self.panel_ready();
         let why = t("Actualiza dotrino-terminal (Perfil → Actualizar) para usar el panel", "Update dotrino-terminal (Profile → Update) to use the panel");
@@ -1792,15 +1824,14 @@ impl App {
                 button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
                 pin_btn(24.0),
             ]
-            .spacing(4)
-            .align_x(iced::Alignment::Center);
+            .spacing(4);
             for (i, c) in list.iter().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let is_mine = mine.as_deref() == Some(c.id.as_str());
                 let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref().or(user_at_host().as_deref()));
                 let tip = [host, dir, name].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 let tip = if tip.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { tip };
-                let b = button(centered(if is_mine { format!(">{n}") } else { format!("{n}") }, 12))
+                let b = button(centered(format!("{n}"), 12))
                     .width(24)
                     .padding([4, 0])
                     .style(console_button(is_mine, c.act()))
@@ -1815,10 +1846,10 @@ impl App {
                 let tip = if c.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref() != Some(my_tag.as_str())) { format!("{tip} · {}", t("abierta en otra ventana", "open in another window")) } else { tip };
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
                 let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
-                strip = strip.push(draggable(&c.id, tipped, Length::Fixed(24.0)));
+                strip = strip.push(arrowed(draggable(&c.id, tipped, Length::Fixed(24.0)), is_mine));
             }
             // Lo justo para dos dígitos («00»): 24 px de botón en 30 de franja.
-            return container(iced::widget::scrollable(strip)).width(30).height(Length::Fill).padding([4, 3]).style(panel_style).into();
+            return with_arrow_gutter(strip.into(), 30.0, iced::Padding { top: 4.0, bottom: 4.0, left: 3.0, right: 0.0 }, term_bg);
         }
         // Como en la franja colapsada: «« » arriba y «+» en su propia fila, debajo.
         let mut items = column![
@@ -1849,6 +1880,8 @@ impl App {
         if !ready {
             items = items.push(note(why.clone()));
         }
+        // Lo de arriba no llega a la franja de la flecha; las filas de las consolas sí.
+        let mut items = column![container(items).padding(iced::Padding { right: 4.0 + ARROW_W, ..Default::default() })].spacing(2);
         for (i, c) in list.iter().enumerate() {
             let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
             let is_mine = mine.as_deref() == Some(c.id.as_str());
@@ -1876,7 +1909,7 @@ impl App {
             let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), user_at_host().as_deref());
             let mut lines = [host, dir, name].into_iter().flatten();
             let first = lines.next().map(|l| format!("{n} · {l}")).unwrap_or_else(|| format!("{} {}", t("Consola", "Console"), n));
-            let mut label = column![text(format!("{}{first}", if is_mine { "> " } else { "" })).size(12)];
+            let mut label = column![text(format!("{}{first}", if is_mine { "● " } else { "" })).size(12)];
             for l in lines {
                 label = label.push(text(l).size(12));
             }
@@ -1885,9 +1918,10 @@ impl App {
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
             let pick = dotted(pick.into(), is_mine || c.open_in_a_window(), self.blink_off && self.blinks(c));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
-            items = items.push(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill));
+            let entry = container(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill)).padding(iced::Padding { right: 4.0, ..Default::default() });
+            items = items.push(arrowed(entry.into(), is_mine));
         }
-        container(iced::widget::scrollable(items)).width(210).height(Length::Fill).padding(4).style(panel_style).into()
+        with_arrow_gutter(items.into(), 210.0, iced::Padding { top: 4.0, bottom: 4.0, left: 4.0, right: 0.0 }, term_bg)
     }
 
     fn title(&self, id: window::Id) -> String {
