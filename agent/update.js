@@ -62,8 +62,7 @@ export function vaultHooks ({ dir, product = PKG, log = console.log, load = load
  * `dir` es la carpeta de datos de ESTA instancia (su enlace y sus ajustes) y `version` la
  * que está en marcha. Lo demás es para las pruebas.
  *
- * @param { dir: string, version: string, agent: { consoles: { consoles: Map<string, unknown> }, close: () => void }, exit?: (code: number) => void,
- *   log?: (m: string) => void, watch?: (o: any) => (() => void), hooks?: object, idleCheckMs?: number } o
+ * @param {{ dir: string, version: string, agent: { consoles: { consoles: Map<string, unknown> }, close: () => void }, exit?: (code: number) => void, log?: (m: string) => void, watch?: (o: any) => (() => void), hooks?: object, idleCheckMs?: number }} o
  * @returns {() => void} para dejar de mirar
  */
 export function startSelfUpdate ({ dir, version, agent, exit = (code) => process.exit(code), log = console.log, watch = watchSelfUpdateNpm, hooks = vaultHooks({ dir, log }), idleCheckMs = IDLE_CHECK_MS }) {
