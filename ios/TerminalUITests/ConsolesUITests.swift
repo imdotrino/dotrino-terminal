@@ -50,7 +50,7 @@ final class ConsolesUITests: XCTestCase {
         // Empty, a text field's value is its placeholder.
         XCTAssertNotEqual(compose.value as? String ?? "", "ls", "sent, the line is empty again")
         app.buttons["key-compose"].tap()
-        XCTAssertFalse(compose.exists, "✎ again hides the line")
+        XCTAssertTrue(compose.waitForNonExistence(timeout: 5), "✎ again hides the line")
 
         app.buttons["panel-open"].tap()
         XCTAssertTrue(app.buttons["panel-close"].waitForExistence(timeout: 5))
