@@ -332,7 +332,7 @@ private struct ConsoleScreen: View {
         .background(Palette.panel)
     }
 
-    private func sizeButton(_ size: CGFloat) -> some View {
+    private func sizeButton(_ size: CGFloat, height: CGFloat? = nil) -> some View {
         let on = tab.sizeHere, n = tab.number
         return Button { toggleSize() } label: {
             SizeIcon().stroke(on ? Palette.accent : Palette.muted, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
@@ -343,7 +343,7 @@ private struct ConsoleScreen: View {
         .disabled(n == nil)
         .accessibilityLabel(n.map { on ? t("size.release", ("n", $0)) : t("size.use", ("n", $0)) } ?? t("size.use", ("n", "")))
         .accessibilityIdentifier("size")
-        .frame(width: size, height: size)
+        .frame(width: size, height: height ?? size)
     }
 
     private func toggleSize() {
@@ -367,11 +367,12 @@ private struct ConsoleScreen: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 4) {
-                    Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 44) }
+                    Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 56) }
                         .accessibilityLabel(t("panel.open")).accessibilityIdentifier("panel-open").id("strip-top")
-                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 44) }
+                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 56) }
                         .accessibilityLabel(t("console.new")).accessibilityIdentifier("console-new")
-                    sizeButton(32)
+                    // All the strip's buttons the same height as the numbers (owner, 2026-10-07).
+                    sizeButton(32, height: 56)
                     ForEach(tab.consoles) { c in
                         let on = c.id == tab.consoleId
                         // Tall (56 pt, twice the old 28): at 28, and at 40, they were hard to hit (owner, 2026-10-07).
