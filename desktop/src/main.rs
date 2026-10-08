@@ -278,7 +278,7 @@ fn dotted<'a>(under: Element<'a, Message>, on: bool) -> Element<'a, Message> {
         return under;
     }
     let dot = container(space()).width(6).height(6).style(|_: &Theme| container::Style { background: Some(ELSEWHERE_COLOR.into()), border: Border::default().rounded(3.0), ..Default::default() });
-    iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(2)].into()
+    iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(5)].into()
 }
 
 /// El botón de una consola en el panel, con el borde del color de lo que está haciendo.
