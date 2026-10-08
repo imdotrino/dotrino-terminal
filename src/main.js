@@ -772,11 +772,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.side.addEventListener('touchstart', (e) => { const tt = e.touches[0]; hold = setTimeout(() => menuAt(e.target, tt.clientX, tt.clientY), 550) }, { passive: true })
     for (const ev of ['touchend', 'touchmove', 'touchcancel']) s.side.addEventListener(ev, () => clearTimeout(hold), { passive: true })
 
-    // ORDENAR ARRASTRANDO: una consola se suelta sobre otra y toma su sitio. Con ratón se arrastra
-    // la fila entera (o su número, con el panel plegado); con el dedo, por el asa ⠿, para que el
-    // resto de la fila siga sirviendo para desplazar el panel. Con el panel plegado, el dedo NO ordena
-    // (dueño, 2026-10-07): desplaza la franja; con ratón sí se arrastra el número. El orden es de la máquina.
-    const ITEMS = '.srow.item, .sbtn.num'
+    // ORDENAR ARRASTRANDO, solo en el panel ABIERTO: una consola se suelta sobre otra y toma su sitio.
+    // Con ratón se arrastra la fila entera; con el dedo, por el asa ⠿, para que el resto de la fila
+    // siga sirviendo para desplazar el panel. En la franja plegada NO se ordena con nada (dueño,
+    // 2026-10-07, dos veces): los números solo se tocan, y la franja se desplaza. El orden es de la máquina.
+    const ITEMS = '.srow.item'
     const unmark = () => { for (const el of s.side.querySelectorAll('.drop-before, .drop-after, .dragged')) el.classList.remove('drop-before', 'drop-after', 'dragged') }
     const endDrag = () => { s.drag = null; s.side.classList.remove('dragging'); unmark() }
     s.side.addEventListener('pointerdown', (e) => {

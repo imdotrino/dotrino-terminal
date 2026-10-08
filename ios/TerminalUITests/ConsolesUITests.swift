@@ -32,6 +32,13 @@ final class ConsolesUITests: XCTestCase {
         app.buttons["key-compose"].tap()
         let compose = app.textFields["compose-input"]
         XCTAssertTrue(compose.waitForExistence(timeout: 5))
+        // A long line must not widen the row: ⏎ stays on screen.
+        let screenW = app.windows.firstMatch.frame.width
+        compose.typeText(String(repeating: "echo una línea muy larga que no cabe en el ancho de la pantalla ", count: 3))
+        XCTAssertLessThanOrEqual(app.buttons["compose-send"].frame.maxX, screenW, "⏎ stays inside the screen with a long line")
+        shot("3c0-compose-long")
+        app.buttons["compose-send"].tap()
+        sleep(1)
         compose.typeText("ls")
         app.buttons["compose-send"].tap()
         sleep(1)

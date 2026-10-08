@@ -507,7 +507,9 @@ private struct ConsoleScreen: View {
                          onEmptyBackspace: { view?.key("backspace") },
                          // With Ctrl or Alt lit, the next character is a key for the console (Ctrl+C), not text.
                          takesKey: { view.map { $0.ctrl || $0.alt } ?? false }, sendKey: { view?.type($0) })
-                .frame(height: 38)
+                // The field takes the width that is left and never asks for more: a long line scrolls
+                // INSIDE it (owner, 2026-10-07: it was pushing the row wider than the screen).
+                .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38)
             Button(action: sendCompose) {
                 Text("⏎").font(.title3.bold()).foregroundColor(Palette.onAccent).padding(.horizontal, 14).padding(.vertical, 7)
                     .background(RoundedRectangle(cornerRadius: 10).fill(Palette.accent))
@@ -624,6 +626,9 @@ private struct ComposeField: UIViewRepresentable {
         f.smartQuotesType = .no; f.smartDashesType = .no; f.smartInsertDeleteType = .no
         f.keyboardType = .asciiCapable; f.keyboardAppearance = .dark; f.returnKeyType = .send
         f.accessibilityIdentifier = "compose-input"
+        // Its text never widens the layout: the field yields, and the text scrolls inside it.
+        f.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        f.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return f
     }
 
