@@ -399,7 +399,7 @@ class MainActivity : Activity() {
             val on = c.id == tab.consoleId
             // Amber while something works in it, green when it finished and nobody looked (as the PWA's panel).
             val act = actColor(c)
-            side.addView(label("${c.n}", 13f, col(if (on) R.color.t_on_accent else act ?: R.color.t_text), bold = on || act != null).apply {
+            side.addView(label((if (on) ">" else "") + "${c.n}", 13f, col(if (on) R.color.t_on_accent else act ?: R.color.t_text), bold = on || act != null).apply {
                 tag = "console-${c.n}"; contentDescription = c.title.ifBlank { t("console.n", "n" to c.n) } + actText(c)
                 gravity = Gravity.CENTER; setPadding(0, px(5), 0, px(5))
                 background = when {
@@ -520,7 +520,7 @@ class MainActivity : Activity() {
                     // PWA's panel; the folder and the title on their OWN rows, whole: cut to «…/…/nal»
                     // they said nothing.
                     val lines = panelLines(c.title, c.cwd, c.host)
-                    addView(label((if (on) "● " else "") + "${c.n}" + (lines.host?.let { " · $it" } ?: ""), 13f, bold = true).apply {
+                    addView(label((if (on) "> " else "") + "${c.n}" + (lines.host?.let { " · $it" } ?: ""), 13f, bold = true).apply {
                         tag = "drawer-host"; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END
                     })
                     // ONE line each, never wrapped (a long path would push every row down); what does

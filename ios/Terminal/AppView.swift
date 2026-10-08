@@ -377,7 +377,7 @@ private struct ConsoleScreen: View {
                 sizeButton(32, height: 56, fill: Palette.panel2)
                 ForEach(tab.consoles) { c in
                     let on = c.id == tab.consoleId
-                    Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
+                    Text((on ? ">" : "") + "\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
                         .frame(width: 32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Palette.panel2))
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
                         .contentShape(Rectangle())
@@ -462,7 +462,7 @@ private struct ConsoleScreen: View {
                             // the PWA's panel; the folder and the title on their OWN rows, whole: cut to
                             // «…/…/nal» they said nothing.
                             let lines = panelLines(c.title, c.cwd, c.host)
-                            Text((on ? "● " : "") + "\(c.n)" + (lines.host.map { " · \($0)" } ?? ""))
+                            Text((on ? "> " : "") + "\(c.n)" + (lines.host.map { " · \($0)" } ?? ""))
                                 .font(.footnote.bold()).foregroundColor(Palette.text).lineLimit(1).truncationMode(.tail)
                             // ONE line each, never wrapped (a long path would push every row down); what
                             // does not fit is cut at the START, so the end — the folder — stays.

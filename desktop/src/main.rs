@@ -1800,7 +1800,7 @@ impl App {
                 let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref().or(user_at_host().as_deref()));
                 let tip = [host, dir, name].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 let tip = if tip.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { tip };
-                let b = button(centered(format!("{n}"), 12))
+                let b = button(centered(if is_mine { format!(">{n}") } else { format!("{n}") }, 12))
                     .width(24)
                     .padding([4, 0])
                     .style(console_button(is_mine, c.act()))
@@ -1876,7 +1876,7 @@ impl App {
             let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), user_at_host().as_deref());
             let mut lines = [host, dir, name].into_iter().flatten();
             let first = lines.next().map(|l| format!("{n} · {l}")).unwrap_or_else(|| format!("{} {}", t("Consola", "Console"), n));
-            let mut label = column![text(format!("{}{first}", if is_mine { "● " } else { "" })).size(12)];
+            let mut label = column![text(format!("{}{first}", if is_mine { "> " } else { "" })).size(12)];
             for l in lines {
                 label = label.push(text(l).size(12));
             }

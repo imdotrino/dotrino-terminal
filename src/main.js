@@ -554,7 +554,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Esas líneas como filas del panel abierto; el número va con la primera. */
   function rows (c, i, mine) {
     const [first, ...more] = linesOf(c)
-    const head = `${c.id === mine ? '● ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
+    const head = `${c.id === mine ? '&gt; ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
     return `<span>${head}</span>` + more.map((l) => `<span>${esc(l)}</span>`).join('')
   }
 
@@ -635,7 +635,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${c.id === mine ? '&gt;' : ''}${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
