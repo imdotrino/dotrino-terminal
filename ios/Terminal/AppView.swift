@@ -367,16 +367,16 @@ private struct ConsoleScreen: View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 4) {
-                    Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 30) }
+                    Button { withAnimation(.easeOut(duration: 0.15)) { drawer = true } } label: { Text("»").foregroundColor(Palette.text).frame(width: 32, height: 44) }
                         .accessibilityLabel(t("panel.open")).accessibilityIdentifier("panel-open").id("strip-top")
-                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 30) }
+                    Button { tab.switchTo(nil) } label: { Text("+").foregroundColor(Palette.text).frame(width: 32, height: 44) }
                         .accessibilityLabel(t("console.new")).accessibilityIdentifier("console-new")
                     sizeButton(32)
                     ForEach(tab.consoles) { c in
                         let on = c.id == tab.consoleId
-                        // Tall (40 pt): at 28 they were hard to hit (owner, 2026-10-07).
+                        // Tall (56 pt, twice the old 28): at 28, and at 40, they were hard to hit (owner, 2026-10-07).
                         Text("\(c.n)").font(.footnote.weight(on ? .bold : .regular)).foregroundColor(on ? Palette.onAccent : Palette.text)
-                            .frame(width: 30, height: 40).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Color.clear))
+                            .frame(width: 30, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accent : Color.clear))
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(actColor(c) ?? .clear, lineWidth: on ? 2 : 1))
                             .overlay(alignment: dropEdge(tab, c.id) ?? .top) {
                                 if dropEdge(tab, c.id) != nil { Rectangle().fill(Palette.accent).frame(height: 2) }
