@@ -62,6 +62,7 @@ const M = {
     connected: (a) => `Conectado a ${a}`,
     error: 'Error: ',
     close: 'Cerrar',
+    close_tab: 'Cerrar la pestaña (la consola sigue en la máquina)',
     exited: (c) => `[la consola terminó (${c})]`,
     new_console: 'Nueva consola',
     kill_console: 'Cerrar esta consola',
@@ -141,6 +142,7 @@ const M = {
     connected: (a) => `Connected to ${a}`,
     error: 'Error: ',
     close: 'Close',
+    close_tab: 'Close the tab (the console stays on the machine)',
     exited: (c) => `[console ended (${c})]`,
     new_console: 'New console',
     kill_console: 'Close this console',
@@ -491,11 +493,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     persist()
     if (active === s) setActive(sessions[sessions.length - 1] || null)
   }
-  // La × MATA la consola en la máquina (si hay una enganchada) y quita la pestaña.
-  function closeSession (s) { for (const p of s.panes) { try { p.agent?.close() } catch {} } removeSession(s) }
+  // La × de la pestaña SUELTA las consolas (siguen vivas en la máquina; dueño, 2026-10-07: cerrar la
+  // pestaña nunca cierra la consola) y quita la pestaña. Una consola se cierra desde el panel.
+  function closeSession (s) { for (const p of s.panes) { try { p.agent?.disconnect() } catch {} } removeSession(s) }
 
   function renderTab (s) {
-    s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel" title="${esc(s.alias)}">${esc(s.alias.split(' · ')[0])}</span><span class="x" title="${t('close')}">×</span></button>`)
+    s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel" title="${esc(s.alias)}">${esc(s.alias.split(' · ')[0])}</span><span class="x" title="${t('close_tab')}">×</span></button>`)
     s.tab.addEventListener('click', (e) => { if (!e.target.classList.contains('x')) setActive(s) })
     s.tab.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); closeSession(s) })
     tabsEl.appendChild(s.tab)

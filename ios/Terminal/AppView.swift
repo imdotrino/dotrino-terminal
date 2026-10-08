@@ -314,7 +314,7 @@ private struct ConsoleScreen: View {
                     HStack(spacing: 6) {
                         Circle().fill(tb.state == .open ? Palette.online : (tb.state == .exited || tb.state == .failed ? Palette.danger : Palette.muted)).frame(width: 7, height: 7)
                         Text(String(tb.machine.label.prefix(20))).font(.caption.bold()).foregroundColor(Palette.text)
-                        Button { tb.kill() } label: { Text("×").foregroundColor(Palette.muted) }.accessibilityLabel(t("tab.close")).accessibilityIdentifier("tab-close")
+                        Button { tb.leave() } label: { Text("×").foregroundColor(Palette.muted) }.accessibilityLabel(t("tab.close")).accessibilityIdentifier("tab-close")
                     }
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 10).fill(on ? Palette.panel2 : Palette.panel))

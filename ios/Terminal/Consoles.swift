@@ -452,9 +452,10 @@ final class Tab: ObservableObject, Identifiable {
         try? channel?.send(.object(o))
     }
 
-    /// The tab's ×: closes the console on screen on the machine too (as the PWA's × does), and the tab.
-    func kill() {
-        if state == .open { try? channel?.send(["type": "close"]) }
+    /// The tab's ×: LEAVES the console (it stays alive on the machine; owner, 2026-10-07: closing the
+    /// tab must never close the console) and drops the tab. A console is closed from the panel.
+    func leave() {
+        if state == .open { try? channel?.send(["type": "detach"]) }
         release(); onDrop()
     }
 

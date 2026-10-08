@@ -312,7 +312,7 @@ class MainActivity : Activity() {
                 addView(label(tab.label.take(20), 12f, col(R.color.t_text), bold = true))
                 addView(label("×", 15f, col(R.color.t_muted)).apply {
                     tag = "tab-close"; contentDescription = t("tab.close"); setPadding(px(8), 0, px(6), 0)
-                    setOnClickListener { tab.kill() }
+                    setOnClickListener { tab.leave() }
                 })
                 setOnClickListener { if (active !== tab) { active = tab; render() } }
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(4) })

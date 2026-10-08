@@ -210,7 +210,7 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     }
 
     /// The shell wrote something: draw it.
-    func onOutput() { setNeedsDisplay() }
+    func onOutput() { setNeedsDisplay(); accessibilityValue = terminal?.screenText() }
 
     // MARK: touch: scroll the history, pan, zoom the font, open the keyboard
 

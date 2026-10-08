@@ -538,8 +538,10 @@ object Consoles {
         }
 
         /** The tab's ×: closes the console on screen on the machine too (as the PWA's × does), and the tab. */
-        fun kill() {
-            if (state == State.OPEN) try { channel?.send(buildJsonObject { put("type", "close") }) } catch (_: Exception) {}
+        /** The tab's ×: LEAVES the console (it stays alive on the machine; owner, 2026-10-07: closing the
+         *  tab must never close the console) and drops the tab. A console is closed from the panel. */
+        fun leave() {
+            if (state == State.OPEN) try { channel?.send(buildJsonObject { put("type", "detach") }) } catch (_: Exception) {}
             drop()
         }
 
