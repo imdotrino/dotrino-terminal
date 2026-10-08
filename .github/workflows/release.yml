@@ -62,12 +62,22 @@ jobs:
         with:
           subject-path: 'agent/sbom-*.cdx.json'
 
-      - name: Publicar en npm
-        run: npm publish --access public
+      # LO QUE SE PUBLICA ES LO QUE SE MIDIÓ (CONVENCIONES §15). El agente instalado se
+      # actualiza solo, y antes comprueba que el tarball que le da npm cuadra con el hash que
+      # esta release adjunta (`npm-integrity.json`): por eso se empaqueta UNA vez, se mide ese
+      # archivo y se publica ESE archivo, byte a byte.
+      - name: Empaquetar
+        run: npm pack
+      - name: Medir lo que se va a publicar
+        run: npx --yes @dotrino/update@latest integrity ./*.tgz > npm-integrity.json
+      - name: Publicar en npm ESE archivo
+        run: npm publish ./*.tgz --access public
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: 'agent/sbom-*.cdx.json'
+          files: |
+            agent/sbom-*.cdx.json
+            agent/npm-integrity.json
           generate_release_notes: true
           # «Latest» es la de la app de escritorio: la portada descarga de releases/latest, y
           # esta release no trae instaladores (el agente va por npm).

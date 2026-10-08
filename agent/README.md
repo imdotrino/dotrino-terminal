@@ -16,8 +16,25 @@ npx @dotrino/terminal-agent enroll           # re-enlaza y corre
 npx @dotrino/terminal-agent --name casa      # otro agente en la misma máquina, con su enlace
 npx @dotrino/terminal-agent list             # los enlazados aquí
 npx @dotrino/terminal-agent info             # qué aparato es: su ID, su bóveda, sus permisos
+npx @dotrino/terminal-agent update           # cómo se actualiza: [--approval on|off] [--notify on|off]
 #   [--proxy wss://…] [--shell /bin/zsh] [--dir /ruta]
 ```
+
+### Se actualiza solo
+
+Instalado con `npm install -g` en un prefijo del usuario (nvm o similar), el agente mira una
+vez al día si hay versión nueva, comprueba que el paquete de npm cuadra con lo que midió su
+release de GitHub (`npm-integrity.json`) y la instala (`@dotrino/update/npm`, CONVENCIONES §15).
+Corrido con `npx`, desde un checkout o en un prefijo de root no se toca: lo dice y, si hace
+falta root, avisa a quien aprueba en tu cuenta.
+
+- **Dos ajustes, de cada agente** (`update --approval on|off`, `update --notify on|off`): pedir
+  antes aprobación a tu bóveda (apagado) y avisar de que se actualizó (encendido).
+- **Reiniciar cierra las consolas**, así que la versión nueva se instala al salir pero el
+  agente solo se reinicia cuando no queda ninguna consola abierta, y solo si hay quien lo
+  levante (systemd, pm2).
+- `info` dice si hay una versión que se pidió y no se aprobó, o que necesita permisos de
+  administrador.
 
 Las ventanas de esta máquina:
 
