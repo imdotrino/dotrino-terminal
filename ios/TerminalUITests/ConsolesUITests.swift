@@ -11,7 +11,8 @@ final class ConsolesUITests: XCTestCase {
 
     func testSwitchSizeAndPanel() {
         let app = XCUIApplication()
-        app.launchArguments = ["-demo"]
+        // `-compose 0`: the writing line starts OFF whatever an earlier run left in the defaults.
+        app.launchArguments = ["-demo", "-compose", "0"]
         app.launch()
         XCTAssertTrue(app.buttons["console-new"].waitForExistence(timeout: 10))
         shot("1-console1")
