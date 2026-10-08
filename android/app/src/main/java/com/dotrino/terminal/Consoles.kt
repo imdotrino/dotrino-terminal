@@ -428,6 +428,7 @@ object Consoles {
                     consoleId = (m["id"] as? JsonPrimitive)?.content
                     (m["console"] as? JsonObject)?.let(::consoleOf)?.let { upsert(it); follow(it) }
                     state = State.OPEN; note = null; resuming = false
+                    if (pendingInput.isNotEmpty()) { val t = pendingInput.toString(); pendingInput.clear(); input(t) }
                     list(); onChange()
                 }
                 "meta" -> {
@@ -436,7 +437,7 @@ object Consoles {
                     if (info.id == consoleId) follow(info)
                     onChange()
                 }
-                "exit" -> { state = State.EXITED; note = (m["code"] as? JsonPrimitive)?.content; list(); onChange() }
+                "exit" -> { state = State.EXITED; pendingInput.clear(); note = (m["code"] as? JsonPrimitive)?.content; list(); onChange() }
                 // The machine's code was right: it is remembered while the app lives, and the tab goes on.
                 "unlocked" -> {
                     trying?.let { codes[machine.pubkey] = it }
@@ -492,7 +493,12 @@ object Consoles {
             try { channel?.send(buildJsonObject { put("type", "unlock"); put("code", code) }) } catch (_: Exception) { trying = null }
         }
 
+        /** What was typed while the console was still being attached (a switch, a reconnection): it
+         *  goes the moment it is (owner, 2026-10-07: Enter right after changing console sent nothing). */
+        private val pendingInput = StringBuilder()
+
         fun input(text: String) {
+            if (state == State.CONNECTING) { pendingInput.append(text); return }
             if (state != State.OPEN) return
             try { channel?.send(buildJsonObject { put("type", "input"); put("data", text) }) } catch (_: Exception) { /* the connection dropped: `lost` brings it back */ }
         }

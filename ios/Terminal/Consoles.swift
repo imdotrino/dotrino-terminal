@@ -346,12 +346,13 @@ final class Tab: ObservableObject, Identifiable {
             consoleId = m["id"]?.string
             if let c = m["console"].flatMap(consoleOf) { upsert(c); follow(c) }
             state = .open; note = nil
+            if !pendingInput.isEmpty { let t = pendingInput; pendingInput = ""; input(t) }
             list()
         case "meta":
             guard let c = m["console"].flatMap(consoleOf) else { return }
             upsert(c)
             if c.id == consoleId { follow(c) }
-        case "exit": state = .exited; note = m["code"].map { $0.text }; list()
+        case "exit": state = .exited; pendingInput = ""; note = m["code"].map { $0.text }; list()
         // The machine's code was right: it is remembered while the app lives, and the tab goes on.
         case "unlocked":
             if let c = trying { Self.codes[machine.pubkey] = c }
@@ -403,7 +404,12 @@ final class Tab: ObservableObject, Identifiable {
         do { try channel?.send(["type": "unlock", "code": .string(code)]) } catch { trying = nil }
     }
 
+    /// What was typed while the console was still being attached (a switch, a reconnection): it
+    /// goes the moment it is (owner, 2026-10-07: Enter right after changing console sent nothing).
+    private var pendingInput = ""
+
     func input(_ text: String) {
+        if state == .connecting { pendingInput += text; return }
         guard state == .open else { return }
         try? channel?.send(["type": "input", "data": .string(text)])
     }
