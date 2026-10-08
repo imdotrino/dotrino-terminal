@@ -38,7 +38,8 @@ final class ConsolesUITests: XCTestCase {
         app.buttons["compose-send"].tap()
         sleep(1)
         shot("3c-compose")
-        XCTAssertEqual(compose.value as? String ?? "", "", "sent, the line is empty again")
+        // Empty, a text field's value is its placeholder.
+        XCTAssertNotEqual(compose.value as? String ?? "", "ls", "sent, the line is empty again")
         app.buttons["key-compose"].tap()
         XCTAssertFalse(compose.exists, "✎ again hides the line")
 

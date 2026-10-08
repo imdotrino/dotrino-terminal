@@ -225,6 +225,15 @@ a.btn.primary { background: var(--brand); border-color: var(--brand); color: #ff
 
 /* Ordenar las consolas arrastrando: el asa (para el dedo), la que se lleva y dónde caería. */
 .sbtn.num { touch-action: none; }
+/* ▲/▼ de la franja plegada: pegados arriba y abajo, solo mientras haya a dónde ir. */
+.side.collapsed { scrollbar-width: none; }
+.side.collapsed::-webkit-scrollbar { display: none; }
+.sbtn.scroll-up, .sbtn.scroll-down { position: sticky; z-index: 1; background: var(--panel); font-size: 10px; padding: 2px 0; display: none; flex: none; }
+.sbtn.scroll-up { top: 0; }
+.sbtn.scroll-down { bottom: 0; margin-top: auto; }
+.sbtn.scroll-up.show, .sbtn.scroll-down.show { display: block; }
+/* Con el dedo: números altos (a 20 px costaba acertar). */
+@media (pointer: coarse) { .sbtn.num { min-height: 40px; } }
 .srow.item .grip { color: var(--muted); opacity: .55; font-size: 12px; padding: 4px 0 4px 2px; cursor: grab; touch-action: none; user-select: none; }
 .side.dragging, .side.dragging * { cursor: grabbing !important; user-select: none; }
 .side .dragged { opacity: .45; }
