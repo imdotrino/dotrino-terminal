@@ -222,6 +222,9 @@ private struct ConsoleScreen: View {
     @AppStorage("compose") private var composing = false
     @State private var composeText = ""
     @State private var composeFocus = false
+    /// The field itself: what is sent is read from IT, not from the state, which lagged a keystroke
+    /// behind now and then (owner, 2026-10-07: «Enter sometimes works, sometimes not»).
+    @State private var composeBox = ComposeField.Box()
 
     private static let keys = ["esc", "tab", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~"]
     private static let labels = ["esc": "Esc", "tab": "Tab", "up": "↑", "down": "↓", "left": "←", "right": "→", "home": "Home", "end": "End", "pgup": "PgUp", "pgdn": "PgDn"]
@@ -501,7 +504,7 @@ private struct ConsoleScreen: View {
     /// The writing line: the text and ⏎. Empty, ⏎ is just Enter.
     private var composeBar: some View {
         HStack(spacing: 6) {
-            ComposeField(text: $composeText, placeholder: t("compose.hint"), focused: $composeFocus,
+            ComposeField(text: $composeText, placeholder: t("compose.hint"), focused: $composeFocus, box: composeBox,
                          onSend: sendCompose,
                          // Backspace on an empty line goes to the console: it is how you fix what is already there.
                          onEmptyBackspace: { view?.key("backspace") },
@@ -522,7 +525,9 @@ private struct ConsoleScreen: View {
 
     /// The line and Enter, in ONE message.
     private func sendCompose() {
-        tab.input(composeText + "\r"); composeText = ""
+        let line = composeBox.field?.text ?? composeText
+        composeBox.field?.text = ""; composeText = ""
+        tab.input(line + "\r")
     }
 
     /// ✎: the writing line on or off. The one change of size here is asked for, and remembered.
@@ -583,7 +588,11 @@ private struct ComposeField: UIViewRepresentable {
     @Binding var text: String
     let placeholder: String
     @Binding var focused: Bool
+    let box: Box
     let onSend: () -> Void
+
+    /// A handle to the live field, for whoever sends from outside it (the ⏎ button).
+    final class Box { weak var field: UITextField? }
     let onEmptyBackspace: () -> Void
     let takesKey: () -> Bool
     let sendKey: (String) -> Void
@@ -614,6 +623,7 @@ private struct ComposeField: UIViewRepresentable {
 
     func makeUIView(context: Context) -> Field {
         let f = Field()
+        box.field = f
         f.delegate = context.coordinator
         f.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
         f.onEmptyBackspace = onEmptyBackspace
@@ -636,7 +646,9 @@ private struct ComposeField: UIViewRepresentable {
 
     func updateUIView(_ f: Field, context: Context) {
         context.coordinator.parent = self
-        if f.text != text { f.text = text }
+        // The field is the source of truth while it is being edited: the state is only pushed into
+        // it when it is cleared (after a send) or when nobody is typing.
+        if f.text != text, text.isEmpty || !f.isFirstResponder { f.text = text }
         if focused, !f.isFirstResponder { DispatchQueue.main.async { f.becomeFirstResponder() } }
     }
 }
