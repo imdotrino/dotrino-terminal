@@ -33,8 +33,9 @@ solo añade la shell:
 Las shells son **consolas** que viven en el agente, aparte de las conexiones
 (`agent/consoles.js`): cerrar o recargar el navegador solo las suelta, y cualquier aparato
 de la cuenta puede volver a ellas y ver la pantalla como estaba (una terminal sin pantalla,
-`@xterm/headless`, la reconstruye; todo en memoria). La × de la pestaña sí la mata: desde
-ese momento la consola ya no existe para nadie (no se lista, no se puede volver a ella y su
+`@xterm/headless`, la reconstruye; todo en memoria). La × de la pestaña tampoco la cierra
+(la suelta); una consola se cierra desde el panel o saliendo de su shell: desde
+ese momento ya no existe para nadie (no se lista, no se puede volver a ella y su
 número queda libre), y si la shell no se va con el SIGHUP se insiste con SIGTERM y SIGKILL
 (agente ≥ 0.27.0). Si otra pantalla cierra la consola que una pestaña mira, la pestaña pasa a
 otra consola que ya exista (una nueva solo si no queda ninguna). Si el agente se reinicia, se
@@ -53,8 +54,8 @@ Cada consola dice su `origin` (`local`/`remote`), su `title` (el de la shell) y 
 (quién la mira: ventana local o aparato, con su llave, y la `tag` con la que se presentó; la app
 de escritorio la usa para saber qué consola muestra cada ventana). Con varios mirando, el tamaño lo pone
 el último que se enganchó o tecleó (lo que la terminal contesta sola —foco, cursor, ratón— no cuenta); teclear
-gana también a una pantalla que lo tenía fijado con ⤢, que deja de estarlo. Una ventana local que abrió su consola la mata al
-cerrarse; una que solo se enganchó, no.
+gana también a una pantalla que lo tenía fijado con ⤢, que deja de estarlo. Cerrar una ventana local NUNCA
+cierra una consola, tampoco la que esa ventana abrió (agente ≥ 0.31.0): al irse la sesión, la consola se suelta.
 
 La PWA recuerda sus pestañas en `sessionStorage` y al recargar se vuelve a enganchar.
 
@@ -88,6 +89,13 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   cliente, la app lo busca cada 3 s y activa los perfiles al aparecer.
   «Perfil → Usar en / Quitar de la terminal de VS Code» corre `dotrino-terminal vscode --name <perfil>`
   o `vscode --off` como «Actualizar»: en la ventana, en otra TTY, y al acabar vuelve a su consola (cliente ≥ 0.20.0).
+  **Cerrar una ventana nunca cierra una consola** (≥ 0.2.28): la suelta (Ctrl+] d) y se va, también
+  la última; se cierra con la × del panel, «Cerrar consola» o `exit`. En el panel (plegado y abierto),
+  un **punto verde** en la esquina superior derecha de una consola dice que está abierta en una
+  ventana de ESTA máquina (`watchers` con `origin: 'local'`: esta ventana, otra, la terminal de
+  VS Code); lo remoto no cuenta. El punto parpadea si la consola terminó sin atender (`doneAt`) y
+  deja de hacerlo cuando su ventana tiene el foco (`App::seen`, solo de la app: el borde verde de
+  «terminó» es estado del agente y lo ven también la web y el teléfono, así que el foco no lo toca).
   Como emulador de terminal: `--working-directory <dir>` (o abre donde la lanzan, que es lo que
   hace `exo-open` desde Thunar), `-x prog args…`, `-e "orden"`, `--name <perfil>`. El `.deb`
   instala `usr/share/xfce4/helpers/dotrino-terminal.desktop`, para elegirla en «Aplicaciones
