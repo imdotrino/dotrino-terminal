@@ -84,6 +84,7 @@ const M = {
     console_free: 'suelta',
     console_local: 'ventana abierta en la máquina',
     scroll_up: 'Subir', scroll_down: 'Bajar',
+    split_right: 'Dividir a la derecha', split_down: 'Dividir abajo', open_right: 'Abrir a la derecha', open_down: 'Abrir abajo', close_pane: 'Cerrar este panel', pane_last: 'Es el único panel: cierra la pestaña',
     console_gone: 'Esta consola ya no existe en la máquina: se cerró, o el agente se reinició.',
     closed_by_other: (n) => `Otra pantalla cerró la consola ${n}. Esta es otra.`,
     closed_by_other_new: (n) => `Otra pantalla cerró la consola ${n}. Esta es una nueva.`,
@@ -163,6 +164,7 @@ const M = {
     console_free: 'detached',
     console_local: 'window open on the machine',
     scroll_up: 'Scroll up', scroll_down: 'Scroll down',
+    split_right: 'Split right', split_down: 'Split down', open_right: 'Open to the right', open_down: 'Open below', close_pane: 'Close this pane', pane_last: 'The only pane: close the tab instead',
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
     closed_by_other: (n) => `Another screen closed console ${n}. This is another one.`,
     closed_by_other_new: (n) => `Another screen closed console ${n}. This is a new one.`,
@@ -357,11 +359,117 @@ function saveTabs (list) { try { sessionStorage.setItem(SS_TABS, JSON.stringify(
 
 
 function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
-  const sessions = [] // { id, alias, pub, agent, term, fit, box, side, view, tab, status, list, collapsed, poll }
+  // Una pestaña es una MÁQUINA con uno o varios PANELES (split, dueño 2026-10-07): cada panel es
+  // su propia conexión al agente con su xterm. `s.agent`/`s.term`/`s.fit`/`s.view` son los del
+  // panel con el foco, para que el panel de consolas, el tamaño y el menú sigan hablando de «la
+  // consola de esta pestaña». El reparto es un árbol: { pane } | { dir: 'row'|'col', a, b, ratio }.
+  const sessions = [] // { id, alias, pub, panes: [pane], focus: pane, layout, box, side, panesEl, tab, status, list, collapsed, poll }
   let active = null
   let counter = 0
+  let paneCounter = 0
 
-  const persist = () => saveTabs(sessions.filter((s) => s.agent?.consoleId).map((s) => ({ sub: s.pub, alias: s.alias, consoleId: s.agent.consoleId })))
+  /** El árbol, con los `consoleId` en las hojas (para recordarlo al recargar). */
+  const layoutIds = (n) => n.pane ? (n.pane.agent?.consoleId || null) : { dir: n.dir, ratio: n.ratio, a: layoutIds(n.a), b: layoutIds(n.b) }
+  const persist = () => saveTabs(sessions.filter((s) => s.agent?.consoleId).map((s) => ({ sub: s.pub, alias: s.alias, consoleId: s.agent.consoleId, layout: layoutIds(s.layout) })))
+
+  /** Las consolas abiertas en cualquier panel de cualquier pestaña. */
+  const openEverywhere = () => new Set(sessions.flatMap((x) => x.panes.map((p) => p.agent?.consoleId)).filter(Boolean))
+
+  function newPane (s) {
+    const p = { id: ++paneCounter, s }
+    p.el = el(`<div class="pane" data-testid="pane"><div class="pane-tools">
+      <button data-p="right" title="${esc(t('split_right'))}" aria-label="${esc(t('split_right'))}">◫</button>
+      <button data-p="down" title="${esc(t('split_down'))}" aria-label="${esc(t('split_down'))}">⊟</button>
+      <button data-p="close" title="${esc(t('close_pane'))}" aria-label="${esc(t('close_pane'))}">×</button>
+    </div><div class="term"></div></div>`)
+    p.view = p.el.querySelector('.term')
+    p.el.addEventListener('pointerdown', () => focusPane(s, p), true)
+    p.el.querySelector('.pane-tools').addEventListener('click', (e) => {
+      const a = e.target.closest('button')?.dataset.p; if (!a) return
+      e.stopPropagation()
+      if (a === 'close') closePane(s, p)
+      else splitPane(s, p, a === 'right' ? 'row' : 'col', null)
+    })
+    s.panes.push(p)
+    return p
+  }
+
+  function focusPane (s, p) {
+    if (s.focus === p) return
+    s.focus = p
+    for (const x of s.panes) x.el.classList.toggle('focus', x === p)
+    renderSide(s)
+    try { p.term?.focus() } catch {}
+  }
+
+  /** Pinta el árbol en `.panes`: los elementos de los paneles se REUBICAN (el xterm no se vuelve a montar). */
+  function renderLayout (s) {
+    const build = (n) => {
+      if (n.pane) return n.pane.el
+      const box = el(`<div class="split ${n.dir}"></div>`)
+      const a = build(n.a); const b = build(n.b)
+      const bar = el('<div class="divider" role="separator"></div>')
+      box.append(a, bar, b)
+      const apply = () => { a.style.flex = `${n.ratio} 1 0`; b.style.flex = `${1 - n.ratio} 1 0` }
+      apply()
+      // Arrastrar el divisor cambia el reparto; los xterm se ajustan por su ResizeObserver.
+      bar.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); bar.setPointerCapture(e.pointerId)
+        const r = box.getBoundingClientRect()
+        const move = (ev) => {
+          const f = n.dir === 'row' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height
+          n.ratio = Math.min(0.85, Math.max(0.15, f)); apply()
+        }
+        const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); persist() }
+        bar.addEventListener('pointermove', move); bar.addEventListener('pointerup', up)
+      })
+      return box
+    }
+    s.panesEl.replaceChildren(build(s.layout))
+    for (const p of s.panes) p.el.classList.toggle('focus', p === s.focus)
+    s.panesEl.classList.toggle('single', s.panes.length === 1)
+  }
+
+  /** El nodo hoja de `p` y su padre, para reemplazar o quitar. */
+  function findLeaf (n, p, parent = null) {
+    if (n.pane) return n.pane === p ? { node: n, parent } : null
+    return findLeaf(n.a, p, n) || findLeaf(n.b, p, n)
+  }
+
+  /**
+   * Divide el panel `p`: a la derecha (`row`) o abajo (`col`), con la consola `consoleId` o —sin
+   * ella— con una libre que no esté abierta en ningún panel, o una nueva.
+   */
+  async function splitPane (s, p, dir, consoleId) {
+    const q = newPane(s)
+    const { node } = findLeaf(s.layout, p)
+    const a = { pane: p }
+    Object.assign(node, { pane: undefined, dir, ratio: 0.5, a, b: { pane: q } })
+    delete node.pane
+    renderLayout(s)
+    focusPane(s, q)
+    await connectPane(s, q, consoleId)
+    persist(); refresh(s)
+  }
+
+  /** Cierra el panel `p` (la consola sigue viva en la máquina). El último no se cierra: para eso está la pestaña. */
+  function closePane (s, p) {
+    if (s.panes.length === 1) { hint.textContent = t('pane_last'); return }
+    const found = findLeaf(s.layout, p); if (!found) return
+    const { node, parent } = found
+    try { p.agent?.disconnect() } catch {}
+    p.resizeObs?.disconnect()
+    try { p.term?.dispose() } catch {}
+    p.el.remove()
+    s.panes.splice(s.panes.indexOf(p), 1)
+    if (parent) {
+      const sibling = parent.a === node ? parent.b : parent.a
+      for (const k of Object.keys(parent)) delete parent[k]
+      Object.assign(parent, sibling)
+    }
+    if (s.focus === p) { s.focus = null; focusPane(s, s.panes[0]) }
+    renderLayout(s); persist(); refresh(s)
+  }
 
   // Al cambiar de pestaña no se toca el tamaño de nadie (§ tamaño: la pantalla lo toma al abrir o
   // cambiar de consola, o con «Ajustar a esta pantalla»).
@@ -376,15 +484,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   function removeSession (s) {
     clearInterval(s.poll)
-    s.resizeObs?.disconnect()
-    try { s.term?.dispose() } catch {}
+    for (const p of s.panes) { p.resizeObs?.disconnect(); try { p.term?.dispose() } catch {} }
     s.box.remove(); s.tab.remove()
     const i = sessions.indexOf(s); if (i >= 0) sessions.splice(i, 1)
     persist()
     if (active === s) setActive(sessions[sessions.length - 1] || null)
   }
   // La × MATA la consola en la máquina (si hay una enganchada) y quita la pestaña.
-  function closeSession (s) { try { s.agent?.close() } catch {} removeSession(s) }
+  function closeSession (s) { for (const p of s.panes) { try { p.agent?.close() } catch {} } removeSession(s) }
 
   function renderTab (s) {
     s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel" title="${esc(s.alias)}">${esc(s.alias.split(' · ')[0])}</span><span class="x" title="${t('close')}">×</span></button>`)
@@ -397,44 +504,44 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.tab.title = state === 'err' ? (s.status || 'error') : ''
   }
 
-  /** El tamaño que cabe en esta pantalla. */
-  const fitted = (s) => s.fit.proposeDimensions() || { cols: s.term.cols, rows: s.term.rows }
+  /** El tamaño que cabe en el panel `p` de esta pantalla. */
+  const fitted = (p) => p.fit.proposeDimensions() || { cols: p.term.cols, rows: p.term.rows }
 
   /**
    * La vista sigue el tamaño de la consola: si otra pantalla lo tiene, se muestra a ese tamaño (con
    * desplazamiento), sin encogerla.
    */
-  function follow (s, info) {
+  function follow (p, info) {
     if (!info?.cols || !info?.rows) return
-    if (info.cols !== s.term.cols || info.rows !== s.term.rows) { try { s.term.resize(info.cols, info.rows) } catch {} }
+    if (info.cols !== p.term.cols || info.rows !== p.term.rows) { try { p.term.resize(info.cols, info.rows) } catch {} }
   }
 
-  function mountTerm (s) {
-    s.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0f1416', foreground: '#dfe3e6', cursor: '#81cfff', selectionBackground: '#004c6b' } })
-    s.fit = new FitAddon(); s.term.loadAddon(s.fit)
-    s.view.replaceChildren()
-    s.term.open(s.view); s.fit.fit()
-    s.agent.onData = (d) => s.term.write(d)
-    s.agent.onExit = (code, why) => {
-      if (why?.closedBy === 'other') return closedByOther(s, why.id)
-      s.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s)
+  function mountTerm (s, p) {
+    p.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0f1416', foreground: '#dfe3e6', cursor: '#81cfff', selectionBackground: '#004c6b' } })
+    p.fit = new FitAddon(); p.term.loadAddon(p.fit)
+    p.view.replaceChildren()
+    p.term.open(p.view); p.fit.fit()
+    p.agent.onData = (d) => p.term.write(d)
+    p.agent.onExit = (code, why) => {
+      if (why?.closedBy === 'other') return closedByOther(s, p, why.id)
+      p.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s)
     }
-    s.agent.onMeta = (info) => follow(s, info)
-    s.term.onData((d) => s.agent.input(d))
-    // Cambió el espacio de la consola (girar el teléfono, redimensionar, aparecer o colapsar el
-    // panel): se le dice al agente, que lo aplica solo si el tamaño es de esta pestaña; si no, la
-    // vista sigue al tamaño de la consola.
+    p.agent.onMeta = (info) => follow(p, info)
+    p.term.onData((d) => p.agent.input(d))
+    // Cambió el espacio del panel (girar el teléfono, redimensionar, aparecer o colapsar el panel
+    // de consolas, mover un divisor): se le dice al agente, que lo aplica solo si el tamaño es de
+    // este panel; si no, la vista sigue al tamaño de la consola.
     let pending = false
-    s.onResize = () => {
+    p.onResize = () => {
       if (pending) return
       pending = true
       requestAnimationFrame(() => {
         pending = false
-        if (active === s && s.agent?.consoleId) { const d = fitted(s); s.agent.resize(d.cols, d.rows) }
+        if (active === s && p.agent?.consoleId) { const d = fitted(p); p.agent.resize(d.cols, d.rows) }
       })
     }
-    s.resizeObs = new ResizeObserver(s.onResize)
-    s.resizeObs.observe(s.view)
+    p.resizeObs = new ResizeObserver(p.onResize)
+    p.resizeObs.observe(p.view)
   }
 
   // ---- El panel de consolas: el mismo de la app de escritorio ----
@@ -474,11 +581,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   const myDevice = () => link?.id?.me?.publickey || null
 
   function where (s, c) {
-    const others = (c.watchers || []).length - (c.id === s.agent?.consoleId ? 1 : 0)
+    const inPane = s.panes.some((p) => p.agent?.consoleId === c.id)
+    const others = (c.watchers || []).length - (inPane ? 1 : 0)
     let w = t('console_free')
     if ((c.watchers || []).some((v) => v.origin === 'local')) w = t('console_local')
     else if (others > 0) w = t('console_other')
-    else if (c.id === s.agent?.consoleId) w = t('console_here')
+    else if (inPane) w = t('console_here')
     // Quién tiene el tamaño, si se comparte o se eligió a propósito.
     const b = c.sizeBy
     if (b && c.id !== s.agent?.consoleId && ((c.watchers || []).length > 1 || b.pinned)) {
@@ -520,6 +628,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     const pinOn = pinnedHere(s)
     const pinTitle = cur ? t('pin_title', cur.n, pinOn) : t('pin_here')
     const mine = s.agent?.consoleId
+    const inPane = (c) => c.id !== mine && s.panes.some((p) => p.agent?.consoleId === c.id) ? ' here' : ''
     const side = s.side
     side.classList.toggle('collapsed', s.collapsed)
     if (s.collapsed) {
@@ -530,7 +639,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}
         <button class="sbtn scroll-down" data-act="scroll-down" aria-label="${esc(t('scroll_down'))}" title="${esc(t('scroll_down'))}">▼</button>`
       stripArrows(s)
     } else {
@@ -538,7 +647,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
         ${cur ? `<div class="srow"><span class="grow" data-testid="panel-size">${cur.c.cols}×${cur.c.rows}</span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
-        ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}${actClass(c)}" data-id="${esc(c.id)}">
+        ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}">
           <span class="grip" aria-hidden="true">⠿</span>
           <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}">${rows(c, i, mine)}<small>${esc(where(s, c) + actText(c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
@@ -561,19 +670,22 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
   /** Pasar a otra consola (o a una nueva) en la misma conexión: toma el tamaño de esta pantalla. */
-  async function switchTo (s, id) {
-    if (id && id === s.agent.consoleId) return
-    const { cols, rows } = fitted(s)
+  async function switchTo (s, id, p = s.focus) {
+    if (id && id === p.agent.consoleId) return
+    // Si esa consola ya está en otro panel de esta pestaña, se va a ese panel en vez de verla dos veces.
+    const already = id && s.panes.find((x) => x !== p && x.agent?.consoleId === id)
+    if (already) { focusPane(s, already); return }
+    const { cols, rows } = fitted(p)
     try {
-      s.term.reset()
-      try { s.term.resize(cols, rows) } catch {}
-      const p = id ? await s.agent.attach(id, cols, rows) : await s.agent.open(cols, rows)
-      follow(s, p.console)
+      p.term.reset()
+      try { p.term.resize(cols, rows) } catch {}
+      const r = id ? await p.agent.attach(id, cols, rows) : await p.agent.open(cols, rows)
+      follow(p, r.console)
       persist()
     } catch (e) {
-      s.term.write(`\r\n\x1b[31m${e.code === 'no-console' ? t('console_gone') : e.message}\x1b[0m\r\n`)
+      p.term.write(`\r\n\x1b[31m${e.code === 'no-console' ? t('console_gone') : e.message}\x1b[0m\r\n`)
     }
-    refresh(s); s.term.focus()
+    refresh(s); p.term.focus()
   }
 
   /**
@@ -582,20 +694,22 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * 2026-10-07: vale para todo cliente remoto). Si la elegida ya no existía (el panel iba un
    * instante por detrás), se vuelve a elegir con la lista fresca, una vez. Devuelve si abrió una nueva.
    */
-  async function moveAway (s, id, fresh = false) {
-    const list = fresh ? await s.agent.list().catch(() => []) : (s.list || [])
-    const rest = list.filter((c) => c.id !== id)
+  async function moveAway (s, p, id, fresh = false) {
+    const list = fresh ? await p.agent.list().catch(() => []) : (s.list || [])
+    const open = openEverywhere()
+    const rest = list.filter((c) => c.id !== id && !open.has(c.id))
     const other = rest.find((c) => !(c.watchers || []).length) || rest[0]
-    await switchTo(s, other?.id || null)
-    const now = s.agent.consoleId
+    await switchTo(s, other?.id || null, p)
+    const now = p.agent.consoleId
     if (now && now !== id) return !other
     if (fresh) return false
-    return moveAway(s, id, true)
+    return moveAway(s, p, id, true)
   }
 
-  /** Cerrar una consola. Si es la de esta pestaña, primero se pasa a otra (o a una nueva). */
+  /** Cerrar una consola. Si está en un panel de esta pestaña, ese panel pasa antes a otra (o a una nueva). */
   async function killConsole (s, id) {
-    if (id === s.agent.consoleId) await moveAway(s, id)
+    const p = s.panes.find((x) => x.agent?.consoleId === id)
+    if (p) await moveAway(s, p, id)
     s.agent.kill(id)
     setTimeout(() => refresh(s), 200)
   }
@@ -605,9 +719,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * pestaña no se queda muerta: pasa a una consola que ya existe, o a una nueva, y lo dice —
    * la misma regla que la ventana de la máquina (agente 0.24.1).
    */
-  async function closedByOther (s, id) {
+  async function closedByOther (s, p, id) {
     const n = (s.list || []).find((c) => c.id === id)?.n ?? '?'
-    const isNew = await moveAway(s, id, true)
+    const isNew = await moveAway(s, p, id, true)
     persist()
     if (active === s) hint.textContent = t(isNew ? 'closed_by_other_new' : 'closed_by_other', n)
   }
@@ -621,7 +735,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     const cur = current(s)
     if (!cur) return
     const on = !pinnedHere(s)
-    const { cols, rows } = fitted(s)
+    const { cols, rows } = fitted(s.focus)
     if (on) {
       try { s.term.resize(cols, rows) } catch {}
       s.agent.resize(cols, rows)
@@ -636,14 +750,18 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Clic derecho (o mantener pulsado) sobre una consola: lo que se puede hacer con ella. */
   function consoleMenu (s, id, x, y) {
     document.querySelector('.cmenu')?.remove()
+    const inPane = s.panes.some((p) => p.agent?.consoleId === id)
     const m = el(`<div class="cmenu" style="left:${x}px;top:${y}px">
       <button data-a="here" ${id === s.agent.consoleId ? 'disabled' : ''}>${t('open_here')}</button>
+      <button data-a="right" ${inPane ? 'disabled' : ''}>${t('open_right')}</button>
+      <button data-a="down" ${inPane ? 'disabled' : ''}>${t('open_down')}</button>
       <button data-a="kill">${t('kill_console')}</button>
     </div>`)
     m.addEventListener('click', (e) => {
       const a = e.target.dataset.a
       m.remove()
       if (a === 'here') switchTo(s, id)
+      if (a === 'right' || a === 'down') splitPane(s, s.focus, a === 'right' ? 'row' : 'col', id)
       if (a === 'kill') killConsole(s, id)
     })
     document.body.appendChild(m)
@@ -728,20 +846,47 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * máquina se quedó sin ninguna (dueño, 2026-10-07: vale para todo cliente remoto; antes aquí se
    * abría siempre una nueva y la máquina acababa con consolas de más).
    */
-  async function attachOrOpen (s, target) {
-    const { cols, rows } = fitted(s)
+  async function attachOrOpen (s, p, target) {
+    const { cols, rows } = fitted(p)
     try {
-      const p = target ? await s.agent.attach(target, cols, rows) : await s.agent.open(cols, rows)
-      follow(s, p.console)
+      const r = target ? await p.agent.attach(target, cols, rows) : await p.agent.open(cols, rows)
+      follow(p, r.console)
     } catch (e) {
       if (e.code !== 'no-console') throw e
-      s.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
-      const open = new Set(sessions.filter((x) => x !== s).map((x) => x.agent?.consoleId).filter(Boolean))
-      const list = (await s.agent.list().catch(() => [])).filter((c) => c.id !== target)
-      const other = list.find((c) => !(c.watchers || []).length && !open.has(c.id)) || list[0]
-      const p = other ? await s.agent.attach(other.id, cols, rows) : await s.agent.open(cols, rows)
-      follow(s, p.console)
+      p.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
+      const open = openEverywhere()
+      const list = (await p.agent.list().catch(() => [])).filter((c) => c.id !== target && !open.has(c.id))
+      const other = list.find((c) => !(c.watchers || []).length) || list[0]
+      const r = other ? await p.agent.attach(other.id, cols, rows) : await p.agent.open(cols, rows)
+      follow(p, r.console)
     }
+  }
+
+  /**
+   * Conecta el panel `p` a la máquina de `s` y lo engancha a `consoleId`; sin él, a una consola
+   * que no mire nadie y no esté en ningún panel, o a una nueva.
+   */
+  async function connectPane (s, p, consoleId) {
+    p.agent = new AgentClient(link, { agentPubkey: s.pub })
+    p.agent.askCode = ({ wrong }) => askMachineCode(s.alias, wrong)
+    p.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
+    // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
+    // a la misma consola si sigue viva, o a otra diciéndolo.
+    p.agent.onResumed = () => {
+      attachOrOpen(s, p, p.agent.consoleId).then(() => {
+        persist()
+        s.status = 'conectado'; setTabState(s, 'ok')
+        if (active === s) hint.textContent = t('connected', s.alias)
+      }).catch((e) => p.agent.onError(e))
+    }
+    await p.agent.connect()
+    mountTerm(s, p)
+    let target = consoleId
+    if (!target) {
+      const open = openEverywhere()
+      target = (await p.agent.list()).find((c) => !(c.watchers || []).length && !open.has(c.id))?.id
+    }
+    await attachOrOpen(s, p, target)
   }
 
   /**
@@ -751,39 +896,31 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * @param {string} [alias]
    * @param {{ consoleId?: string }} [opts]
    */
-  async function openConsole (pub, alias, { consoleId } = {}) {
+  async function openConsole (pub, alias, { consoleId, layout } = {}) {
     const id = ++counter
-    const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando', collapsed: true, list: [] }
-    s.box = el('<div class="term-wrap"><div class="side"></div><div class="term"></div></div>'); s.box.style.display = 'none'
-    s.side = s.box.querySelector('.side'); s.view = s.box.querySelector('.term')
+    const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando', collapsed: true, list: [], panes: [], focus: null }
+    // Lo del panel con el foco, con los nombres de siempre.
+    Object.defineProperties(s, {
+      agent: { get: () => s.focus?.agent },
+      term: { get: () => s.focus?.term },
+      fit: { get: () => s.focus?.fit },
+      view: { get: () => s.focus?.view },
+    })
+    s.box = el('<div class="term-wrap"><div class="side"></div><div class="panes"></div></div>'); s.box.style.display = 'none'
+    s.side = s.box.querySelector('.side'); s.panesEl = s.box.querySelector('.panes')
     termsEl.appendChild(s.box)
     sessions.push(s)
+    const first = newPane(s)
+    s.focus = first
+    s.layout = { pane: first }
+    renderLayout(s)
     renderTab(s); setActive(s); setTabState(s, 'conn'); wireSide(s); renderSide(s)
     s.side.hidden = true                // el panel, solo con la máquina conectada
     hint.textContent = t('connecting', s.alias)
     try {
-      s.agent = new AgentClient(link, { agentPubkey: pub })
-      s.agent.askCode = ({ wrong }) => askMachineCode(s.alias, wrong)
-      s.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
-      // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
-      // a la misma consola si sigue viva, o a una nueva diciéndolo.
-      s.agent.onResumed = () => {
-        attachOrOpen(s, s.agent.consoleId).then(() => {
-          persist()
-          s.status = 'conectado'; setTabState(s, 'ok')
-          if (active === s) hint.textContent = t('connected', s.alias)
-        }).catch((e) => s.agent.onError(e))
-      }
-      await s.agent.connect()
-      mountTerm(s)
       // Como en la app de escritorio: una consola que no esté abierta en ninguna parte, antes
       // que crear otra.
-      let target = consoleId
-      if (!target) {
-        const open = new Set(sessions.map((x) => x.agent?.consoleId).filter(Boolean))
-        target = (await s.agent.list()).find((c) => !(c.watchers || []).length && !open.has(c.id))?.id
-      }
-      await attachOrOpen(s, target)
+      await connectPane(s, first, consoleId)
       persist()
       s.status = 'conectado'; setTabState(s, 'ok')
       if (active === s) hint.textContent = t('connected', s.alias)
@@ -791,10 +928,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       s.side.hidden = false
       refresh(s)
       s.poll = setInterval(() => { if (active === s) refresh(s) }, 2000)
+      // El reparto que había antes de recargar: los demás paneles, uno a uno.
+      if (layout && !(typeof layout === 'string')) await restoreLayout(s, first, layout)
     } catch (e) {
       // Sin conexión no queda una pestaña vacía (ni al recargar, que las reabre): se quita y se
       // dice, con el enlace a la guía.
-      try { s.agent?.disconnect() } catch {}
+      for (const p of s.panes) { try { p.agent?.disconnect() } catch {} }
       removeSession(s)
       if (e.code === 'locked') { hint.textContent = t('code_needed', s.alias); hint.title = ''; return }
       hint.innerHTML = `${esc(t('conn_machine', s.alias))} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('how_link')}</a>`
@@ -802,11 +941,33 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     }
   }
 
+  /**
+   * Reconstruye un reparto guardado a partir de su PRIMER panel (`first`, ya conectado a la primera
+   * hoja): cada división se vuelve a hacer con la consola que tenía la otra rama; si ya no existe,
+   * `attachOrOpen` elige otra y lo dice.
+   */
+  async function restoreLayout (s, first, saved) {
+    const firstLeaf = (n) => typeof n === 'object' && n ? firstLeaf(n.a) : n
+    const walk = async (n, pane) => {
+      if (!n || typeof n !== 'object') return
+      // `pane` ya es la primera hoja de `n.a`: se divide con la primera hoja de `n.b` y se sigue por las dos ramas.
+      const q = newPane(s)
+      const { node } = findLeaf(s.layout, pane)
+      Object.assign(node, { dir: n.dir, ratio: n.ratio ?? 0.5, a: { pane }, b: { pane: q } }); delete node.pane
+      renderLayout(s)
+      await connectPane(s, q, firstLeaf(n.b)).catch(() => closePane(s, q))
+      await walk(n.a, pane)
+      await walk(n.b, q)
+    }
+    await walk(saved, first)
+    focusPane(s, first); persist(); refresh(s)
+  }
+
   /** Vuelve a abrir las pestañas que había antes de recargar. */
-  function restore () { for (const x of loadTabs()) openConsole(x.sub, x.alias, { consoleId: x.consoleId }) }
+  function restore () { for (const x of loadTabs()) openConsole(x.sub, x.alias, { consoleId: x.consoleId, layout: x.layout }) }
 
   // Al irse (recargar, cerrar), se SUELTAN las consolas: siguen vivas en la máquina.
-  window.addEventListener('pagehide', () => { for (const x of sessions) { try { x.agent?.disconnect() } catch {} } })
+  window.addEventListener('pagehide', () => { for (const x of sessions) for (const p of x.panes) { try { p.agent?.disconnect() } catch {} } })
 
   return { openConsole, restore, sessions }
 }
