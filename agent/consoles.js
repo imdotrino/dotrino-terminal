@@ -176,18 +176,46 @@ class Console {
    * de lo posterior.
    * @returns {Promise<string>} la pantalla serializada
    */
-  attach (viewer) {
+  attach (viewer, { scrollback } = {}) {
     const pending = []
     const buffering = { onOut: (d) => pending.push(d), onExit: viewer.onExit }
+    this.viewers.add(buffering)
+    return new Promise((resolve) => {
+      this.screen.write('', () => {
+        // `scrollback: 0` = solo lo que se ve ahora (ver `history`).
+        const snapshot = this.serializer.serialize(scrollback === undefined ? undefined : { scrollback })
+        this.viewers.delete(buffering)
+        this.viewers.add(viewer)
+        this.doneAt = null                // quien entra, la atiende (el `_meta` de abajo lo cuenta)
+        resolve(snapshot + pending.join(''))
+        this._meta()
+      })
+    })
+  }
+
+  /** ¿Hay líneas por encima de lo que se ve? Sin ellas, la pantalla sola ya es la foto entera. */
+  hasHistory () { return this.screen.buffer.normal.baseY > 0 }
+
+  /**
+   * LA FOTO ENTERA, PARA QUIEN YA ESTÁ MIRANDO. Quien se enganchó recibiendo solo la pantalla
+   * (`attach` con `scrollback: 0`) pide después el historial: lo que escribe la shell mientras
+   * se hace la foto se guarda y sale detrás, igual que en `attach`, así que no se pierde ni se
+   * repite nada. Empieza por un reinicio del terminal (`ESC c`): el cliente la pinta encima de
+   * lo que tenía sin saber que es una segunda foto.
+   * @returns {Promise<string|null>} `null` si ese mirón ya no está
+   */
+  history (viewer) {
+    if (!this.viewers.has(viewer)) return Promise.resolve(null)
+    const pending = []
+    const buffering = { onOut: (d) => pending.push(d), onExit: viewer.onExit }
+    this.viewers.delete(viewer)
     this.viewers.add(buffering)
     return new Promise((resolve) => {
       this.screen.write('', () => {
         const snapshot = this.serializer.serialize()
         this.viewers.delete(buffering)
         this.viewers.add(viewer)
-        this.doneAt = null                // quien entra, la atiende (el `_meta` de abajo lo cuenta)
-        resolve(snapshot + pending.join(''))
-        this._meta()
+        resolve('\x1bc' + snapshot + pending.join(''))
       })
     })
   }

@@ -37,6 +37,9 @@ import { makeGate } from './access.js'
 
 const require = createRequire(import.meta.url)
 
+/** Cuánto se espera al canal directo antes de mandar el historial por el proxio. */
+export const HISTORY_WAIT_MS = 8000
+
 export { LABEL }
 
 /** Cada cuánto mira un agente sin enlazar si ya lo enlazaron. */
@@ -121,7 +124,12 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
   async function attachTo (c, { fresh }) {
     release()
     current = c
-    const snapshot = await c.attach(viewer)
+    // SI EL CANAL DIRECTO AÚN NO ABRIÓ, PRIMERO SOLO LA PANTALLA. La foto con su historial
+    // son cientos de KB y, mandada ya, da toda la vuelta por el proxio (medido: 381 KB por el
+    // proxio en cada enganche). La pantalla sola son unos pocos KB y se ve igual de rápido; el
+    // historial sale en cuanto abre el directo (`sendHistory`). No se espera a nada para pintar.
+    const later = origin === 'remote' && typeof session.whenDirect === 'function' && !session.direct() && c.hasHistory()
+    const snapshot = await c.attach(viewer, later ? { scrollback: 0 } : {})
     // Mientras se hacía la foto la sesión se fue, soltó la consola o pidió otra: esta ya no es la
     // suya. Quedarse enganchado dejaba un mirón FANTASMA (la consola salía «abierta en otro
     // aparato» sin nadie mirando, y nadie la elegía como libre).
@@ -132,6 +140,22 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       await session.send({ type: 'replay', id: c.id, data: snapshot.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= snapshot.length })
     }
     await session.send({ type: 'attached', id: c.id, fresh, console: c.info() })
+    // Sin esperarlo (pintar no espera a nada), y un fallo aquí no puede tumbar el agente: se dice.
+    if (later) sendHistory(c).catch((e) => console.error('[terminal-agent] could not send the history of console', c.id, '-', e?.message || e))
+  }
+
+  /**
+   * El historial que `attachTo` dejó para después. Sale cuando abre el canal directo; si en
+   * `HISTORY_WAIT_MS` no abrió, sale igual por el proxio: llegar tarde es mejor que no llegar.
+   */
+  async function sendHistory (c) {
+    await session.whenDirect(HISTORY_WAIT_MS)
+    if (current !== c) return                    // ya mira otra, o se fue
+    const full = await c.history(viewer)
+    if (full == null || current !== c) return
+    for (let i = 0; i < full.length; i += REPLAY_CHUNK) {
+      await session.send({ type: 'replay', id: c.id, data: full.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= full.length })
+    }
   }
 
   session.on('message', (msg) => {

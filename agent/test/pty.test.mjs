@@ -378,3 +378,62 @@ test('si la sesión se va mientras se engancha, no queda mirando (antes dejaba u
   assert.deepEqual(h.list().map((c) => c.viewers), [0, 0], 'soltó las dos')
   h.killAll()
 })
+
+test('sin canal directo, primero va solo la pantalla; el historial sale cuando abre', async () => {
+  const h = hub()
+  const a = fakeSession(); serveSession(a, h)
+  a.deliver({ type: 'open', cols: 80, rows: 5 })
+  await until(() => a.sent.some((p) => p.type === 'attached'))
+  const id = a.sent.find((p) => p.type === 'attached').id
+  // Más líneas de las que caben: lo de arriba queda en el historial.
+  a.deliver({ type: 'input', data: 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo linea-$i-fin; done\r' })
+  await until(() => a.out().includes('linea-12-fin\r\n'))
+  a.close()
+
+  // Un cliente remoto cuyo canal directo todavía no abrió.
+  const b = fakeSession()
+  let abierto = false
+  b.direct = () => abierto
+  b.whenDirect = async () => { await until(() => abierto, 4000); return true }
+  serveSession(b, h, { origin: 'remote' })
+  b.deliver({ type: 'attach', id, cols: 80, rows: 5 })
+  await until(() => b.sent.some((p) => p.type === 'attached'))
+  const primera = b.sent.filter((p) => p.type === 'replay').map((p) => p.data).join('')
+  assert.ok(primera.includes('linea-12-fin'), 'lo que se ve llega ya')
+  assert.ok(!primera.includes('linea-1-fin'), 'el historial NO se mandó por el proxio')
+
+  // Mientras espera, la consola sigue viva: lo nuevo llega como siempre.
+  b.deliver({ type: 'input', data: 'echo entre-medias\r' })
+  await until(() => b.out().includes('entre-medias\r\n'))
+
+  const antes = b.sent.length
+  abierto = true
+  await until(() => b.sent.slice(antes).some((p) => p.type === 'replay' && p.last))
+  const segunda = b.sent.slice(antes).filter((p) => p.type === 'replay').map((p) => p.data).join('')
+  assert.ok(segunda.startsWith('\x1bc'), 'empieza reiniciando el terminal: se pinta encima de lo que había')
+  assert.ok(segunda.includes('linea-1-fin') && segunda.includes('linea-12-fin'), 'y ahora sí viene todo')
+  assert.ok(segunda.includes('entre-medias'), 'con lo que se escribió mientras tanto')
+  h.killAll()
+})
+
+test('con el canal directo ya abierto (o en local) va todo de una vez', async () => {
+  const h = hub()
+  const a = fakeSession(); serveSession(a, h)
+  a.deliver({ type: 'open', cols: 80, rows: 5 })
+  await until(() => a.sent.some((p) => p.type === 'attached'))
+  const id = a.sent.find((p) => p.type === 'attached').id
+  a.deliver({ type: 'input', data: 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo linea-$i-fin; done\r' })
+  await until(() => a.out().includes('linea-12-fin\r\n'))
+  a.close()
+  const b = fakeSession()
+  b.direct = () => true
+  b.whenDirect = async () => true
+  serveSession(b, h, { origin: 'remote' })
+  b.deliver({ type: 'attach', id, cols: 80, rows: 5 })
+  await until(() => b.sent.some((p) => p.type === 'attached'))
+  const todo = b.sent.filter((p) => p.type === 'replay').map((p) => p.data).join('')
+  assert.ok(todo.includes('linea-1-fin') && todo.includes('linea-12-fin'))
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(b.sent.filter((p) => p.type === 'replay' && p.data.startsWith('\x1bc')).length, 0, 'sin segunda foto')
+  h.killAll()
+})
