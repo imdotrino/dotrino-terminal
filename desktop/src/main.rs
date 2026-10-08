@@ -184,6 +184,14 @@ mod tests {
     }
 
     #[test]
+    fn a_window_left_without_its_console_takes_the_first_one_nobody_has_open() {
+        let list: Vec<super::ConsoleInfo> = serde_json::from_str(r#"[{"id":"a","watchers":[{"origin":"local","tag":"w2"}]},{"id":"b","watchers":[{"origin":"remote"}]},{"id":"c","watchers":[]}]"#).unwrap();
+        assert_eq!(super::next_console(&list).as_deref(), Some("c"));
+        assert_eq!(super::next_console(&list[..2]).as_deref(), Some("a"), "all open elsewhere: the first");
+        assert_eq!(super::next_console(&[]), None);
+    }
+
+    #[test]
     fn a_console_dropped_on_another_takes_its_place() {
         let ids = ["a", "b", "c", "d"];
         assert_eq!(drop_target(&ids, "c", "a"), Some(Some("a".to_string()))); // up: in front of it
@@ -232,6 +240,12 @@ fn drop_target(ids: &[&str], id: &str, over: &str) -> Option<Option<String>> {
         return None;
     }
     Some(if to < from { Some(over.to_string()) } else { ids.get(to + 1).map(|x| x.to_string()) })
+}
+
+/// A qué consola pasa una ventana que se quedó sin la suya: la primera que nadie tiene abierta y,
+/// si todas lo están, la primera. `None` = no queda ninguna (se abre una nueva).
+fn next_console(list: &[ConsoleInfo]) -> Option<String> {
+    list.iter().find(|c| c.watchers.is_empty()).or_else(|| list.first()).map(|c| c.id.clone())
 }
 
 /// Qué hace una consola, para el color del panel.
@@ -1436,12 +1450,18 @@ impl App {
                 // abierta (o a una nueva) y luego se mata la vieja; al revés, el cliente vería
                 // terminar su consola y la ventana se cerraría.
                 if is_mine {
-                    let other = self
-                        .windows
-                        .get(&id)
-                        .and_then(|w| w.profile.clone())
-                        .and_then(|p| self.consoles.get(&p))
-                        .and_then(|list| list.iter().find(|c| c.id != cid).map(|c| c.id.clone()));
+                    // La primera que NO esté abierta en otra pantalla; solo si todas lo están, la
+                    // primera que haya (la misma regla del cliente cuando se la cierra otra pantalla).
+                    // Preguntado al agente en el momento: la lista guardada puede tener 1,5 s.
+                    let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
+                    let list: Vec<ConsoleInfo> = profile
+                        .as_deref()
+                        .and_then(|p| self.profile_dir(p).and_then(|d| agent_list(&d)).or_else(|| self.consoles.get(p).cloned()))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|c| !self.dying.contains(&c.id))
+                        .collect();
+                    let other = next_console(&list);
                     let switch = self.switch_to(id, other.map(Pending::Attach).unwrap_or(Pending::New));
                     return switch.chain(later(400, Message::KillNow(id, cid)));
                 }
