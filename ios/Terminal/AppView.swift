@@ -368,7 +368,9 @@ private struct ConsoleScreen: View {
                         .opacity(dragId == c.id ? 0.5 : 1)
                         .contentShape(Rectangle())
                         .onTapGesture { tab.switchTo(c.id) }
-                        .onLongPressGesture { actions = c }
+                        // The hold as a simultaneous gesture: `onLongPressGesture` on the same view
+                        // would swallow the drag below. Moving the finger cancels the hold.
+                        .simultaneousGesture(LongPressGesture().onEnded { _ in actions = c })
                         // The number itself drags (no room for a grip, as in the PWA's strip): a tap
                         // opens the console, a hold shows its actions, and moving reorders.
                         .highPriorityGesture(DragGesture(minimumDistance: 8, coordinateSpace: .named("strip-rows"))

@@ -28,6 +28,7 @@ final class ConsolesUITests: XCTestCase {
         app.staticTexts["console-3"].press(forDuration: 0.2, thenDragTo: app.staticTexts["console-1"])
         sleep(1)
         shot("3b-strip-reordered")
+        XCTAssertLessThan(app.staticTexts["console-3"].frame.minY, app.staticTexts["console-1"].frame.minY, "3 dropped on 1 takes its place in the strip")
 
         app.buttons["panel-open"].tap()
         XCTAssertTrue(app.buttons["panel-close"].waitForExistence(timeout: 5))
@@ -42,5 +43,6 @@ final class ConsolesUITests: XCTestCase {
         grips.element(boundBy: 2).press(forDuration: 0.2, thenDragTo: grips.element(boundBy: 0))
         sleep(1)
         shot("5-reordered")
+        XCTAssertLessThan(app.staticTexts["console-2"].frame.minY, app.staticTexts["console-3"].frame.minY, "the last row dropped on the first takes its place in the panel")
     }
 }
