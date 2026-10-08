@@ -48,7 +48,7 @@ test('pedir una consola que ya no existe NO termina el cliente: sigue en la suya
   }
 })
 
-test('si OTRA pantalla le cierra la consola y no queda ninguna, la ventana no se va: abre una nueva', async () => {
+test('si OTRA pantalla le cierra la consola y no queda ninguna, la ventana se cierra: no crea una nueva', async () => {
   const { connectLocal } = await import('../local.js')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dtc-'))
   const dir = path.join(home, 'terminal-agent/p')
@@ -74,10 +74,8 @@ test('si OTRA pantalla le cierra la consola y no queda ninguna, la ventana no se
     assert.equal(before.length, 1)
     out = ''
     other.conn.send({ type: 'kill', id: before[0].id })          // otra pantalla la cierra
-    assert.ok(await until(async () => { const l = await list(); return l.length === 1 && l[0].id !== before[0].id }), 'hay una consola nueva en su lugar')
-    assert.equal(exited, null, 'el cliente sigue vivo')
-    term.write('echo NUEVA-$((3+3))\r')
-    assert.ok(await until(() => out.includes('NUEVA-6')), 'y la consola nueva responde')
+    assert.ok(await until(() => exited !== null), 'el cliente termina')
+    assert.equal((await list()).length, 0, 'y no dejó una consola nueva')
   } finally {
     term.kill()
     try { other.conn?.close() } catch (_) {}

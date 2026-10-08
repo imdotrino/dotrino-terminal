@@ -437,9 +437,9 @@ function interactive (conn, first, dir) {
       // LA CERRÓ OTRA PANTALLA (el teléfono, la web, el panel de otra ventana): esta ventana no
       // se va — nadie aquí pidió cerrarla, y cerrarla dejaba al usuario sin ventana. Pasa a una
       // consola que YA existe: primero una que no mire nadie; si todas se miran, la primera igual.
-      // Una NUEVA solo si la máquina se quedó sin ninguna (dueño, 2026-10-07: la misma regla que
-      // el panel de la web y de los teléfonos), y entonces se dice. Si la shell terminó sola
-      // (`exit`) o la cerró esta misma ventana, la ventana se cierra, como cualquier terminal.
+      // NUNCA crea una nueva (dueño, 2026-10-08: para no llenarse de consolas que nadie mira): si la
+      // máquina se quedó sin ninguna, la ventana se cierra. Igual si la shell terminó sola (`exit`)
+      // o la cerró esta misma ventana, como cualquier terminal.
       if (m.closedBy === 'other') {
         const closed = consoleId
         consoleId = null
@@ -449,8 +449,7 @@ function interactive (conn, first, dir) {
           const rest = r.list.filter((c) => c.id !== closed)
           const other = rest.find((c) => !c.watchers.length) || rest[0]
           if (other) return switchTo({ type: 'attach', id: other.id })
-          switchTo({ type: 'open', cwd: first.cwd || path.resolve(process.cwd()) })
-          out.write(`\x1b[2m${t('Otra pantalla cerró esta consola. Esta es una nueva.', 'Another screen closed this console. This is a new one.')}\x1b[0m\r\n`)
+          finish(m.code || 0)
         })
         return
       }
