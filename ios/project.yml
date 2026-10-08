@@ -19,7 +19,7 @@ settings:
     DEVELOPMENT_TEAM: P7G853375S
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: 0.8.14
-    CURRENT_PROJECT_VERSION: 16
+    CURRENT_PROJECT_VERSION: 17
 packages:
   # La librería nativa del ecosistema: el repo dotrino-native, como submódulo en ../native
   # (igual que Android). Perfil, transporte, el cliente del agente y la barra compartida.

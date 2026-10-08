@@ -91,14 +91,20 @@ class TerminalView(context: Context) : View(context) {
         val c = max(2, (width / cellW).toInt()); val r = max(2, (height / cellH).toInt())
         if (c == cols && r == rows) return
         cols = c; rows = r
-        onResize(c, r)
+        onResize(max(MIN_COLS, c), r)
     }
 
     /** Say again what fits (a new terminal on screen must hear it). */
     fun refit() {
         if (width == 0 || height == 0) return
         cols = max(2, (width / cellW).toInt()); rows = max(2, (height / cellH).toInt())
-        onResize(cols, rows)
+        onResize(max(MIN_COLS, cols), rows)
+    }
+
+    companion object {
+        /** The console is never asked to be narrower than this (owner, 2026-10-07: with the panel open
+         *  the view got 16 columns and the shell reflowed everything). Narrower views pan sideways. */
+        const val MIN_COLS = 40
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { super.onSizeChanged(w, h, oldw, oldh); fit() }

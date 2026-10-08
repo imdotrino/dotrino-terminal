@@ -37,6 +37,9 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     private(set) var cols = 80
     private(set) var rows = 24
+    /// The console is never asked to be narrower than this (owner, 2026-10-07: with the panel open the
+    /// view got 16 columns wide and the shell reflowed everything). Narrower views pan sideways.
+    static let minCols = 40
     /// How much of the bottom of the view the keyboard covers (0 when it is down). The console must
     /// fill the screen, no more and no less (owner, 2026-10-07): what fits is measured against the
     /// part the keyboard leaves uncovered, whether or not the layout above shrinks for it.
@@ -80,14 +83,14 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         let c = max(2, Int(bounds.width / cellW)), r = max(2, Int(visibleHeight / cellH))
         if c == cols && r == rows { return }
         cols = c; rows = r
-        onResize(c, r)
+        onResize(max(Self.minCols, c), r)
     }
 
     /// Say again what fits (a new terminal on screen must hear it).
     func refit() {
         guard bounds.width > 0, visibleHeight > 0 else { return }
         cols = max(2, Int(bounds.width / cellW)); rows = max(2, Int(visibleHeight / cellH))
-        onResize(cols, rows)
+        onResize(max(Self.minCols, cols), rows)
     }
 
     override func layoutSubviews() { super.layoutSubviews(); fit() }
