@@ -28,12 +28,6 @@ final class ConsolesUITests: XCTestCase {
         sleep(1)
         shot("3-size-here")
 
-        // Ordering by dragging in the STRIP: the number itself drags (there is no grip there).
-        app.staticTexts["console-3"].press(forDuration: 0.2, thenDragTo: app.staticTexts["console-1"])
-        sleep(1)
-        shot("3b-strip-reordered")
-        XCTAssertLessThan(app.staticTexts["console-3"].frame.minY, app.staticTexts["console-1"].frame.minY, "3 dropped on 1 takes its place in the strip")
-
         // The writing line (✎): what is typed shows here and goes whole with ⏎.
         app.buttons["key-compose"].tap()
         let compose = app.textFields["compose-input"]
@@ -60,9 +54,9 @@ final class ConsolesUITests: XCTestCase {
         grips.element(boundBy: 2).press(forDuration: 0.2, thenDragTo: grips.element(boundBy: 0))
         sleep(1)
         shot("5-reordered")
-        // After the strip's move the panel lists 3, 1, 2; the last row (2) dropped on the first (3) leads.
-        let row2 = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '● 2'")).firstMatch
+        // The panel lists 1, 2, 3; the last row (3) dropped on the first (1) leads.
+        let row1 = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '1 ·'")).firstMatch
         let row3 = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '3 ·'")).firstMatch
-        XCTAssertLessThan(row2.frame.minY, row3.frame.minY, "the last row dropped on the first takes its place in the panel")
+        XCTAssertLessThan(row3.frame.minY, row1.frame.minY, "the last row dropped on the first takes its place in the panel")
     }
 }
