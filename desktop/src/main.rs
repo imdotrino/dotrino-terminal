@@ -243,7 +243,7 @@ fn drop_target(ids: &[&str], id: &str, over: &str) -> Option<Option<String>> {
 }
 
 /// A qué consola pasa una ventana que se quedó sin la suya: la primera que nadie tiene abierta y,
-/// si todas lo están, la primera. `None` = no queda ninguna (la ventana se cierra).
+/// si todas lo están, la primera. `None` = no queda ninguna (la ventana queda sin consola).
 fn next_console(list: &[ConsoleInfo]) -> Option<String> {
     list.iter().find(|c| c.watchers.is_empty()).or_else(|| list.first()).map(|c| c.id.clone())
 }
@@ -1454,8 +1454,9 @@ impl App {
                 }
                 // Si es la de esta ventana, la ventana no se cierra: PRIMERO pasa a otra consola
                 // y luego se mata la vieja; al revés, el cliente vería terminar su consola y la
-                // ventana se cerraría. Si no queda NINGUNA, la ventana se cierra: aquí nunca se
-                // crea una consola (solo el «+», o una ventana nueva sin ninguna libre).
+                // ventana se cerraría. Si no queda NINGUNA, la ventana sigue, SIN consola y con su
+                // panel (el cliente ≥ 0.33 se queda esperando): aquí nunca se crea una consola
+                // (solo el «+», o una ventana nueva sin ninguna libre).
                 if is_mine {
                     // La primera que NO esté abierta en otra pantalla; solo si todas lo están, la
                     // primera que haya (la misma regla del cliente cuando se la cierra otra pantalla).
@@ -1469,8 +1470,7 @@ impl App {
                         .filter(|c| !self.dying.contains(&c.id))
                         .collect();
                     let Some(other) = next_console(&list) else {
-                        let kill = self.update(Message::KillNow(id, cid));
-                        return kill.chain(self.close(id));
+                        return self.update(Message::KillNow(id, cid));
                     };
                     let switch = self.switch_to(id, Pending::Attach(other));
                     return switch.chain(later(400, Message::KillNow(id, cid)));

@@ -377,7 +377,11 @@ function interactive (conn, first, dir) {
   // Hasta que el agente diga `attached` no hay consola a la que escribir: se guarda.
   let ready = false
   let queued = ''
-  const input = (data) => { if (ready) conn.send({ type: 'input', data }); else queued += data }
+  // SIN CONSOLA (`empty`): otra pantalla cerró la última de la máquina. La ventana sigue, vacía,
+  // hasta que se abra una (Ctrl+] n, el «+» de la app) o se pase a una (Ctrl+] a<id>). Lo que se
+  // teclee ahí no va a ningún sitio: se descarta, no se guarda para una consola que aún no existe.
+  let empty = false
+  const input = (data) => { if (ready) conn.send({ type: 'input', data }); else if (!empty) queued += data }
   if (!process.stdin.isTTY || !process.stdout.isTTY) die(t('dotrino-terminal necesita una terminal (TTY).', 'dotrino-terminal needs a terminal (TTY).'))
   const out = process.stdout
   let consoleId = null
@@ -438,8 +442,9 @@ function interactive (conn, first, dir) {
       // se va — nadie aquí pidió cerrarla, y cerrarla dejaba al usuario sin ventana. Pasa a una
       // consola que YA existe: primero una que no mire nadie; si todas se miran, la primera igual.
       // NUNCA crea una nueva (dueño, 2026-10-08: para no llenarse de consolas que nadie mira): si la
-      // máquina se quedó sin ninguna, la ventana se cierra. Igual si la shell terminó sola (`exit`)
-      // o la cerró esta misma ventana, como cualquier terminal.
+      // máquina se quedó sin ninguna, la ventana se queda SIN consola (`empty`) y lo dice. Si la
+      // shell terminó sola (`exit`) o la cerró esta misma ventana, la ventana se cierra, como
+      // cualquier terminal.
       if (m.closedBy === 'other') {
         const closed = consoleId
         consoleId = null
@@ -449,7 +454,9 @@ function interactive (conn, first, dir) {
           const rest = r.list.filter((c) => c.id !== closed)
           const other = rest.find((c) => !c.watchers.length) || rest[0]
           if (other) return switchTo({ type: 'attach', id: other.id })
-          finish(m.code || 0)
+          empty = true
+          shellTitle = ''; remote = new Set(); showTitle()
+          out.write(`\x1bc\x1b[2m${t('No hay consolas abiertas. Ctrl+] y luego n abre una.', 'No open consoles. Ctrl+] then n opens one.')}\x1b[0m\r\n`)
         })
         return
       }
@@ -484,6 +491,7 @@ function interactive (conn, first, dir) {
   // Cambiar de consola SIN salir: por la misma conexión, y con la pantalla en limpio para que la
   // repetición de la otra consola no se pinte encima. Lo tecleado mientras tanto se guarda.
   const switchTo = (msg) => {
+    empty = false
     ready = false
     switching = true
     out.write('\x1bc')                 // RIS: pantalla, historial y modos, de cero
@@ -510,6 +518,7 @@ function interactive (conn, first, dir) {
         if (ch === 'd') {
           if (send) input(send)
           conn.send({ type: 'detach' })
+          if (!consoleId) return finish(0)
           return finish(0, t(`Consola soltada. Para volver: dotrino-terminal attach ${consoleId}`, `Console detached. To return: dotrino-terminal attach ${consoleId}`))
         }
         if (ch === 'a') { collecting = ''; continue }
