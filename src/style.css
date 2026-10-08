@@ -152,12 +152,13 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 /* Los PANELES de una pestaña (split): un árbol de divisiones; el divisor se arrastra. */
 .panes { flex: 1; min-width: 0; display: flex; }
 .panes > * { flex: 1; min-width: 0; min-height: 0; }
-.split { display: flex; min-width: 0; min-height: 0; }
-.split.row { flex-direction: row; }
-.split.col { flex-direction: column; }
+/* `align-items: stretch` a propósito: hay un `.row` global con `center` que dejaba a cero la rama de abajo. */
+.split { display: flex; align-items: stretch; min-width: 0; min-height: 0; }
+.split.dir-row { flex-direction: row; }
+.split.dir-col { flex-direction: column; }
 .split > .divider { flex: none; background: var(--line); touch-action: none; }
-.split.row > .divider { width: 5px; cursor: col-resize; }
-.split.col > .divider { height: 5px; cursor: row-resize; }
+.split.dir-row > .divider { width: 5px; cursor: col-resize; }
+.split.dir-col > .divider { height: 5px; cursor: row-resize; }
 .split > .divider:hover { background: var(--brand); }
 .pane { position: relative; display: flex; min-width: 0; min-height: 0; outline: 1px solid transparent; outline-offset: -1px; }
 .pane.focus { outline-color: var(--brand-soft); }

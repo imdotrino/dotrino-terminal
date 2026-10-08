@@ -14,6 +14,7 @@ import '@dotrino/install' // botón «Instalar app»: captura beforeinstallpromp
 import { createVaultReputation } from '@dotrino/reputation'
 import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
+import { DemoAgentClient, DEMO_MACHINE } from './demoAgent.js'
 import { panelLines, dropTarget } from './panel.js'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
@@ -257,6 +258,8 @@ async function render () {
   if (_probeClient) { try { _probeClient.close() } catch (_) {} _probeClient = null }
   installEl.setAttribute('lang', lang)
   if (!onConsoles) { app.replaceChildren(homeScreen()); return }
+  // `?demo`: la pantalla con un agente de muestra, sin red ni perfil (como en Android e iOS).
+  if (new URLSearchParams(location.search).has('demo')) { app.replaceChildren(terminalScreen({ mode: 'demo', paired: true })); return }
   link = await getLink().catch(() => ({ paired: false }))
   app.innerHTML = ''
   if (link.paired) {
@@ -406,7 +409,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   function renderLayout (s) {
     const build = (n) => {
       if (n.pane) return n.pane.el
-      const box = el(`<div class="split ${n.dir}"></div>`)
+      const box = el(`<div class="split dir-${n.dir}"></div>`)
       const a = build(n.a); const b = build(n.b)
       const bar = el('<div class="divider" role="separator"></div>')
       box.append(a, bar, b)
@@ -867,7 +870,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * que no mire nadie y no esté en ningún panel, o a una nueva.
    */
   async function connectPane (s, p, consoleId) {
-    p.agent = new AgentClient(link, { agentPubkey: s.pub })
+    p.agent = link.mode === 'demo' ? new DemoAgentClient() : new AgentClient(link, { agentPubkey: s.pub })
     p.agent.askCode = ({ wrong }) => askMachineCode(s.alias, wrong)
     p.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
     // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
@@ -989,6 +992,13 @@ function terminalScreen (link) {
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
   const host = makeSessionHost({ tabsEl, termsEl, hint, link })
   host.restore()
+
+  if (link.mode === 'demo') {
+    const box = qs('#machines')
+    box.innerHTML = `<span class="mlabel">${t('machines_title')}</span><div class="machine-list"><div class="machine-row" data-sub="${DEMO_MACHINE.sub}"><button class="machine" data-testid="machine-item"><span class="mdot on"></span>${DEMO_MACHINE.label} +</button></div></div>`
+    box.querySelector('.machine').addEventListener('click', () => host.openConsole(DEMO_MACHINE.sub, DEMO_MACHINE.label))
+    return node
+  }
 
   // --- AUTODESCUBRIMIENTO: se pregunta a los miembros del acta qué son (`probeAgents`) y
   // se listan los que contestan como terminal, con el nombre que les puso el dueño. Una
