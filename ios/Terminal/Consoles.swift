@@ -159,9 +159,12 @@ final class Consoles: ObservableObject {
                 try await c.identifyAs(p.publickey) { try p.signData($0) }
             } catch { c.close(); link = "offline"; throw error }
             link = "online"
+            // The topbar's network stats see this connection (dotrino-native ≥ 0.27).
+            DotrinoNetwork.register(c)
             // When it drops, every session over it is gone: the tabs come back by themselves.
             Task { @MainActor in
                 _ = await c.awaitClosed()
+                DotrinoNetwork.unregister(c)
                 if self.conn === c { self.conn = nil }
                 self.link = "offline"
                 for t in self.tabs { t.lost() }

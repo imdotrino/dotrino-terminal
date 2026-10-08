@@ -6,6 +6,7 @@ import android.os.Looper
 import com.dotrino.sdk.Delegation
 import com.dotrino.sdk.PhoneIdentity
 import com.dotrino.sdk.Profile
+import com.dotrino.sdk.DotrinoNetwork
 import com.dotrino.sdk.ProxyConnection
 import com.dotrino.sdk.RemoteAgent
 import com.dotrino.terminal.term.Terminal
@@ -199,9 +200,12 @@ object Consoles {
             c.identifyAs(p.publickey) { p.signData(it) }
         } catch (e: Exception) { c.close(); link = "offline"; changed(); throw e }
         conn = c; link = "online"; changed()
+        // The topbar's network stats see this connection (dotrino-native ≥ 0.27).
+        DotrinoNetwork.register(c.statsSource)
         // When it drops, every session over it is gone: the tabs come back by themselves.
         scope.launch {
             c.awaitClosed()
+            DotrinoNetwork.unregister(c.statsSource)
             connLock.withLock { if (conn === c) conn = null }
             link = "offline"; changed()
             for (t in tabs.toList()) t.lost()
