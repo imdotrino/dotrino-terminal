@@ -30,6 +30,18 @@ final class ConsolesUITests: XCTestCase {
         shot("3b-strip-reordered")
         XCTAssertLessThan(app.staticTexts["console-3"].frame.minY, app.staticTexts["console-1"].frame.minY, "3 dropped on 1 takes its place in the strip")
 
+        // ▲/▼ when the strip overflows: open consoles until it does, ▼ shows, and at the bottom ▲ shows.
+        for _ in 0..<12 { app.buttons["console-new"].tap() }
+        sleep(1)
+        shot("3a-strip-overflow")
+        XCTAssertTrue(app.buttons["strip-down"].waitForExistence(timeout: 5), "▼ shows when the strip overflows")
+        XCTAssertFalse(app.buttons["strip-up"].exists, "at the top there is no ▲")
+        app.buttons["strip-down"].tap(); app.buttons["strip-down"].tap(); app.buttons["strip-down"].tap()
+        sleep(1)
+        shot("3a2-strip-scrolled")
+        XCTAssertTrue(app.buttons["strip-up"].waitForExistence(timeout: 5), "scrolled down, ▲ shows")
+        app.staticTexts["console-1"].tap()
+
         // The writing line (✎): what is typed shows here and goes whole with ⏎.
         app.buttons["key-compose"].tap()
         let compose = app.textFields["compose-input"]
