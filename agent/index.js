@@ -78,9 +78,9 @@ export function makeHub (pty, opts = {}) {
  * Atiende una sesión: la cifrada de un aparato remoto, o la de una ventana de esta máquina
  * (`local.js`, por el socket). Una sesión mira UNA consola a la vez.
  *
- * Al irse la sesión, la consola se SUELTA — salvo que sea una ventana local que la abrió
- * ella: cerrar la ventana mata su shell, como en cualquier terminal. Una ventana que solo
- * se enganchó a una consola ajena, o que la soltó a propósito (`detach`), no mata nada.
+ * Al irse la sesión, la consola se SUELTA, siempre: cerrar una ventana nunca cierra una consola
+ * (dueño, 2026-10-08), tampoco la que esa ventana abrió. Se cierra con `close`/`kill` o saliendo
+ * de su shell.
  *
  * Tamaño con varios mirando: lo decide quien lo FIJÓ (`pin`, el ⤢ de la app o el teléfono) y, si
  * nadie, el último que se enganchó. Solo esa pantalla lo cambia (sus `resize` se siguen: girar el
@@ -94,14 +94,13 @@ export function makeHub (pty, opts = {}) {
  */
 export function serveSession (session, hub, { origin = 'remote', gate = null } = {}) {
   let current = null
-  let owned = null                       // la consola que esta ventana local abrió
   let size = { cols: 80, rows: 24 }
   const viewer = {
     origin,
     device: session.device || null,
     onOut: (data) => { session.send({ type: 'out', data }) },
     // `closedBy: 'other'`: la cerró otra pantalla (no esta, ni la shell por su cuenta).
-    onExit: (code, why) => { current = null; owned = null; session.send({ type: 'exit', code, ...(why?.byOther ? { closedBy: 'other' } : {}) }) },
+    onExit: (code, why) => { current = null; session.send({ type: 'exit', code, ...(why?.byOther ? { closedBy: 'other' } : {}) }) },
     onMeta: (info) => { session.send({ type: 'meta', console: info }) }
   }
   const release = () => { if (current) { current.detach(viewer); current = null } }
@@ -178,7 +177,6 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       // dice: abrir en otra carpeta sin avisar haría que un comando corra donde no toca.
       if (msg.cwd != null && !isDir(msg.cwd)) return fail('bad-cwd', `not a directory: ${msg.cwd}`)
       const c = hub.create({ ...size, origin, cwd: msg.cwd || null })
-      if (origin === 'local') owned = c
       attachTo(c, { fresh: true })
       return
     }
@@ -190,7 +188,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       attachTo(c, { fresh: false })
       return
     }
-    if (msg.type === 'detach') { owned = null; release(); return }
+    if (msg.type === 'detach') { release(); return }
     if (msg.type === 'input') {
       if (!current) return
       const data = String(msg.data ?? '')
@@ -210,11 +208,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       session.send({ type: 'consoles', list: hub.list() })
     }
   })
-  session.on('close', () => {
-    const mine = owned && owned === current ? owned : null
-    release()
-    if (mine) hub.kill(mine.id, viewer)
-  })
+  session.on('close', release)
 }
 
 /**

@@ -50,8 +50,8 @@ dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para 
 dotrino-terminal vscode [--name <n>]     # la terminal embebida de VS Code abre consolas de aquí (--off lo deshace)
 ```
 
-Cerrar la ventana cierra su consola, como cualquier terminal; **Ctrl+] y luego d** la suelta
-viva, **Ctrl+] n** abre otra (soltando la actual) y **Ctrl+] a<id> Enter** pasa a otra consola,
+Cerrar la ventana no cierra la consola: sigue viva en el agente y se retoma después (se cierra
+saliendo de su shell o desde el panel); **Ctrl+] y luego d** la suelta sin cerrar la ventana, **Ctrl+] n** abre otra (soltando la actual) y **Ctrl+] a<id> Enter** pasa a otra consola,
 por la misma conexión, y **Ctrl+] r** ajusta la consola al tamaño de esta ventana (la app de
 escritorio lo manda al ganar el foco). `--tag <t>` presenta la ventana en la lista de quién mira. Si un aparato remoto entra en una ventana local, esa ventana suena y lo dice en el
 título. Sin enlace el agente atiende solo a las ventanas locales; al enlazarlo

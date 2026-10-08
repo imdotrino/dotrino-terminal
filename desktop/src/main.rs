@@ -107,9 +107,6 @@ struct ConsoleInfo {
     /// Su número, fijo mientras viva (lo da el agente ≥ 0.12). Con uno anterior, la posición.
     #[serde(default)]
     n: Option<u32>,
-    /// `local` (abierta desde esta máquina) o `remote` (desde otro aparato).
-    #[serde(default)]
-    origin: String,
     #[serde(default)]
     title: String,
     /// La carpeta en la que está AHORA (agente ≥ 0.22, solo donde hay /proc); con `~`.
@@ -178,12 +175,12 @@ mod tests {
     use super::{drop_target, panel_lines};
 
     #[test]
-    fn only_another_local_window_counts_as_open_elsewhere() {
+    fn a_console_open_in_a_local_window_is_marked_and_a_remote_one_is_not() {
         let c = |watchers: &str| serde_json::from_str::<super::ConsoleInfo>(&format!(r#"{{"id":"a","watchers":{watchers}}}"#)).unwrap();
-        assert!(!c("[]").open_in_another_window("me"));
-        assert!(!c(r#"[{"origin":"local","tag":"me"}]"#).open_in_another_window("me"));
-        assert!(!c(r#"[{"origin":"local","tag":"me"},{"origin":"remote"}]"#).open_in_another_window("me"));
-        assert!(c(r#"[{"origin":"local","tag":"me"},{"origin":"local","tag":"other"}]"#).open_in_another_window("me"));
+        assert!(!c("[]").open_in_a_window());
+        assert!(!c(r#"[{"origin":"remote"}]"#).open_in_a_window());
+        assert!(c(r#"[{"origin":"local","tag":"me"}]"#).open_in_a_window());
+        assert!(c(r#"[{"origin":"remote"},{"origin":"local","tag":"other"}]"#).open_in_a_window());
     }
 
     #[test]
@@ -261,13 +258,13 @@ impl ConsoleInfo {
 const BUSY_COLOR: Color = Color::from_rgb(0.961, 0.761, 0.420);
 const DONE_COLOR: Color = Color::from_rgb(0.478, 0.843, 0.761);
 
-/// Verde = abierta en otra ventana de ESTA máquina.
-const ELSEWHERE_COLOR: Color = Color::from_rgb(0.298, 0.851, 0.392);
+/// Verde = abierta en una ventana de ESTA máquina.
+const OPEN_COLOR: Color = Color::from_rgb(0.298, 0.851, 0.392);
 
 impl ConsoleInfo {
-    /// ¿La muestra otra ventana de esta máquina? Lo abierto en otro aparato no cuenta.
-    fn open_in_another_window(&self, my_tag: &str) -> bool {
-        self.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref() != Some(my_tag))
+    /// ¿La muestra alguna ventana de esta máquina (esta incluida)? Lo abierto en otro aparato no cuenta.
+    fn open_in_a_window(&self) -> bool {
+        self.watchers.iter().any(|w| w.origin == "local")
     }
 }
 
@@ -277,8 +274,9 @@ fn dotted<'a>(under: Element<'a, Message>, on: bool) -> Element<'a, Message> {
     if !on {
         return under;
     }
-    let dot = container(space()).width(6).height(6).style(|_: &Theme| container::Style { background: Some(ELSEWHERE_COLOR.into()), border: Border::default().rounded(3.0), ..Default::default() });
-    iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(5)].into()
+    // 5 px, a 3 del borde: en la esquina, sin tocar el borde ni montarse sobre el número.
+    let dot = container(space()).width(5).height(5).style(|_: &Theme| container::Style { background: Some(OPEN_COLOR.into()), border: Border::default().rounded(2.5), ..Default::default() });
+    iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(3)].into()
 }
 
 /// El botón de una consola en el panel, con el borde del color de lo que está haciendo.
@@ -361,9 +359,6 @@ struct Win {
     /// La consola recién elegida en el panel, marcada YA, antes de que la próxima lectura de la
     /// lista lo confirme (si no, durante un momento salían dos marcadas, o ninguna).
     showing: Option<String>,
-    /// Al terminar de soltarla para cerrar la ventana, cerrar también esta consola (ver
-    /// `request_close`).
-    kill_on_close: Option<String>,
     /// ¿Se ve el panel lateral de consolas en ESTA ventana? (cada ventana el suyo)
     sidebar: bool,
     /// Panel colapsado: una franja con un botón numerado por consola, para que ocupe poco.
@@ -388,11 +383,6 @@ struct App {
     hover: Option<(window::Id, String)>,
     /// La consola que se está arrastrando en el panel para cambiarla de sitio.
     drag: Option<Drag>,
-    /// Las consolas que usaron las ventanas de la app (perfil, id): al cerrar la última ventana se
-    /// cierran, salvo las dejadas en segundo plano.
-    tracked: std::collections::HashSet<(String, String)>,
-    /// Las que la persona dejó en segundo plano (clic derecho en el panel): sobreviven a la app.
-    background: std::collections::HashSet<(String, String)>,
     /// Consolas que se mandaron CERRAR y el agente aún no confirma: fuera del panel y sin poder
     /// elegirse. Entre pedir el cierre y que ocurra hay un instante (la ventana pasa antes a otra
     /// consola); volver a entrar en ella en ese hueco hacía que el cierre se llevara la ventana.
@@ -408,7 +398,6 @@ enum Message {
     /// Otra ventana con una consola nueva, siempre.
     NewWindowFresh(Option<window::Id>),
     /// Panel (clic derecho): dejar una consola en segundo plano, o quitarla de ahí.
-    ToggleBackground(window::Id, String),
     Opened(window::Id),
     /// La ventana pidió cerrarse (la X, Alt+F4).
     Close(window::Id),
@@ -709,25 +698,6 @@ fn sh_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-/// Las consolas en segundo plano, recordadas entre aperturas de la app: «perfil id» por línea.
-fn background_file() -> Option<PathBuf> {
-    last_profile_file().map(|f| f.with_file_name("background"))
-}
-
-fn load_background() -> std::collections::HashSet<(String, String)> {
-    let Some(text) = background_file().and_then(|f| std::fs::read_to_string(f).ok()) else { return Default::default() };
-    text.lines().filter_map(|l| l.split_once(' ').map(|(p, c)| (p.to_string(), c.to_string()))).collect()
-}
-
-fn save_background(set: &std::collections::HashSet<(String, String)>) {
-    let Some(file) = background_file() else { return };
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let text: String = set.iter().map(|(p, c)| format!("{p} {c}\n")).collect();
-    let _ = std::fs::write(file, text);
-}
-
 /// El registro de la app: `~/.config/dotrino-terminal/desktop.log`. Una línea por hecho, con la
 /// hora. Se recorta al pasar de 256 KB (se queda la mitad más reciente).
 fn log(msg: &str) {
@@ -775,7 +745,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, tracked: Default::default(), background: load_background(), dying: Default::default(), next_tag: 0 };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0 };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -840,7 +810,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, kill_on_close: None, sidebar: true, sidebar_collapsed: true });
+        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -1008,7 +978,7 @@ impl App {
         self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= PANEL_CLIENT)
     }
 
-    /// Una consola del perfil que no esté abierta en ninguna ventana (ni dejada en segundo plano):
+    /// Una consola del perfil que no esté abierta en ninguna ventana:
     /// la que se reutiliza al abrir una ventana, en vez de crear otra. Se pregunta al agente en el
     /// momento, no a la lista guardada, que puede tener hasta 1,5 s.
     fn free_console(&self, profile: &str) -> Option<String> {
@@ -1016,10 +986,7 @@ impl App {
             return None;
         }
         let list = self.profile_dir(profile).and_then(|dir| agent_list(&dir))?;
-        // Las libres normales primero; si no hay, una de segundo plano (sigue siéndolo).
-        let free: Vec<ConsoleInfo> = list.into_iter().filter(|c| c.watchers.is_empty() && !self.dying.contains(&c.id)).collect();
-        let bg = |c: &ConsoleInfo| self.background.contains(&(profile.to_string(), c.id.clone()));
-        free.iter().find(|c| !bg(c)).or_else(|| free.first()).map(|c| c.id.clone())
+        list.into_iter().find(|c| c.watchers.is_empty() && !self.dying.contains(&c.id)).map(|c| c.id)
     }
 
     /// Abre una ventana enganchada a `attach` (si hay) o con una consola nueva.
@@ -1047,25 +1014,6 @@ impl App {
             list.retain(|c| !self.dying.contains(&c.id));
         }
         self.consoles = fresh;
-        // Lo que muestran las ventanas (abierto desde esta máquina) queda a cargo de la app; lo que
-        // ya no existe, se olvida.
-        for w in self.windows.values() {
-            let Some(p) = &w.profile else { continue };
-            for c in self.consoles.get(p).into_iter().flatten() {
-                if c.origin == "local" && c.watchers.iter().any(|x| x.tag.as_deref() == Some(w.tag.as_str())) {
-                    self.tracked.insert((p.clone(), c.id.clone()));
-                }
-            }
-        }
-        let alive: std::collections::HashSet<(String, String)> =
-            self.consoles.iter().flat_map(|(p, l)| l.iter().map(move |c| (p.clone(), c.id.clone()))).collect();
-        let polled: std::collections::HashSet<String> = self.consoles.keys().cloned().collect();
-        self.tracked.retain(|k| !polled.contains(&k.0) || alive.contains(k));
-        let before = self.background.len();
-        self.background.retain(|k| !polled.contains(&k.0) || alive.contains(k));
-        if self.background.len() != before {
-            save_background(&self.background);
-        }
         // Lo marcado a mano se suelta en cuanto la lista lo dice (o la consola ya no está).
         let tags: Vec<(window::Id, String, Option<String>, Option<String>)> =
             self.windows.iter().map(|(id, w)| (*id, w.tag.clone(), w.profile.clone(), w.showing.clone())).collect();
@@ -1130,27 +1078,13 @@ impl App {
         }
     }
 
-    /// Cerrar una ventana. La regla (la que se lee igual que se usa): **cerrar una ventana cierra
-    /// la consola que está mostrando, salvo que la esté mirando otra ventana u otro aparato, o que
-    /// esté en segundo plano.** Las que dejó atrás al cambiar desde el panel siguen sueltas.
-    ///
-    /// Primero se SUELTA (Ctrl+] d): el agente, por su cuenta, mataría la consola que esta ventana
-    /// abrió, la mire quien la mire. Luego, si toca, se cierra la que se mostraba.
+    /// Cerrar una ventana NUNCA cierra una consola (dueño, 2026-10-08): la ventana SUELTA la que
+    /// muestra (Ctrl+] d) y se va; la consola sigue viva en el agente. Una consola se cierra desde
+    /// el panel («×» o «Cerrar consola»), o saliendo de su shell.
     fn request_close(&mut self, id: window::Id) -> Task<Message> {
         if self.panel_ready() {
-            if let (Some(cid), Some(win)) = (self.mine(id), self.windows.get(&id)) {
-                let profile = win.profile.clone().unwrap_or_default();
-                let tag = win.tag.clone();
-                // Quién mira, preguntado en el momento (la lista guardada puede tener 1,5 s).
-                let list = self.profile_dir(&profile).and_then(|d| agent_list(&d)).unwrap_or_default();
-                let others = list
-                    .iter()
-                    .find(|c| c.id == cid)
-                    .is_some_and(|c| c.watchers.iter().any(|w| w.tag.as_deref() != Some(tag.as_str())));
-                let background = self.background.contains(&(profile, cid.clone()));
-                let win = self.windows.get_mut(&id).expect("window");
+            if let Some(win) = self.windows.get_mut(&id) {
                 if let (Some(term), Mode::Console) = (win.term.as_mut(), &win.mode) {
-                    win.kill_on_close = (!others && !background).then_some(cid);
                     win.pending = Some(Pending::Close);
                     term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(b"\x1dd".to_vec())));
                     // Si el cliente no contesta (colgado), la ventana se cierra igual al rato.
@@ -1161,36 +1095,7 @@ impl App {
         self.close(id)
     }
 
-    /// Cerrar ya la ventana, y la consola que mostraba si `request_close` decidió cerrarla.
-    fn finish_close(&mut self, id: window::Id) -> Task<Message> {
-        let kill = self.windows.get_mut(&id).and_then(|w| w.kill_on_close.take().map(|c| (w.profile.clone(), c)));
-        if let Some((Some(p), cid)) = kill {
-            if let Some(dir) = self.profile_dir(&p) {
-                agent_send(&dir, &serde_json::json!({ "type": "kill", "id": cid }));
-            }
-        }
-        self.close(id)
-    }
-
     fn close(&mut self, id: window::Id) -> Task<Message> {
-        // La última ventana: se cierran las consolas que usaron las ventanas de la app, salvo las
-        // dejadas en segundo plano y las que esté mirando alguien más (otro aparato, otra terminal).
-        if self.windows.len() == 1 && self.windows.contains_key(&id) {
-            self.poll_consoles();
-            let ours: Vec<String> = self.windows.values().map(|w| w.tag.clone()).collect();
-            for (p, cid) in self.tracked.clone() {
-                if self.background.contains(&(p.clone(), cid.clone())) {
-                    continue;
-                }
-                let Some(c) = self.consoles.get(&p).and_then(|l| l.iter().find(|c| c.id == cid)) else { continue };
-                let others = c.watchers.iter().any(|w| !w.tag.as_ref().is_some_and(|t| ours.contains(t)));
-                if !others {
-                    if let Some(dir) = self.profile_dir(&p) {
-                        agent_send(&dir, &serde_json::json!({ "type": "kill", "id": cid }));
-                    }
-                }
-            }
-        }
         if let Some(win) = self.windows.remove(&id) {
             if let Some(term) = win.term {
                 self.by_term.remove(&term.id);
@@ -1209,7 +1114,7 @@ impl App {
             // Salvo que su perfil haya cambiado de nombre (`dotrino-terminal rename` desde esta
             // misma consola): entonces la ventana sigue, en el perfil con su nombre nuevo.
             // La ventana soltó su consola para pasar a otra (panel lateral): sigue, en esa.
-            Mode::Console if matches!(win.pending, Some(Pending::Close)) => self.finish_close(id),
+            Mode::Console if matches!(win.pending, Some(Pending::Close)) => self.close(id),
             Mode::Console if win.pending.is_some() => {
                 let win = self.windows.get_mut(&id).expect("window");
                 match win.pending.take() {
@@ -1288,20 +1193,10 @@ impl App {
                 let free = if fresh { None } else { profile.as_deref().and_then(|p| self.free_console(p)) };
                 self.open_window_on(profile, cwd, free).1
             }
-            Message::ToggleBackground(id, cid) => {
-                if let Some(p) = self.windows.get(&id).and_then(|w| w.profile.clone()) {
-                    let key = (p, cid);
-                    if !self.background.remove(&key) {
-                        self.background.insert(key);
-                    }
-                    save_background(&self.background);
-                }
-                Task::none()
-            }
             Message::Opened(id) => self.focus(id),
             Message::Close(id) => self.request_close(id),
             Message::ForceClose(id) => {
-                if self.windows.contains_key(&id) { self.finish_close(id) } else { Task::none() }
+                if self.windows.contains_key(&id) { self.close(id) } else { Task::none() }
             }
             Message::SwitchProfile(id, name) => {
                 let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
@@ -1750,8 +1645,6 @@ impl App {
     /// Clic derecho sobre una consola del panel (colapsado o no): lo que se puede hacer con ella.
     fn console_menu<'a>(&self, id: window::Id, cid: String, is_mine: bool, under: Element<'a, Message>) -> Element<'a, Message> {
         let ready = self.panel_ready();
-        let in_bg = self.windows.get(&id).and_then(|w| w.profile.clone()).is_some_and(|p| self.background.contains(&(p, cid.clone())));
-        let bg_label = if in_bg { t("Quitar de segundo plano", "Remove from background") } else { t("Dejar en segundo plano", "Keep in background") };
         let pin_label = if self.pinned_here(id) { t("Soltar el tamaño", "Release the size") } else { t("Usar el tamaño de esta ventana", "Use this window's size") };
         let can_pin = is_mine && self.pin_ready();
         ContextMenu::new(under, move || {
@@ -1760,8 +1653,6 @@ impl App {
                 column![
                     entry(t("Abrir aquí", "Open here"), "", here),
                     entry(t("Abrir en otra ventana", "Open in another window"), "", Some(Message::OpenInNewWindow(id, cid.clone()))),
-                    // Las de segundo plano siguen vivas al cerrar la app; las demás se cierran con ella.
-                    entry(bg_label.clone(), "", Some(Message::ToggleBackground(id, cid.clone()))),
                     entry(pin_label.clone(), "", can_pin.then_some(Message::TogglePin(id))),
                     separator(),
                     entry(t("Cerrar consola", "Close console"), "", Some(Message::KillConsole(id, cid.clone()))),
@@ -1842,14 +1733,14 @@ impl App {
                     .padding([4, 0])
                     .style(console_button(is_mine, c.act()))
                     .on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
-                let elsewhere = c.open_in_another_window(&my_tag);
-                let b = self.console_menu(id, c.id.clone(), is_mine, container(dotted(b.into(), elsewhere)).center_x(Length::Fill).into());
+                let open = is_mine || c.open_in_a_window();
+                let b = self.console_menu(id, c.id.clone(), is_mine, container(dotted(b.into(), open)).center_x(Length::Fill).into());
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
                     Act::Done => format!("{tip} · {}", t("terminó", "finished")),
                     Act::Idle => tip,
                 };
-                let tip = if elsewhere { format!("{tip} · {}", t("abierta en otra ventana", "open in another window")) } else { tip };
+                let tip = if c.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref() != Some(my_tag.as_str())) { format!("{tip} · {}", t("abierta en otra ventana", "open in another window")) } else { tip };
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
                 let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(draggable(&c.id, tipped, Length::Fixed(24.0)));
@@ -1896,8 +1787,6 @@ impl App {
                 t("abierta en otra ventana", "open in another window")
             } else if is_mine {
                 t("en esta ventana", "in this window")
-            } else if self.background.contains(&(profile.to_string(), c.id.clone())) {
-                t("en segundo plano", "in the background")
             } else {
                 t("suelta", "detached")
             };
@@ -1922,7 +1811,7 @@ impl App {
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
-            let pick = dotted(pick.into(), c.open_in_another_window(&my_tag));
+            let pick = dotted(pick.into(), is_mine || c.open_in_a_window());
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             items = items.push(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill));
         }

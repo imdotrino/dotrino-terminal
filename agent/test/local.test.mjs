@@ -52,21 +52,15 @@ test('una ventana local abre una consola por el socket y la usa', async () => {
   done()
 })
 
-test('cerrar la ventana que ABRIÓ la consola la mata; soltarla antes, no', async () => {
+test('cerrar la ventana que ABRIÓ la consola NO la mata: queda suelta y sin nadie mirando', async () => {
   const { dir, hub, done } = await setup()
   const a = await win(dir)
   a.c.send({ type: 'open', cols: 80, rows: 24 })
   await until(() => a.got.some((m) => m.type === 'attached'))
   a.c.close()
-  await until(() => hub.list().length === 0)
-
-  const b = await win(dir)
-  b.c.send({ type: 'open', cols: 80, rows: 24 })
-  await until(() => b.got.some((m) => m.type === 'attached'))
-  b.c.send({ type: 'detach' })
-  b.c.close()
+  await until(() => hub.list()[0]?.watchers.length === 0)
   await new Promise((r) => setTimeout(r, 200))
-  assert.equal(hub.list().length, 1, 'soltada, sigue viva')
+  assert.equal(hub.list().length, 1, 'sigue viva')
   done()
 })
 

@@ -21,8 +21,8 @@
  * cliente más, igual que el navegador de otro aparato. Por eso lo que se abre aquí se puede
  * abrir desde terminal.dotrino.com. Si el agente no está corriendo, se levanta solo.
  *
- * Cerrar la ventana mata la consola que abrió, como en cualquier terminal. Para dejarla viva
- * y retomarla después: Ctrl+] y luego d.
+ * Cerrar la ventana NO cierra la consola: sigue viva en el agente y se retoma después. Se
+ * cierra saliendo de su shell (`exit`) o desde el panel.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -69,7 +69,7 @@ if (args.includes('-h') || args.includes('--help')) {
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla; Ctrl+] n abre otra
 (y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola; Ctrl+] p fija el tamaño de la
 consola a esta ventana y Ctrl+] u lo suelta.
-Cerrar la ventana cierra la consola que abrió.`, `usage:
+Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `usage:
   dotrino-terminal [--name <n>] [--cwd <dir>] open a new console in this window, in the current folder
   dotrino-terminal attach <id> [--name <n>]  attach to an open console
   dotrino-terminal ls [--name <n>] [--json]  list open consoles
@@ -88,7 +88,7 @@ Cerrar la ventana cierra la consola que abrió.`, `usage:
 Inside a console: Ctrl+] then d detaches without closing it; Ctrl+] n opens another
 (detaching the current one); Ctrl+] a <id> Enter switches to that console; Ctrl+] p pins the
 console's size to this window and Ctrl+] u unpins it.
-Closing the window closes the console it opened.`))
+Closing the window does not close the console: it stays open and can be picked up later.`))
   process.exit(0)
 }
 
@@ -534,7 +534,7 @@ function interactive (conn, first, dir) {
   // Lo tecleado antes de llegar aquí pasa por el mismo camino (el atajo de soltar incluido).
   for (const b of early.splice(0)) onKeys(b)
   out.on('resize', () => conn.send({ type: 'resize', ...size() }))
-  // La ventana se cerró: el agente ve caer la conexión y mata la consola que abrimos.
+  // La ventana se cerró: el agente ve caer la conexión y suelta la consola (sigue viva).
   for (const sig of ['SIGHUP', 'SIGTERM']) process.on(sig, () => { conn.close(); process.exit(0) })
 
   conn.send({ ...first, ...size() })
