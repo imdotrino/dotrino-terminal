@@ -332,13 +332,15 @@ private struct ConsoleScreen: View {
         .background(Palette.panel)
     }
 
-    private func sizeButton(_ size: CGFloat, height: CGFloat? = nil) -> some View {
+    /// `fill`: the background when it is off (the strip's subtle one); on, the accent fills the WHOLE area.
+    private func sizeButton(_ size: CGFloat, height: CGFloat? = nil, fill: Color = .clear) -> some View {
         let on = tab.sizeHere, n = tab.number
         return Button { toggleSize() } label: {
             SizeIcon().stroke(on ? Palette.accent : Palette.muted, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
                 .frame(width: 16, height: 16).padding(7)
-                .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accentSoft : Color.clear))
                 .opacity(n == nil ? 0.3 : 1)
+                .frame(width: size, height: height ?? size)
+                .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accentSoft : fill))
         }
         .disabled(n == nil)
         .accessibilityLabel(n.map { on ? t("size.release", ("n", $0)) : t("size.use", ("n", $0)) } ?? t("size.use", ("n", "")))
@@ -373,7 +375,7 @@ private struct ConsoleScreen: View {
                         .accessibilityLabel(t("console.new")).accessibilityIdentifier("console-new")
                     // ALL the strip's buttons the same height (56) and each with a subtle background
                     // that shows its area (owner, 2026-10-07).
-                    sizeButton(32, height: 56).background(RoundedRectangle(cornerRadius: 6).fill(Palette.panel2))
+                    sizeButton(32, height: 56, fill: Palette.panel2)
                     ForEach(tab.consoles) { c in
                         let on = c.id == tab.consoleId
                         // Tall (56 pt, twice the old 28): at 28, and at 40, they were hard to hit (owner, 2026-10-07).
