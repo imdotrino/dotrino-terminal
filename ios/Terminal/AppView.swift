@@ -210,6 +210,8 @@ private struct ConsoleScreen: View {
     @State private var dragOver: String?
     @State private var rowFrames: [String: CGRect] = [:]
     @State private var stripFrames: [String: CGRect] = [:]
+    /// The strip number whose hold just showed the actions: lifting it is not a tap.
+    @State private var heldId: String?
     @State private var actions: ConsoleInfo?
     @State private var toast: String?
     @State private var mods = (ctrl: false, alt: false)
@@ -367,21 +369,22 @@ private struct ConsoleScreen: View {
                         }
                         .opacity(dragId == c.id ? 0.5 : 1)
                         .contentShape(Rectangle())
-                        .onTapGesture { tab.switchTo(c.id) }
-                        // The hold as a simultaneous gesture: `onLongPressGesture` on the same view
-                        // would swallow the drag below. Moving the finger cancels the hold.
-                        .simultaneousGesture(LongPressGesture().onEnded { _ in actions = c })
-                        // The number itself drags (no room for a grip, as in the PWA's strip): a tap
-                        // opens the console, a hold shows its actions, and moving reorders.
-                        .highPriorityGesture(DragGesture(minimumDistance: 8, coordinateSpace: .named("strip-rows"))
+                        // The number itself drags (no room for a grip, as in the PWA's strip). ONE
+                        // gesture for the tap and the drag: a tap gesture on the same view would
+                        // swallow the drag. Lifting without having moved opens the console; moving
+                        // reorders; a hold (simultaneous, cancelled by moving) shows its actions.
+                        .simultaneousGesture(LongPressGesture().onEnded { _ in heldId = c.id; actions = c })
+                        .highPriorityGesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("strip-rows"))
                             .onChanged { v in
+                                guard abs(v.translation.height) >= 8 || dragId == c.id else { return }
                                 dragId = c.id
                                 let rows = tab.consoles.compactMap { r in stripFrames[r.id].map { (r.id, $0) } }
                                 dragOver = (rows.first { v.location.y < $0.1.maxY } ?? rows.last)?.0
                             }
                             .onEnded { _ in
-                                if let over = dragOver, over != c.id { tab.move(c.id, over: over) }
-                                dragId = nil; dragOver = nil
+                                if dragId == c.id { if let over = dragOver, over != c.id { tab.move(c.id, over: over) } }
+                                else if heldId != c.id { tab.switchTo(c.id) }
+                                dragId = nil; dragOver = nil; heldId = nil
                             })
                         .background(GeometryReader { g in Color.clear.preference(key: StripFrames.self, value: [c.id: g.frame(in: .named("strip-rows"))]) })
                         .accessibilityLabel(c.title.isEmpty ? t("console.n", ("n", c.n)) : c.title)
