@@ -137,3 +137,45 @@ test('si OTRA pantalla le cierra la consola y queda otra, pasa a esa: no crea un
   }
 })
 
+test('`exit` cierra la consola, no la ventana: pasa a otra que nadie mira y, sin ninguna, queda sin consola', async () => {
+  const { connectLocal } = await import('../local.js')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dtc-'))
+  const dir = path.join(home, 'terminal-agent/p')
+  fs.mkdirSync(dir, { recursive: true })
+  const env = { ...process.env, DOTRINO_AGENT_HOME: home, DOTRINO_NO_UPDATE_NOTICE: '1', SHELL: '/bin/sh' }
+  const term = pty.spawn(process.execPath, [CLIENT, 'open', '--name', 'p'], { cols: 80, rows: 24, env })
+  let out = ''
+  let exited = null
+  term.onData((d) => { out += d })
+  term.onExit((e) => { exited = e.exitCode })
+  const until = async (fn, ms = 8000) => { const t = Date.now() + ms; while (Date.now() < t) { if (await fn()) return true; await sleep(50) } return false }
+  let other = null
+  const list = () => new Promise((resolve) => {
+    const on = (m) => { if (m.type === 'consoles') { other.off?.('message', on); resolve(m.list) } }
+    other.on('message', on); other.send({ type: 'list' })
+  })
+  try {
+    term.write('echo UNA-$((1+1))\r')
+    assert.ok(await until(() => out.includes('UNA-2')))
+    other = await connectLocal(dir)
+    other.send({ type: 'open', cols: 80, rows: 24 })               // una segunda consola…
+    assert.ok(await until(async () => (await list()).length === 2))
+    other.send({ type: 'detach' })                                 // …que nadie mira
+    assert.ok(await until(async () => (await list()).some((c) => !c.watchers.length)))
+    term.write('exit\r')
+    assert.ok(await until(async () => { const l = await list(); return l.length === 1 && l[0].watchers.length === 1 }), 'pasa a la otra')
+    assert.equal(exited, null, 'el cliente sigue vivo')
+    out = ''
+    term.write('echo OTRA-$((3+3))\r')
+    assert.ok(await until(() => out.includes('OTRA-6')), 'y la otra responde')
+    term.write('exit\r')
+    assert.ok(await until(() => /No hay consolas|No open consoles/.test(out)), 'sin ninguna, lo dice')
+    assert.equal(exited, null, 'y sigue vivo')
+    assert.equal((await list()).length, 0)
+  } finally {
+    term.kill()
+    try { other?.close() } catch (_) {}
+    try { process.kill(Number(fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8').trim())) } catch (_) {}
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})

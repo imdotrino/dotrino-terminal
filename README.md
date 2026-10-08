@@ -91,7 +91,8 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   o `vscode --off` como «Actualizar»: en la ventana, en otra TTY, y al acabar vuelve a su consola (cliente ≥ 0.20.0).
   **Cerrar una ventana nunca cierra una consola** (≥ 0.2.28): la suelta (Ctrl+] d) y se va, también
   la última; se cierra con la × del panel, «Cerrar consola» o `exit`. **Una ventana que se queda
-  sin su consola nunca crea otra** (≥ 0.2.33, cliente ≥ 0.33.0): pasa a la primera que nadie tiene abierta,
+  sin su consola nunca crea otra ni se cierra** (≥ 0.2.33, cliente ≥ 0.34.0), la cierre quien la cierre
+  (la ×, otra pantalla o `exit` tecleado en ella): pasa a la primera que nadie tiene abierta,
   si no a la primera ocupada, y si no queda ninguna la ventana sigue, sin consola y con su panel (el
   cliente queda en espera: Ctrl+] n abre una, Ctrl+] a<id> pasa a una; lo tecleado ahí se descarta). Solo crean consola el «+» y una ventana
   nueva (o un cambio de perfil) cuando no hay ninguna libre. En el panel (plegado y abierto),

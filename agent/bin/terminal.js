@@ -438,14 +438,12 @@ function interactive (conn, first, dir) {
     }
     if (m.type === 'meta') { onInfo(m.console); return }
     if (m.type === 'exit') {
-      // LA CERRÓ OTRA PANTALLA (el teléfono, la web, el panel de otra ventana): esta ventana no
-      // se va — nadie aquí pidió cerrarla, y cerrarla dejaba al usuario sin ventana. Pasa a una
-      // consola que YA existe: primero una que no mire nadie; si todas se miran, la primera igual.
-      // NUNCA crea una nueva (dueño, 2026-10-08: para no llenarse de consolas que nadie mira): si la
-      // máquina se quedó sin ninguna, la ventana se queda SIN consola (`empty`) y lo dice. Si la
-      // shell terminó sola (`exit`) o la cerró esta misma ventana, la ventana se cierra, como
-      // cualquier terminal.
-      if (m.closedBy === 'other') {
+      // LA CONSOLA SE CERRÓ, la cierre quien la cierre (otra pantalla, el panel, o `exit` tecleado
+      // aquí): cerrar una consola nunca cierra la ventana (dueño, 2026-10-08). Pasa a una consola
+      // que YA existe: primero una que no mire nadie; si todas se miran, la primera igual.
+      // NUNCA crea una nueva (para no llenarse de consolas que nadie mira): si la máquina se quedó
+      // sin ninguna, la ventana se queda SIN consola (`empty`) y lo dice.
+      {
         const closed = consoleId
         consoleId = null
         ready = false                  // lo que se teclee mientras tanto espera a la consola que venga
@@ -460,8 +458,6 @@ function interactive (conn, first, dir) {
         })
         return
       }
-      finish(m.code || 0)
-      return
     }
     if (m.type === 'fail') {
       // FALLÓ UN CAMBIO DE CONSOLA (la que se pidió ya no existe: el panel de la app iba un
