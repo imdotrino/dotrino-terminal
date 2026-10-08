@@ -273,6 +273,9 @@ private struct ConsoleScreen: View {
         }
         // Long press on the console: paste, or copy what is on screen (the same as Android).
         .confirmationDialog(t("menu.title"), isPresented: $termMenu, titleVisibility: .visible) {
+            if view?.hasSelection == true {
+                Button(t("menu.copySel")) { UIPasteboard.general.string = view?.selectedText() ?? ""; view?.clearSelection(); show(t("menu.copiedSel")) }
+            }
             Button(t("menu.paste")) { if let s = UIPasteboard.general.string { view?.paste(s) } }
             Button(t("menu.copy")) { UIPasteboard.general.string = view?.screenText() ?? ""; show(t("menu.copied")) }
         }
@@ -527,7 +530,11 @@ private struct ConsoleScreen: View {
     private func sendCompose() {
         let line = composeBox.field?.text ?? composeText
         composeBox.field?.text = ""; composeText = ""
-        tab.input(line + "\r")
+        // The text and, a moment later, Enter on its own: in ONE write a program that detects
+        // pasting (Claude Code) takes the Enter as a line break inside the paste, not as «send».
+        if line.isEmpty { tab.input("\r"); return }
+        tab.input(line)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [tab] in tab.input("\r") }
     }
 
     /// ✎: the writing line on or off. The one change of size here is asked for, and remembered.

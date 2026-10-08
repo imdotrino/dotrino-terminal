@@ -37,6 +37,13 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     private(set) var cols = 80
     private(set) var rows = 24
+
+    /// A cell of the buffer, by ABSOLUTE line (history first, then the screen): stable while the
+    /// console scrolls and while new output pushes lines into the history.
+    struct Cell: Equatable { var line: Int; var col: Int }
+    /// What the finger selected (long press, then drag): the two ends, in any order. Nil = nothing.
+    private(set) var selection: (a: Cell, b: Cell)?
+    static let selectionColor = UIColor(rgb: 0x81CFFF).withAlphaComponent(0.35)
     /// The console is never asked to be narrower than this (owner, 2026-10-07: with the panel open the
     /// view got 16 columns wide and the shell reflowed everything). Narrower views pan sideways.
     static let minCols = 40
@@ -158,6 +165,18 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             if line >= t.rows { break }
             drawRow(ctx, t.row(line), CGFloat(y) * cellH, min(panX + cols + 1, t.cols))
         }
+        if let sel = selection {
+            var (a, b) = (sel.a, sel.b)
+            if (b.line, b.col) < (a.line, a.col) { swap(&a, &b) }
+            Self.selectionColor.setFill()
+            for y in 0..<visibleRows {
+                let abs = t.historySize + (y - back)
+                guard abs >= a.line, abs <= b.line else { continue }
+                let from = abs == a.line ? a.col : 0
+                let to = abs == b.line ? b.col + 1 : t.cols
+                if to > from { ctx.fill(CGRect(x: CGFloat(from) * cellW, y: CGFloat(y) * cellH, width: CGFloat(to - from) * cellW, height: cellH)) }
+            }
+        }
         if t.cursorVisible && back == 0 && t.cursorY < visibleRows && t.cursorX < t.cols {
             let r = CGRect(x: CGFloat(t.cursorX) * cellW, y: CGFloat(t.cursorY) * cellH, width: cellW, height: cellH)
             Self.cursorColor.setFill(); ctx.fill(r)
@@ -216,9 +235,60 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     // MARK: touch: scroll the history, pan, zoom the font, open the keyboard
 
-    @objc private func tapped() { _ = becomeFirstResponder() }
+    @objc private func tapped() { clearSelection(); _ = becomeFirstResponder() }
 
-    @objc private func pressed(_ g: UILongPressGestureRecognizer) { if g.state == .began { onLongPress() } }
+    /// Long press: the cell under the finger starts a selection; dragging extends it; lifting
+    /// shows the menu (copy what was selected). The selection stays until a tap.
+    @objc private func pressed(_ g: UILongPressGestureRecognizer) {
+        switch g.state {
+        case .began:
+            guard let c = cell(at: g.location(in: self)) else { return }
+            selection = (c, c); setNeedsDisplay()
+        case .changed:
+            guard var sel = selection, let c = cell(at: g.location(in: self)) else { return }
+            sel.b = c; selection = sel; setNeedsDisplay()
+        case .ended:
+            onLongPress()
+        case .cancelled, .failed:
+            clearSelection()
+        default: break
+        }
+    }
+
+    func clearSelection() { if selection != nil { selection = nil; setNeedsDisplay() } }
+    var hasSelection: Bool { selection != nil }
+
+    /// The buffer cell under a point of the view, or nil outside the console.
+    private func cell(at p: CGPoint) -> Cell? {
+        guard let t = terminal else { return nil }
+        let back = min(scrollBack, t.historySize)
+        let y = Int(p.y / cellH), x = Int(p.x / cellW) + panX
+        guard y >= 0, y < min(rows, t.rows), x >= 0, x < t.cols else { return nil }
+        return Cell(line: t.historySize + (y - back), col: x)
+    }
+
+    /// The selected text: whole lines between the ends, the ends cut at their columns, no false
+    /// line breaks where a line wrapped, and no trailing spaces.
+    func selectedText() -> String {
+        guard let t = terminal, let sel = selection else { return "" }
+        var (a, b) = (sel.a, sel.b)
+        if (b.line, b.col) < (a.line, a.col) { swap(&a, &b) }
+        var out = ""
+        for abs in a.line...b.line {
+            let line = abs - t.historySize
+            guard line >= -t.historySize, line < t.rows else { continue }
+            let r = t.row(line)
+            let from = abs == a.line ? a.col : 0
+            let to = abs == b.line ? min(b.col + 1, r.cp.count) : r.cp.count
+            var text = ""
+            var i = from
+            while i < to { if let u = Unicode.Scalar(r.cp[i]), r.cp[i] != Terminal.wideTail { text.unicodeScalars.append(u) }; i += 1 }
+            while text.last == " " { text.removeLast() }
+            out += text
+            if abs != b.line && !r.wrapped { out += "\n" }
+        }
+        return out
+    }
 
     @objc private func pinched(_ g: UIPinchGestureRecognizer) {
         if g.state == .changed { setFont(fontSize * g.scale); g.scale = 1; setNeedsDisplay() }

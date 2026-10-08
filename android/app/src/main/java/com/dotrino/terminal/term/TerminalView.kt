@@ -42,6 +42,51 @@ class TerminalView(context: Context) : View(context) {
     /** The columns and rows that fit changed (the view's size, the font, the keyboard). */
     var onResize: (cols: Int, rows: Int) -> Unit = { _, _ -> }
     var onLongPress: () -> Unit = {}
+
+    /** A cell of the buffer, by ABSOLUTE line (history first, then the screen): stable while the
+     *  console scrolls and while new output pushes lines into the history. */
+    data class Cell(val line: Int, val col: Int)
+    /** What the finger selected (long press, then drag): the two ends, in any order. Null = nothing. */
+    var selection: Pair<Cell, Cell>? = null; private set
+    private var selecting = false
+    private val selectionPaint = Paint().apply { color = 0x5981CFFF.toInt() }
+    val hasSelection: Boolean get() = selection != null
+
+    fun clearSelection() { if (selection != null) { selection = null; invalidate() } }
+
+    /** The buffer cell under a point of the view, or null outside the console. */
+    private fun cellAt(px: Float, py: Float): Cell? {
+        val t = terminal ?: return null
+        val back = min(scrollBack, t.historySize)
+        val y = (py / cellH).toInt(); val x = (px / cellW).toInt() + panX
+        if (y < 0 || y >= min(rows, t.rows) || x < 0 || x >= t.cols) return null
+        return Cell(t.historySize + (y - back), x)
+    }
+
+    private fun ordered(): Pair<Cell, Cell>? {
+        val (a, b) = selection ?: return null
+        return if (b.line < a.line || (b.line == a.line && b.col < a.col)) b to a else a to b
+    }
+
+    /** The selected text: whole lines between the ends, the ends cut at their columns, no false
+     *  line breaks where a line wrapped, and no trailing spaces. */
+    fun selectedText(): String {
+        val t = terminal ?: return ""
+        val (a, b) = ordered() ?: return ""
+        val sb = StringBuilder()
+        for (abs in a.line..b.line) {
+            val line = abs - t.historySize
+            if (line < -t.historySize || line >= t.rows) continue
+            val r = t.row(line)
+            val from = if (abs == a.line) a.col else 0
+            val to = if (abs == b.line) minOf(b.col + 1, r.cp.size) else r.cp.size
+            val text = StringBuilder()
+            for (i in from until to) if (r.cp[i] != Terminal.WIDE_TAIL) text.appendCodePoint(r.cp[i])
+            sb.append(text.toString().trimEnd(' '))
+            if (abs != b.line && !r.wrapped) sb.append('\n')
+        }
+        return sb.toString()
+    }
     /** A sticky modifier was used up by the key that followed it. */
     var onModifiersChanged: () -> Unit = {}
 
@@ -152,6 +197,15 @@ class TerminalView(context: Context) : View(context) {
             if (line >= t.rows) break
             drawRow(canvas, t.row(line), y * cellH, min(panX + cols + 1, t.cols))
         }
+        ordered()?.let { (a, b) ->
+            for (y in 0 until visibleRows) {
+                val abs = t.historySize + (y - back)
+                if (abs < a.line || abs > b.line) continue
+                val from = if (abs == a.line) a.col else 0
+                val to = if (abs == b.line) b.col + 1 else t.cols
+                if (to > from) canvas.drawRect(from * cellW, y * cellH, to * cellW, (y + 1) * cellH, selectionPaint)
+            }
+        }
         if (t.cursorVisible && back == 0 && t.cursorY < visibleRows && t.cursorX < t.cols) {
             val x = t.cursorX * cellW; val y = t.cursorY * cellH
             bgPaint.color = cursorColor
@@ -206,9 +260,17 @@ class TerminalView(context: Context) : View(context) {
 
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean { scroller.forceFinished(true); return true }
-        override fun onSingleTapUp(e: MotionEvent): Boolean { showKeyboard(); return true }
-        override fun onLongPress(e: MotionEvent) { this@TerminalView.onLongPress() }
+        override fun onSingleTapUp(e: MotionEvent): Boolean { clearSelection(); showKeyboard(); return true }
+        // Long press: the cell under the finger starts a selection; dragging extends it (handled in
+        // onTouchEvent: the detector stops scrolling after a long press); lifting shows the menu.
+        override fun onLongPress(e: MotionEvent) {
+            val c = cellAt(e.x, e.y) ?: return
+            selection = c to c; selecting = true
+            performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            invalidate()
+        }
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+            if (selecting) return true
             // Sideways only pans a console wider than the view; up and down is the history.
             if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) panBy(dx) else scrollBy(-dy)
             return true
@@ -259,6 +321,15 @@ class TerminalView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (selecting) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> { val c = cellAt(event.x, event.y); val s = selection; if (c != null && s != null) { selection = s.first to c; invalidate() } }
+                MotionEvent.ACTION_UP -> { selecting = false; onLongPress() }
+                MotionEvent.ACTION_CANCEL -> { selecting = false; clearSelection() }
+            }
+            gestures.onTouchEvent(event)
+            return true
+        }
         pinch.onTouchEvent(event)
         if (!pinch.isInProgress) gestures.onTouchEvent(event)
         return true

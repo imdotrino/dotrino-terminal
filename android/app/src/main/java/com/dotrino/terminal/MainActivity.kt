@@ -630,8 +630,11 @@ class MainActivity : Activity() {
             setPadding(px(12), px(9), px(12), px(9))
         }
         val send = {
-            // The line and Enter, in ONE message. Empty, it is just Enter.
-            active?.input(input.text.toString() + "\r"); input.setText("")
+            // The text and, a moment later, Enter on its own: in ONE write a program that detects
+            // pasting (Claude Code) takes the Enter as a line break inside the paste, not as «send».
+            val line = input.text.toString(); input.setText("")
+            if (line.isEmpty()) active?.input("\r")
+            else { active?.input(line); input.postDelayed({ active?.input("\r") }, 60) }
         }
         input.setOnEditorActionListener { _, _, _ -> send(); true }
         // Backspace on an empty line goes to the console: it is how you fix what is already there.
@@ -719,7 +722,12 @@ class MainActivity : Activity() {
     private fun consoleMenu() {
         val (dialog, body) = sheet(t("menu.title"))
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        body.add(pill(t("menu.paste"), filled = true) {
+        if (view?.hasSelection == true) body.add(pill(t("menu.copySel"), filled = true) {
+            dialog.dismiss()
+            clipboard.setPrimaryClip(ClipData.newPlainText("terminal", view?.selectedText().orEmpty()))
+            view?.clearSelection(); toast(t("menu.copiedSel"))
+        }.apply { tag = "copy-selection" }, top = 8)
+        body.add(pill(t("menu.paste"), filled = view?.hasSelection != true) {
             dialog.dismiss()
             clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.let { view?.paste(it) }
         }.apply { tag = "paste" }, top = 8)
