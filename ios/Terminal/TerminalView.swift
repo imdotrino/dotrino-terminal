@@ -37,12 +37,19 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     private(set) var cols = 80
     private(set) var rows = 24
+    /// How much of the bottom of the view the keyboard covers (0 when it is down). The console must
+    /// fill the screen, no more and no less (owner, 2026-10-07): what fits is measured against the
+    /// part the keyboard leaves uncovered, whether or not the layout above shrinks for it.
+    private var keyboardOverlap: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = true
         backgroundColor = Self.outsideBg
         setFont(fontSize)
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(keyboardChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        nc.addObserver(self, selector: #selector(keyboardChanged(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.delegate = self
@@ -65,9 +72,12 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         fit()
     }
 
+    /// The part of the view the keyboard does not cover.
+    private var visibleHeight: CGFloat { max(0, bounds.height - keyboardOverlap) }
+
     private func fit() {
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        let c = max(2, Int(bounds.width / cellW)), r = max(2, Int(bounds.height / cellH))
+        guard bounds.width > 0, visibleHeight > 0 else { return }
+        let c = max(2, Int(bounds.width / cellW)), r = max(2, Int(visibleHeight / cellH))
         if c == cols && r == rows { return }
         cols = c; rows = r
         onResize(c, r)
@@ -75,12 +85,30 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     /// Say again what fits (a new terminal on screen must hear it).
     func refit() {
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        cols = max(2, Int(bounds.width / cellW)); rows = max(2, Int(bounds.height / cellH))
+        guard bounds.width > 0, visibleHeight > 0 else { return }
+        cols = max(2, Int(bounds.width / cellW)); rows = max(2, Int(visibleHeight / cellH))
         onResize(cols, rows)
     }
 
     override func layoutSubviews() { super.layoutSubviews(); fit() }
+
+    @objc private func keyboardChanged(_ n: Notification) {
+        guard let window else { return }
+        var overlap: CGFloat = 0
+        if n.name != UIResponder.keyboardWillHideNotification, let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue {
+            let mine = convert(bounds, to: window)
+            let kb = window.convert(end, from: nil)
+            overlap = max(0, mine.maxY - max(kb.minY, mine.minY))
+            if kb.minY >= window.bounds.maxY { overlap = 0 }     // out of the screen: down
+        }
+        if overlap == keyboardOverlap { return }
+        keyboardOverlap = overlap
+        // The layout above may shrink the view for the keyboard as well; `fit` runs again when it does.
+        fit(); setNeedsDisplay()
+    }
+
+    func showKeyboard() { _ = becomeFirstResponder() }
+    func hideKeyboard() { _ = resignFirstResponder() }
 
     // MARK: drawing — «Cool & Cozy» dark, the same as the PWA and Android
 

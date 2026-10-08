@@ -218,6 +218,12 @@ private struct ConsoleScreen: View {
     @State private var termMenu = false
     @State private var askingCode = false
     @State private var code = ""
+    /// ✎ The writing line (remembered): over a slow connection every key travels to the machine and
+    /// back before it shows; here it shows at once and goes whole, with Enter. The extra keys still
+    /// go straight. Off, everything goes key by key, as full-screen programs (vim, htop) need.
+    @AppStorage("compose") private var composing = false
+    @State private var composeText = ""
+    @State private var composeFocus = false
 
     private static let keys = ["esc", "tab", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~"]
     private static let labels = ["esc": "Esc", "tab": "Tab", "up": "↑", "down": "↓", "left": "←", "right": "→", "home": "Home", "end": "End", "pgup": "PgUp", "pgdn": "PgDn"]
@@ -249,6 +255,7 @@ private struct ConsoleScreen: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).padding(16)
                 }
             }
+            if composing { composeBar }
             extraKeys
         }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in if tab.state != .locked { tab.list() } }
@@ -510,10 +517,47 @@ private struct ConsoleScreen: View {
         return to.before == id ? .top : .bottom
     }
 
+    /// The writing line: the text and ⏎. Empty, ⏎ is just Enter.
+    private var composeBar: some View {
+        HStack(spacing: 6) {
+            ComposeField(text: $composeText, placeholder: t("compose.hint"), focused: $composeFocus,
+                         onSend: sendCompose,
+                         // Backspace on an empty line goes to the console: it is how you fix what is already there.
+                         onEmptyBackspace: { view?.key("backspace") },
+                         // With Ctrl or Alt lit, the next character is a key for the console (Ctrl+C), not text.
+                         takesKey: { view.map { $0.ctrl || $0.alt } ?? false }, sendKey: { view?.type($0) })
+                .frame(height: 38)
+            Button(action: sendCompose) {
+                Text("⏎").font(.title3.bold()).foregroundColor(Palette.onAccent).padding(.horizontal, 14).padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Palette.accent))
+            }
+            .accessibilityLabel(t("compose.send")).accessibilityIdentifier("compose-send")
+        }
+        .padding(EdgeInsets(top: 6, leading: 6, bottom: 2, trailing: 6))
+        .background(Palette.panel)
+    }
+
+    /// The line and Enter, in ONE message.
+    private func sendCompose() {
+        tab.input(composeText + "\r"); composeText = ""
+    }
+
+    /// ✎: the writing line on or off. The one change of size here is asked for, and remembered.
+    private func toggleCompose() {
+        composing.toggle()
+        if composing { composeFocus = true } else { composeText = ""; composeFocus = false; view?.showKeyboard() }
+    }
+
     /// The keys a phone keyboard lacks. Ctrl and Alt stay lit until the next key uses them.
     private var extraKeys: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
+                Button(action: toggleCompose) {
+                    Text("✎").font(.subheadline.bold()).foregroundColor(composing ? Palette.onAccent : Palette.text)
+                        .frame(minWidth: 44).padding(.vertical, 9).padding(.horizontal, 6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(composing ? Palette.accent : Palette.panel2))
+                }
+                .accessibilityLabel(t("compose.toggle")).accessibilityIdentifier("key-compose")
                 ForEach(Self.keys, id: \.self) { k in
                     let lit = (k == "ctrl" && mods.ctrl) || (k == "alt" && mods.alt)
                     Button { press(k) } label: {
@@ -547,6 +591,65 @@ private struct ConsoleScreen: View {
         case _ where Self.labels[k] != nil: v.key(k)
         default: v.type(k)
         }
+    }
+}
+
+/// The text field of the writing line: a plain UITextField, so an empty-line backspace and a key
+/// typed with Ctrl/Alt lit can be told apart from text (SwiftUI's TextField hides both).
+private struct ComposeField: UIViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    @Binding var focused: Bool
+    let onSend: () -> Void
+    let onEmptyBackspace: () -> Void
+    let takesKey: () -> Bool
+    let sendKey: (String) -> Void
+
+    final class Field: UITextField {
+        var onEmptyBackspace: () -> Void = {}
+        override func deleteBackward() {
+            if text?.isEmpty ?? true { onEmptyBackspace() }
+            super.deleteBackward()
+        }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: ComposeField
+        init(_ p: ComposeField) { parent = p }
+        func textFieldShouldReturn(_ f: UITextField) -> Bool { parent.onSend(); return false }
+        func textField(_ f: UITextField, shouldChangeCharactersIn r: NSRange, replacementString s: String) -> Bool {
+            if !s.isEmpty, parent.takesKey() { parent.sendKey(s); return false }
+            return true
+        }
+        @objc func changed(_ f: UITextField) { parent.text = f.text ?? "" }
+        func textFieldDidEndEditing(_ f: UITextField) { parent.focused = false }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> Field {
+        let f = Field()
+        f.delegate = context.coordinator
+        f.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        f.onEmptyBackspace = onEmptyBackspace
+        f.font = .monospacedSystemFont(ofSize: 15, weight: .regular)
+        f.textColor = UIColor(Palette.text)
+        f.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [.foregroundColor: UIColor(Palette.muted)])
+        f.backgroundColor = UIColor(Palette.bg)
+        f.layer.cornerRadius = 10; f.layer.borderWidth = 1; f.layer.borderColor = UIColor(Palette.line).cgColor
+        f.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 1)); f.leftViewMode = .always
+        f.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 1)); f.rightViewMode = .always
+        f.autocorrectionType = .no; f.autocapitalizationType = .none; f.spellCheckingType = .no
+        f.smartQuotesType = .no; f.smartDashesType = .no; f.smartInsertDeleteType = .no
+        f.keyboardType = .asciiCapable; f.keyboardAppearance = .dark; f.returnKeyType = .send
+        f.accessibilityIdentifier = "compose-input"
+        return f
+    }
+
+    func updateUIView(_ f: Field, context: Context) {
+        context.coordinator.parent = self
+        if f.text != text { f.text = text }
+        if focused, !f.isFirstResponder { DispatchQueue.main.async { f.becomeFirstResponder() } }
     }
 }
 

@@ -30,6 +30,18 @@ final class ConsolesUITests: XCTestCase {
         shot("3b-strip-reordered")
         XCTAssertLessThan(app.staticTexts["console-3"].frame.minY, app.staticTexts["console-1"].frame.minY, "3 dropped on 1 takes its place in the strip")
 
+        // The writing line (✎): what is typed shows here and goes whole with ⏎.
+        app.buttons["key-compose"].tap()
+        let compose = app.textFields["compose-input"]
+        XCTAssertTrue(compose.waitForExistence(timeout: 5))
+        compose.typeText("ls")
+        app.buttons["compose-send"].tap()
+        sleep(1)
+        shot("3c-compose")
+        XCTAssertEqual(compose.value as? String ?? "", "", "sent, the line is empty again")
+        app.buttons["key-compose"].tap()
+        XCTAssertFalse(compose.exists, "✎ again hides the line")
+
         app.buttons["panel-open"].tap()
         XCTAssertTrue(app.buttons["panel-close"].waitForExistence(timeout: 5))
         // The open panel takes the strip's place: the strip's » button is gone while it is open.
