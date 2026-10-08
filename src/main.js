@@ -379,14 +379,17 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Las consolas abiertas en cualquier panel de cualquier pestaña. */
   const openEverywhere = () => new Set(sessions.flatMap((x) => x.panes.map((p) => p.agent?.consoleId)).filter(Boolean))
 
-  function newPane (s) {
-    const p = { id: ++paneCounter, s }
-    p.el = el(`<div class="pane" data-testid="pane"><div class="pane-tools">
+  function newPane (s, collapsed = true) {
+    // Cada panel lleva SU panel de consolas (dueño, 2026-10-08): elige, abre y cierra para ese panel.
+    const p = { id: ++paneCounter, s, collapsed }
+    p.el = el(`<div class="pane" data-testid="pane"><div class="side" data-testid="pane-side" hidden></div><div class="pane-tools">
       <button data-p="right" title="${esc(t('split_right'))}" aria-label="${esc(t('split_right'))}">◫</button>
       <button data-p="down" title="${esc(t('split_down'))}" aria-label="${esc(t('split_down'))}">⊟</button>
       <button data-p="close" title="${esc(t('close_pane'))}" aria-label="${esc(t('close_pane'))}">×</button>
     </div><div class="term"></div></div>`)
     p.view = p.el.querySelector('.term')
+    p.side = p.el.querySelector('.side')
+    wireSide(s, p)
     p.el.addEventListener('pointerdown', () => focusPane(s, p), true)
     p.el.querySelector('.pane-tools').addEventListener('click', (e) => {
       const a = e.target.closest('button')?.dataset.p; if (!a) return
@@ -402,7 +405,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     if (s.focus === p) return
     s.focus = p
     for (const x of s.panes) x.el.classList.toggle('focus', x === p)
-    renderSide(s)
     try { p.term?.focus() } catch {}
   }
 
@@ -429,7 +431,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       })
       return box
     }
-    s.panesEl.replaceChildren(build(s.layout))
+    const root = build(s.layout)
+    // La raíz ocupa todo: un panel que venía de una división trae puesto su reparto (la mitad), y
+    // al quedarse solo dejaba vacío el sitio del que se cerró.
+    root.style.flex = ''
+    s.panesEl.replaceChildren(root)
     for (const p of s.panes) p.el.classList.toggle('focus', p === s.focus)
     s.panesEl.classList.toggle('single', s.panes.length === 1)
   }
@@ -439,7 +445,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * ella— con una libre que no esté abierta en ningún panel, o una nueva.
    */
   async function splitPane (s, p, dir, consoleId) {
-    const q = newPane(s)
+    const q = newPane(s, p.collapsed)
     splitLeaf(s.layout, p, dir, q)
     renderLayout(s)
     focusPane(s, q)
@@ -570,7 +576,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** La llave de este aparato: con ella se reconoce, en `sizeBy`, si el tamaño es nuestro. */
   const myDevice = () => link?.id?.me?.publickey || null
 
-  function where (s, c) {
+  function where (s, c, p) {
     const inPane = s.panes.some((p) => p.agent?.consoleId === c.id)
     const others = (c.watchers || []).length - (inPane ? 1 : 0)
     let w = t('console_free')
@@ -579,23 +585,23 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     else if (inPane) w = t('console_here')
     // Quién tiene el tamaño, si se comparte o se eligió a propósito.
     const b = c.sizeBy
-    if (b && c.id !== s.agent?.consoleId && ((c.watchers || []).length > 1 || b.pinned)) {
+    if (b && c.id !== p.agent?.consoleId && ((c.watchers || []).length > 1 || b.pinned)) {
       const who = sizeWho(b)
       w += ` · ${t('size_label')}: ${who}`
     }
     return w
   }
 
-  /** ¿Usa la consola de esta pestaña, a propósito, el tamaño de esta pantalla? */
-  function pinnedHere (s) {
-    const c = (s.list || []).find((x) => x.id === s.agent?.consoleId)
+  /** ¿Usa la consola del panel `p`, a propósito, el tamaño de esta pantalla? */
+  function pinnedHere (s, p) {
+    const c = (s.list || []).find((x) => x.id === p.agent?.consoleId)
     return !!(c?.sizeBy?.pinned && c.sizeBy.device && c.sizeBy.device === myDevice())
   }
 
-  /** La consola de esta pestaña (con su número), tal como la cuenta el agente. */
-  function current (s) {
+  /** La consola del panel `p` (con su número), tal como la cuenta el agente. */
+  function current (s, p) {
     const list = s.list || []
-    const i = list.findIndex((x) => x.id === s.agent?.consoleId)
+    const i = list.findIndex((x) => x.id === p.agent?.consoleId)
     return i < 0 ? null : { c: list[i], n: numOf(list[i], i) }
   }
 
@@ -611,17 +617,20 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   const actClass = (c) => c.activity === 'busy' ? ' busy' : c.doneAt ? ' done' : ''
   const actText = (c) => c.activity === 'busy' ? ` · ${t('act_busy')}` : c.doneAt ? ` · ${t('act_done')}` : ''
 
-  function renderSide (s) {
-    if (s.drag?.on) return             // a media arrastrada no se repinta: se llevaría lo que se arrastra
+  /** El panel de consolas de CADA panel de la pestaña: la lista es de la máquina, la marcada es la suya. */
+  function renderSide (s) { for (const p of s.panes) renderPaneSide(s, p) }
+
+  function renderPaneSide (s, p) {
+    if (p.drag?.on) return             // a media arrastrada no se repinta: se llevaría lo que se arrastra
     const list = s.list || []
-    const cur = current(s)
-    const pinOn = pinnedHere(s)
+    const cur = current(s, p)
+    const pinOn = pinnedHere(s, p)
     const pinTitle = cur ? t('pin_title', cur.n, pinOn) : t('pin_here')
-    const mine = s.agent?.consoleId
-    const inPane = (c) => c.id !== mine && s.panes.some((p) => p.agent?.consoleId === c.id) ? ' here' : ''
-    const side = s.side
-    side.classList.toggle('collapsed', s.collapsed)
-    if (s.collapsed) {
+    const mine = p.agent?.consoleId
+    const inPane = (c) => c.id !== mine && s.panes.some((x) => x.agent?.consoleId === c.id) ? ' here' : ''
+    const side = p.side
+    side.classList.toggle('collapsed', p.collapsed)
+    if (p.collapsed) {
       side.innerHTML = `
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
@@ -634,7 +643,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         ${cur ? `<div class="srow"><span class="grow" data-testid="panel-size">${cur.c.cols}×${cur.c.rows}</span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
         ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}">
           <span class="grip" aria-hidden="true">⠿</span>
-          <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}">${rows(c, i, mine)}<small>${esc(where(s, c) + actText(c))}</small></button>
+          <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}">${rows(c, i, mine)}<small>${esc(where(s, c, p) + actText(c))}</small></button>
           <button class="sbtn" data-kill="${esc(c.id)}" title="${esc(t('kill_console'))}">×</button>
         </div>`).join('')}`
     }
@@ -707,28 +716,28 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * (girar el teléfono…) hasta que se suelte, o lo fije otra pantalla. Sin fijar, lo tiene el
    * último que se enganchó.
    */
-  function togglePin (s) {
-    const cur = current(s)
+  function togglePin (s, p) {
+    const cur = current(s, p)
     if (!cur) return
-    const on = !pinnedHere(s)
-    const { cols, rows } = fitted(s.focus)
+    const on = !pinnedHere(s, p)
+    const { cols, rows } = fitted(p)
     if (on) {
-      try { s.term.resize(cols, rows) } catch {}
-      s.agent.resize(cols, rows)
+      try { p.term.resize(cols, rows) } catch {}
+      p.agent.resize(cols, rows)
     }
-    s.agent.pin(on)
+    p.agent.pin(on)
     // Dicho en la línea de estado: si esta pantalla ya tenía el tamaño, no se ve otro cambio.
     hint.textContent = on ? t('pinned_now', cur.n, cols, rows) : t('unpinned_now', cur.n)
     setTimeout(() => refresh(s), 200)
-    s.term.focus()
+    p.term.focus()
   }
 
   /** Clic derecho (o mantener pulsado) sobre una consola: lo que se puede hacer con ella. */
-  function consoleMenu (s, id, x, y) {
+  function consoleMenu (s, p, id, x, y) {
     document.querySelector('.cmenu')?.remove()
-    const inPane = s.panes.some((p) => p.agent?.consoleId === id)
+    const inPane = s.panes.some((x) => x.agent?.consoleId === id)
     const m = el(`<div class="cmenu" style="left:${x}px;top:${y}px">
-      <button data-a="here" ${id === s.agent.consoleId ? 'disabled' : ''}>${t('open_here')}</button>
+      <button data-a="here" ${inPane ? 'disabled' : ''}>${t('open_here')}</button>
       <button data-a="right" ${inPane ? 'disabled' : ''}>${t('open_right')}</button>
       <button data-a="down" ${inPane ? 'disabled' : ''}>${t('open_down')}</button>
       <button data-a="kill">${t('kill_console')}</button>
@@ -736,55 +745,55 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     m.addEventListener('click', (e) => {
       const a = e.target.dataset.a
       m.remove()
-      if (a === 'here') switchTo(s, id)
-      if (a === 'right' || a === 'down') splitPane(s, s.focus, a === 'right' ? 'row' : 'col', id)
+      if (a === 'here') switchTo(s, id, p)
+      if (a === 'right' || a === 'down') splitPane(s, p, a === 'right' ? 'row' : 'col', id)
       if (a === 'kill') killConsole(s, id)
     })
     document.body.appendChild(m)
     setTimeout(() => document.addEventListener('click', () => m.remove(), { once: true }), 0)
   }
 
-  function wireSide (s) {
-    s.side.addEventListener('click', (e) => {
-      if (s.dragged) { s.dragged = false; return }   // soltar tras arrastrar no es un clic
+  function wireSide (s, p) {
+    p.side.addEventListener('click', (e) => {
+      if (p.dragged) { p.dragged = false; return }   // soltar tras arrastrar no es un clic
       const b = e.target.closest('button'); if (!b) return
-      if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { s.collapsed = !s.collapsed; renderSide(s); return }
-      if (b.dataset.act === 'new') return switchTo(s, null)
-      if (b.dataset.act === 'pin') return togglePin(s)
+      if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { p.collapsed = !p.collapsed; renderPaneSide(s, p); return }
+      if (b.dataset.act === 'new') return switchTo(s, null, p)
+      if (b.dataset.act === 'pin') return togglePin(s, p)
       if (b.dataset.kill) return killConsole(s, b.dataset.kill)
-      if (b.dataset.id) return switchTo(s, b.dataset.id)
+      if (b.dataset.id) return switchTo(s, b.dataset.id, p)
     })
-    const menuAt = (target, x, y) => { const id = target.closest('[data-id]')?.dataset.id; if (id) consoleMenu(s, id, x, y) }
-    s.side.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-id]')) { e.preventDefault(); menuAt(e.target, e.clientX, e.clientY) } })
+    const menuAt = (target, x, y) => { const id = target.closest('[data-id]')?.dataset.id; if (id) consoleMenu(s, p, id, x, y) }
+    p.side.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-id]')) { e.preventDefault(); menuAt(e.target, e.clientX, e.clientY) } })
     // Mantener pulsado en el teléfono: lo mismo que el clic derecho.
     let hold = null
-    s.side.addEventListener('touchstart', (e) => { const tt = e.touches[0]; hold = setTimeout(() => menuAt(e.target, tt.clientX, tt.clientY), 550) }, { passive: true })
-    for (const ev of ['touchend', 'touchmove', 'touchcancel']) s.side.addEventListener(ev, () => clearTimeout(hold), { passive: true })
+    p.side.addEventListener('touchstart', (e) => { const tt = e.touches[0]; hold = setTimeout(() => menuAt(e.target, tt.clientX, tt.clientY), 550) }, { passive: true })
+    for (const ev of ['touchend', 'touchmove', 'touchcancel']) p.side.addEventListener(ev, () => clearTimeout(hold), { passive: true })
 
     // ORDENAR ARRASTRANDO, solo en el panel ABIERTO: una consola se suelta sobre otra y toma su sitio.
     // Con ratón se arrastra la fila entera; con el dedo, por el asa ⠿, para que el resto de la fila
     // siga sirviendo para desplazar el panel. En la franja plegada NO se ordena con nada (dueño,
     // 2026-10-07, dos veces): los números solo se tocan, y la franja se desplaza. El orden es de la máquina.
     const ITEMS = '.srow.item'
-    const unmark = () => { for (const el of s.side.querySelectorAll('.drop-before, .drop-after, .dragged')) el.classList.remove('drop-before', 'drop-after', 'dragged') }
-    const endDrag = () => { s.drag = null; s.side.classList.remove('dragging'); unmark() }
-    s.side.addEventListener('pointerdown', (e) => {
+    const unmark = () => { for (const el of p.side.querySelectorAll('.drop-before, .drop-after, .dragged')) el.classList.remove('drop-before', 'drop-after', 'dragged') }
+    const endDrag = () => { p.drag = null; p.side.classList.remove('dragging'); unmark() }
+    p.side.addEventListener('pointerdown', (e) => {
       const item = e.target.closest(ITEMS)
       if (!item || e.button !== 0 || e.target.closest('[data-kill]')) return
       if (e.pointerType !== 'mouse' && !e.target.closest('.grip')) return
-      s.drag = { id: item.dataset.id, y: e.clientY, pointer: e.pointerId, on: false, over: null }
+      p.drag = { id: item.dataset.id, y: e.clientY, pointer: e.pointerId, on: false, over: null }
     })
-    s.side.addEventListener('pointermove', (e) => {
-      const d = s.drag
+    p.side.addEventListener('pointermove', (e) => {
+      const d = p.drag
       if (!d || e.pointerId !== d.pointer) return
       if (!d.on) {
         if (Math.abs(e.clientY - d.y) < 6) return      // un clic con el pulso flojo no es arrastrar
         d.on = true
         clearTimeout(hold)
-        try { s.side.setPointerCapture(e.pointerId) } catch {}
-        s.side.classList.add('dragging')
+        try { p.side.setPointerCapture(e.pointerId) } catch {}
+        p.side.classList.add('dragging')
       }
-      const items = [...s.side.querySelectorAll(ITEMS)]
+      const items = [...p.side.querySelectorAll(ITEMS)]
       if (!items.length) return
       // La fila bajo el puntero; por encima de la primera o por debajo de la última, esa.
       const over = items.find((el) => e.clientY < el.getBoundingClientRect().bottom) || items[items.length - 1]
@@ -795,19 +804,19 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       const to = dropTarget(ids, d.id, d.over)
       if (to) over.classList.add(ids.indexOf(d.over) < ids.indexOf(d.id) ? 'drop-before' : 'drop-after')
     })
-    s.side.addEventListener('pointerup', async (e) => {
-      const d = s.drag
+    p.side.addEventListener('pointerup', async (e) => {
+      const d = p.drag
       if (!d || e.pointerId !== d.pointer) return
       const ids = (s.list || []).map((c) => c.id)
       endDrag()
       if (!d.on) return
-      s.dragged = true; setTimeout(() => { s.dragged = false }, 0)
+      p.dragged = true; setTimeout(() => { p.dragged = false }, 0)
       const to = d.over && dropTarget(ids, d.id, d.over)
-      if (!to) return renderSide(s)
-      try { s.list = await s.agent.move(d.id, to.before) } catch (err) { s.term.write(`\r\n\x1b[33m${err.code === 'timeout' ? t('move_old_agent') : err.message}\x1b[0m\r\n`) }
-      renderSide(s)
+      if (!to) return renderPaneSide(s, p)
+      try { s.list = await p.agent.move(d.id, to.before) } catch (err) { p.term.write(`\r\n\x1b[33m${err.code === 'timeout' ? t('move_old_agent') : err.message}\x1b[0m\r\n`) }
+      renderPaneSide(s, p)
     })
-    s.side.addEventListener('pointercancel', () => { if (s.drag) { endDrag(); renderSide(s) } })
+    p.side.addEventListener('pointercancel', () => { if (p.drag) { endDrag(); renderPaneSide(s, p) } })
   }
 
   /**
@@ -858,6 +867,8 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       target = (await p.agent.list()).find((c) => !(c.watchers || []).length && !open.has(c.id))?.id
     }
     await attachOrOpen(s, p, target)
+    p.side.hidden = false               // el panel de consolas, solo con la máquina conectada
+    renderPaneSide(s, p)
   }
 
   /**
@@ -869,7 +880,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    */
   async function openConsole (pub, alias, { consoleId, layout } = {}) {
     const id = ++counter
-    const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando', collapsed: true, list: [], panes: [], focus: null }
+    const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando', list: [], panes: [], focus: null }
     // Lo del panel con el foco, con los nombres de siempre.
     Object.defineProperties(s, {
       agent: { get: () => s.focus?.agent },
@@ -877,16 +888,15 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       fit: { get: () => s.focus?.fit },
       view: { get: () => s.focus?.view },
     })
-    s.box = el('<div class="term-wrap"><div class="side"></div><div class="panes"></div></div>'); s.box.style.display = 'none'
-    s.side = s.box.querySelector('.side'); s.panesEl = s.box.querySelector('.panes')
+    s.box = el('<div class="term-wrap"><div class="panes"></div></div>'); s.box.style.display = 'none'
+    s.panesEl = s.box.querySelector('.panes')
     termsEl.appendChild(s.box)
     sessions.push(s)
     const first = newPane(s)
     s.focus = first
     s.layout = { pane: first }
     renderLayout(s)
-    renderTab(s); setActive(s); setTabState(s, 'conn'); wireSide(s); renderSide(s)
-    s.side.hidden = true                // el panel, solo con la máquina conectada
+    renderTab(s); setActive(s); setTabState(s, 'conn')
     hint.textContent = t('connecting', s.alias)
     try {
       // Como en la app de escritorio: una consola que no esté abierta en ninguna parte, antes
@@ -896,7 +906,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       s.status = 'conectado'; setTabState(s, 'ok')
       if (active === s) hint.textContent = t('connected', s.alias)
       setActive(s)
-      s.side.hidden = false
       refresh(s)
       s.poll = setInterval(() => { if (active === s) refresh(s) }, 2000)
       // El reparto que había antes de recargar: los demás paneles, uno a uno.
