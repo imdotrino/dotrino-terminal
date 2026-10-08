@@ -39,7 +39,7 @@ android {
         applicationId = "com.dotrino.terminal"
         minSdk = 31
         targetSdk = 36
-        versionCode = 23
+        versionCode = 24
         versionName = "0.8.14"
     }
 
@@ -74,5 +74,6 @@ android {
 
 dependencies {
     implementation("com.dotrino:dotrino-native")   // includeBuild de ../native/android
+    implementation("com.dotrino:dotrino-webrtc")   // el camino directo (WebRTC directo o por TURN)
     testImplementation("junit:junit:4.13.2")
 }

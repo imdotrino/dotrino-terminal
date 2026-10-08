@@ -1,4 +1,5 @@
 import DotrinoNative
+import DotrinoNativeWebRTC
 import Foundation
 
 /// A machine of the account running the terminal agent, as the list shows it.
@@ -154,10 +155,14 @@ final class Consoles: ObservableObject {
         let task = Task<ProxyConnection, Error> { @MainActor in
             link = "connecting"
             let c = try ProxyConnection(p.vault?.proxy ?? Self.defaultProxy, app: "terminal")
+            // The most direct road first (CLAUDE.md, 2026-09-03): the console's bytes go by WebRTC
+            // (direct, or through TURN) as soon as the channel opens; the proxy is the last resort.
+            c.useDirect(WebRTCDirect())
             do {
                 _ = try await c.connect()
                 try await c.identifyAs(p.publickey) { try p.signData($0) }
             } catch { c.close(); link = "offline"; throw error }
+            await c.enableTurn(p.publickey) { try p.signData($0) }
             link = "online"
             // The topbar's network stats see this connection (dotrino-native ≥ 0.27).
             DotrinoNetwork.register(c)

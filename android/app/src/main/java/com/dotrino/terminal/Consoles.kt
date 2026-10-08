@@ -6,6 +6,7 @@ import android.os.Looper
 import com.dotrino.sdk.Delegation
 import com.dotrino.sdk.PhoneIdentity
 import com.dotrino.sdk.Profile
+import com.dotrino.sdk.webrtc.WebRtcDirect
 import com.dotrino.sdk.DotrinoNetwork
 import com.dotrino.sdk.ProxyConnection
 import com.dotrino.sdk.RemoteAgent
@@ -162,7 +163,11 @@ object Consoles {
     private fun changed() = ui.post { onChange() }
 
     /** The phone's profile. Throws [BootError]: `no-identity-app`, `no-profile`, `no-profile-keys`, `no-vault`. */
+    /** For the direct road (libwebrtc wants a Context). Set by [boot]. */
+    @Volatile private var appContext: Context? = null
+
     suspend fun boot(context: Context): Profile {
+        appContext = context.applicationContext
         profile?.let { return it }
         val id = identity ?: PhoneIdentity(context.applicationContext).also { identity = it }
         val p = try { id.profile() } catch (e: Profile.ProfileError) { throw BootError(e.message ?: e.code, e.code) }
@@ -195,10 +200,14 @@ object Consoles {
         val p = profile ?: throw BootError("no profile", "no-profile")
         link = "connecting"; changed()
         val c = ProxyConnection(p.vault?.proxy ?: DEFAULT_PROXY, "terminal")
+        // The most direct road first (CLAUDE.md, 2026-09-03): the console's bytes go by WebRTC
+        // (direct, or through TURN) as soon as the channel opens; the proxy is the last resort.
+        appContext?.let { c.useDirect(WebRtcDirect(it)) }
         try {
             c.connect()
             c.identifyAs(p.publickey) { p.signData(it) }
         } catch (e: Exception) { c.close(); link = "offline"; changed(); throw e }
+        c.enableTurn(p.publickey) { p.signData(it) }
         conn = c; link = "online"; changed()
         // The topbar's network stats see this connection (dotrino-native ≥ 0.27).
         DotrinoNetwork.register(c.statsSource)
