@@ -16,6 +16,7 @@ import { getLink, getSelfLink, identity } from './vault.js'
 import { AgentClient } from './agentClient.js'
 import { DemoAgentClient, DEMO_MACHINE } from './demoAgent.js'
 import { panelLines, dropTarget } from './panel.js'
+import { clampRatio, splitLeaf, removeLeaf, layoutIds, restoreSaved } from './layout.js'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
 
@@ -372,8 +373,8 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   let paneCounter = 0
 
   /** El árbol, con los `consoleId` en las hojas (para recordarlo al recargar). */
-  const layoutIds = (n) => n.pane ? (n.pane.agent?.consoleId || null) : { dir: n.dir, ratio: n.ratio, a: layoutIds(n.a), b: layoutIds(n.b) }
-  const persist = () => saveTabs(sessions.filter((s) => s.agent?.consoleId).map((s) => ({ sub: s.pub, alias: s.alias, consoleId: s.agent.consoleId, layout: layoutIds(s.layout) })))
+  const consoleOf = (p) => p.agent?.consoleId
+  const persist = () => saveTabs(sessions.filter((s) => s.agent?.consoleId).map((s) => ({ sub: s.pub, alias: s.alias, consoleId: s.agent.consoleId, layout: layoutIds(s.layout, consoleOf) })))
 
   /** Las consolas abiertas en cualquier panel de cualquier pestaña. */
   const openEverywhere = () => new Set(sessions.flatMap((x) => x.panes.map((p) => p.agent?.consoleId)).filter(Boolean))
@@ -408,7 +409,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Pinta el árbol en `.panes`: los elementos de los paneles se REUBICAN (el xterm no se vuelve a montar). */
   function renderLayout (s) {
     const build = (n) => {
-      if (n.pane) return n.pane.el
+      if ('pane' in n) return n.pane.el
       const box = el(`<div class="split dir-${n.dir}"></div>`)
       const a = build(n.a); const b = build(n.b)
       const bar = el('<div class="divider" role="separator"></div>')
@@ -421,7 +422,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         const r = box.getBoundingClientRect()
         const move = (ev) => {
           const f = n.dir === 'row' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height
-          n.ratio = Math.min(0.85, Math.max(0.15, f)); apply()
+          n.ratio = clampRatio(f); apply()
         }
         const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); persist() }
         bar.addEventListener('pointermove', move); bar.addEventListener('pointerup', up)
@@ -433,22 +434,13 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     s.panesEl.classList.toggle('single', s.panes.length === 1)
   }
 
-  /** El nodo hoja de `p` y su padre, para reemplazar o quitar. */
-  function findLeaf (n, p, parent = null) {
-    if (n.pane) return n.pane === p ? { node: n, parent } : null
-    return findLeaf(n.a, p, n) || findLeaf(n.b, p, n)
-  }
-
   /**
    * Divide el panel `p`: a la derecha (`row`) o abajo (`col`), con la consola `consoleId` o —sin
    * ella— con una libre que no esté abierta en ningún panel, o una nueva.
    */
   async function splitPane (s, p, dir, consoleId) {
     const q = newPane(s)
-    const { node } = findLeaf(s.layout, p)
-    const a = { pane: p }
-    Object.assign(node, { pane: undefined, dir, ratio: 0.5, a, b: { pane: q } })
-    delete node.pane
+    splitLeaf(s.layout, p, dir, q)
     renderLayout(s)
     focusPane(s, q)
     await connectPane(s, q, consoleId)
@@ -458,18 +450,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Cierra el panel `p` (la consola sigue viva en la máquina). El último no se cierra: para eso está la pestaña. */
   function closePane (s, p) {
     if (s.panes.length === 1) { hint.textContent = t('pane_last'); return }
-    const found = findLeaf(s.layout, p); if (!found) return
-    const { node, parent } = found
+    if (!removeLeaf(s.layout, p)) return
     try { p.agent?.disconnect() } catch {}
     p.resizeObs?.disconnect()
     try { p.term?.dispose() } catch {}
     p.el.remove()
     s.panes.splice(s.panes.indexOf(p), 1)
-    if (parent) {
-      const sibling = parent.a === node ? parent.b : parent.a
-      for (const k of Object.keys(parent)) delete parent[k]
-      Object.assign(parent, sibling)
-    }
     if (s.focus === p) { s.focus = null; focusPane(s, s.panes[0]) }
     renderLayout(s); persist(); refresh(s)
   }
@@ -932,19 +918,13 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * `attachOrOpen` elige otra y lo dice.
    */
   async function restoreLayout (s, first, saved) {
-    const firstLeaf = (n) => typeof n === 'object' && n ? firstLeaf(n.a) : n
-    const walk = async (n, pane) => {
-      if (!n || typeof n !== 'object') return
-      // `pane` ya es la primera hoja de `n.a`: se divide con la primera hoja de `n.b` y se sigue por las dos ramas.
+    await restoreSaved(saved, first, async (pane, dir, ratio, consoleId) => {
       const q = newPane(s)
-      const { node } = findLeaf(s.layout, pane)
-      Object.assign(node, { dir: n.dir, ratio: n.ratio ?? 0.5, a: { pane }, b: { pane: q } }); delete node.pane
+      splitLeaf(s.layout, pane, dir, q, ratio)
       renderLayout(s)
-      await connectPane(s, q, firstLeaf(n.b)).catch(() => closePane(s, q))
-      await walk(n.a, pane)
-      await walk(n.b, q)
-    }
-    await walk(saved, first)
+      // Un panel que no llega a conectarse se quita, y su rama no se sigue.
+      try { await connectPane(s, q, consoleId); return q } catch { closePane(s, q); return null }
+    })
     focusPane(s, first); persist(); refresh(s)
   }
 
