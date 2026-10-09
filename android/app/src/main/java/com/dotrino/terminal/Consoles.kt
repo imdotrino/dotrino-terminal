@@ -331,6 +331,10 @@ object Consoles {
         /** The columns and rows that fit on this screen (not the console's). */
         var screenCols = 80; private set
         var screenRows = 24; private set
+        /** The size last SAID to the agent. While a console is being attached the screen's size is
+         *  only kept ([screen]); if it changed meanwhile (the keyboard came up), it is said on `attached`. */
+        private var saidCols = 0
+        private var saidRows = 0
         /** Redraw the emulator (main thread). */
         var onOutput: () -> Unit = {}
         var onBell: () -> Unit = {}
@@ -396,10 +400,16 @@ object Consoles {
 
         private fun send(type: String, id: String?) {
             fresh = true
+            saidCols = screenCols; saidRows = screenRows
             channel?.send(buildJsonObject {
                 put("type", type); if (id != null) put("id", id)
                 put("cols", screenCols); put("rows", screenRows)
             })
+        }
+
+        private fun sayScreen() {
+            saidCols = screenCols; saidRows = screenRows
+            try { channel?.send(buildJsonObject { put("type", "resize"); put("cols", screenCols); put("rows", screenRows) }) } catch (_: Exception) {}
         }
 
         /** Ask the agent for the machine's consoles (the panel). */
@@ -428,6 +438,7 @@ object Consoles {
                     consoleId = (m["id"] as? JsonPrimitive)?.content
                     (m["console"] as? JsonObject)?.let(::consoleOf)?.let { upsert(it); follow(it) }
                     state = State.OPEN; note = null; resuming = false
+                    if (screenCols != saidCols || screenRows != saidRows) sayScreen()
                     if (pendingInput.isNotEmpty()) { val t = pendingInput.toString(); pendingInput.clear(); input(t) }
                     list(); onChange()
                 }
@@ -508,7 +519,7 @@ object Consoles {
             if (cols == screenCols && rows == screenRows) return
             screenCols = cols; screenRows = rows
             if (state != State.OPEN) return
-            try { channel?.send(buildJsonObject { put("type", "resize"); put("cols", cols); put("rows", rows) }) } catch (_: Exception) {}
+            sayScreen()
         }
 
         /** Another console of the machine (or a new one, with null) on this screen, over the same session. */

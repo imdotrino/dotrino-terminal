@@ -68,6 +68,23 @@ class TabTest {
         assertTrue("the machine has none: a new one", ch3.types().contains("open"))
     }
 
+    @Test fun aSizeThatChangedWhileAttachingIsSaidOnAttached() {
+        val (t, ch) = tab()
+        ch.agent(consoles(console("a", 1, 80, 24), console("b", 2, 80, 24)))
+        ch.agent(attached(console("a", 1, 50, 20, watchers = 1, by = me)))
+        t.switchTo("b")
+        assertEquals(20, (ch.last("attach")!!["rows"] as JsonPrimitive).content.toInt())
+        t.screen(50, 11)                                   // the keyboard came up before the agent answered
+        assertNull("nothing is said while attaching", ch.last("resize"))
+        ch.agent(attached(console("b", 2, 50, 20, watchers = 1, by = me)))
+        assertEquals("said once it is attached", 11, (ch.last("resize")!!["rows"] as JsonPrimitive).content.toInt())
+
+        t.switchTo("a")
+        ch.sent.clear()
+        ch.agent(attached(console("a", 1, 50, 11, watchers = 1, by = me)))
+        assertNull("nothing changed meanwhile: nothing is repeated", ch.last("resize"))
+    }
+
     @Test fun theEmulatorFollowsTheConsoleSizeNotTheScreen() {
         val (t, ch) = tab()
         ch.agent(consoles())

@@ -271,6 +271,9 @@ final class Tab: ObservableObject, Identifiable {
     @Published private(set) var note: String?
     /// The columns and rows that fit on this screen (not the console's).
     private(set) var screenCols = 80, screenRows = 24
+    /// The size last SAID to the agent. While a console is being attached the screen's size is only
+    /// kept (`screen`); if it changed meanwhile (the keyboard came up), it is said on `attached`.
+    private var saidCols = 0, saidRows = 0
     /// Redraw the emulator.
     var onOutput: () -> Void = {}
     var onBell: () -> Void = {}
@@ -317,6 +320,7 @@ final class Tab: ObservableObject, Identifiable {
 
     private func send(_ type: String, _ id: String?) {
         fresh = true
+        saidCols = screenCols; saidRows = screenRows
         var o: [String: JSON] = ["type": .string(type), "cols": .int(Int64(screenCols)), "rows": .int(Int64(screenRows))]
         if let id { o["id"] = .string(id) }
         try? channel?.send(.object(o))
@@ -346,6 +350,7 @@ final class Tab: ObservableObject, Identifiable {
             consoleId = m["id"]?.string
             if let c = m["console"].flatMap(consoleOf) { upsert(c); follow(c) }
             state = .open; note = nil
+            if screenCols != saidCols || screenRows != saidRows { sayScreen() }
             if !pendingInput.isEmpty { let t = pendingInput; pendingInput = ""; input(t) }
             list()
         case "meta":
@@ -419,7 +424,12 @@ final class Tab: ObservableObject, Identifiable {
         if cols == screenCols && rows == screenRows { return }
         screenCols = cols; screenRows = rows
         guard state == .open else { return }
-        try? channel?.send(["type": "resize", "cols": .int(Int64(cols)), "rows": .int(Int64(rows))])
+        sayScreen()
+    }
+
+    private func sayScreen() {
+        saidCols = screenCols; saidRows = screenRows
+        try? channel?.send(["type": "resize", "cols": .int(Int64(screenCols)), "rows": .int(Int64(screenRows))])
     }
 
     /// Another console of the machine (or a new one, with nil) on this screen, over the same session.
