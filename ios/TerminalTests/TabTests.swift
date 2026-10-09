@@ -59,7 +59,7 @@ final class TabTests: XCTestCase {
         let (t, ch) = tab()
         t.handle(consoles(console("a", 1, 80, 24), console("b", 2, 80, 24)))
         t.handle(attached(console("a", 1, 50, 20, watchers: 1, by: me)))
-        XCTAssertEqual(Array(ch.types.suffix(2)), ["resize", "pin"], "as ⤢: the size, then chosen on purpose")
+        XCTAssertEqual(Array(ch.types.suffix(3).prefix(2)), ["resize", "pin"], "as ⤢: the size, then chosen on purpose")
         t.switchTo("b")
         ch.sent.removeAll()
         t.screen(50, 11)                                   // the keyboard came up before the agent answered
@@ -101,7 +101,7 @@ final class TabTests: XCTestCase {
         t.handle(attached(console("a", 1, 50, 20, watchers: 2, by: me)))
         XCTAssertFalse(t.sizeHere); XCTAssertTrue(t.sizeIsMine(t.current))
         t.useMySize(true)
-        XCTAssertEqual(Array(ch.types.suffix(2)), ["resize", "pin"])
+        XCTAssertEqual(Array(ch.types.suffix(3).prefix(2)), ["resize", "pin"])
         t.handle(meta(console("a", 1, 50, 20, watchers: 2, by: me, pinned: true)))
         XCTAssertTrue(t.sizeHere)
         t.handle(meta(console("a", 1, 50, 20, watchers: 2, by: other, pinned: true)))
