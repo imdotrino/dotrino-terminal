@@ -231,7 +231,7 @@ private struct ConsoleScreen: View {
     /// The strip number whose hold just showed the actions: lifting it is not a tap.
     @State private var actions: ConsoleInfo?
     @State private var toast: String?
-    @State private var mods = (ctrl: false, alt: false)
+    @State private var mods = (shift: false, ctrl: false, alt: false)
     @State private var termMenu = false
     @State private var askingCode = false
     @State private var code = ""
@@ -245,7 +245,7 @@ private struct ConsoleScreen: View {
     /// behind now and then (owner, 2026-10-07: «Enter sometimes works, sometimes not»).
     @State private var composeBox = ComposeField.Box()
 
-    private static let keys = ["esc", "tab", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~"]
+    private static let keys = ["esc", "tab", "shift", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~"]
     private static let labels = ["esc": "Esc", "tab": "Tab", "up": "↑", "down": "↓", "left": "←", "right": "→", "home": "Home", "end": "End", "pgup": "PgUp", "pgdn": "PgDn"]
 
     var body: some View {
@@ -568,7 +568,7 @@ private struct ConsoleScreen: View {
         if composing { composeFocus = true } else { composeText = ""; composeFocus = false; view?.showKeyboard() }
     }
 
-    /// The keys a phone keyboard lacks. Ctrl and Alt stay lit until the next key uses them.
+    /// The keys a phone keyboard lacks. Shift, Ctrl and Alt stay lit until the next key uses them.
     private var extraKeys: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
@@ -579,9 +579,9 @@ private struct ConsoleScreen: View {
                 }
                 .accessibilityLabel(t("compose.toggle")).accessibilityIdentifier("key-compose")
                 ForEach(Self.keys, id: \.self) { k in
-                    let lit = (k == "ctrl" && mods.ctrl) || (k == "alt" && mods.alt)
+                    let lit = (k == "shift" && mods.shift) || (k == "ctrl" && mods.ctrl) || (k == "alt" && mods.alt)
                     Button { press(k) } label: {
-                        Text(Self.labels[k] ?? (k == "ctrl" ? t("key.ctrl") : k == "alt" ? t("key.alt") : k))
+                        Text(Self.labels[k] ?? (k == "shift" ? t("key.shift") : k == "ctrl" ? t("key.ctrl") : k == "alt" ? t("key.alt") : k))
                             .font(.subheadline.bold()).foregroundColor(lit ? Palette.onAccent : Palette.text)
                             .frame(minWidth: 44).padding(.vertical, 9).padding(.horizontal, 6)
                             .background(RoundedRectangle(cornerRadius: 8).fill(lit ? Palette.accent : Palette.panel2))
@@ -601,11 +601,12 @@ private struct ConsoleScreen: View {
         v?.onLongPress = { termMenu = true }
     }
 
-    private func syncMods() { if let v = view { mods = (v.ctrl, v.alt) } }
+    private func syncMods() { if let v = view { mods = (v.shift, v.ctrl, v.alt) } }
 
     private func press(_ k: String) {
         guard let v = view else { return }
         switch k {
+        case "shift": v.shift.toggle(); syncMods()
         case "ctrl": v.ctrl.toggle(); syncMods()
         case "alt": v.alt.toggle(); syncMods()
         case _ where Self.labels[k] != nil: v.key(k)

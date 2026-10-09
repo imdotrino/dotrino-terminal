@@ -61,7 +61,7 @@ object I18n {
         "boot.noVault" to "Este perfil no está conectado a una bóveda. Conéctalo para ver tus máquinas.",
         "boot.connectVault" to "Conectar mi bóveda",
         "boot.create" to "Crear perfil", "boot.adopt" to "Adoptar un perfil", "boot.retry" to "Reintentar",
-        "key.ctrl" to "Ctrl", "key.alt" to "Alt",
+        "key.shift" to "Shift", "key.ctrl" to "Ctrl", "key.alt" to "Alt",
     )
     private val en = mapOf(
         "machines.title" to "Your machines",
@@ -113,7 +113,7 @@ object I18n {
         "boot.noVault" to "This profile is not connected to a vault. Connect it to see your machines.",
         "boot.connectVault" to "Connect my vault",
         "boot.create" to "Create profile", "boot.adopt" to "Adopt a profile", "boot.retry" to "Retry",
-        "key.ctrl" to "Ctrl", "key.alt" to "Alt",
+        "key.shift" to "Shift", "key.ctrl" to "Ctrl", "key.alt" to "Alt",
     )
 
     fun t(key: String, vararg vars: Pair<String, Any>): String {

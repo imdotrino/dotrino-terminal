@@ -22,6 +22,7 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// Sticky modifiers of the extra-keys row: they apply to the NEXT key and switch off.
     var ctrl = false
     var alt = false
+    var shift = false
 
     private var fontSize: CGFloat = 12
     private var font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -343,10 +344,10 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// Send what a key means, applying the sticky modifiers of the extra row to it.
     func type(_ text: String) {
         guard !text.isEmpty else { return }
-        var out = text
+        var out = shift ? text.uppercased() : text
         if ctrl, text.unicodeScalars.count == 1, let c = Self.controlOf(Character(text)) { out = String(c) }
         if alt { out = "\u{1b}" + out }
-        if ctrl || alt { ctrl = false; alt = false; onModifiersChanged() }
+        if ctrl || alt || shift { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
     }
@@ -371,6 +372,10 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     func key(_ name: String) {
         let app = terminal?.appCursorKeys == true
         let seq: String
+        if shift {
+            guard let s = Self.shifted[name] else { return }
+            seq = s
+        } else {
         switch name {
         case "esc": seq = "\u{1b}"
         case "tab": seq = "\t"
@@ -387,12 +392,22 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         case "del": seq = "\u{1b}[3~"
         default: return
         }
+        }
         // Ctrl does not change these keys; Alt still prefixes them.
         let out = alt ? "\u{1b}" + seq : seq
-        if ctrl || alt { ctrl = false; alt = false; onModifiersChanged() }
+        if ctrl || alt || shift { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
     }
+
+    /// A named key with Shift, as xterm sends it: Shift+Tab is `CSI Z`, the rest carry the modifier `2`.
+    private static let shifted: [String: String] = [
+        "tab": "\u{1b}[Z",
+        "up": "\u{1b}[1;2A", "down": "\u{1b}[1;2B", "right": "\u{1b}[1;2C", "left": "\u{1b}[1;2D",
+        "home": "\u{1b}[1;2H", "end": "\u{1b}[1;2F",
+        "pgup": "\u{1b}[5;2~", "pgdn": "\u{1b}[6;2~", "del": "\u{1b}[3;2~",
+        "esc": "\u{1b}", "enter": "\r", "backspace": "\u{7f}",
+    ]
 
     /// Paste: bracketed when the program asked for it, so it does not run what was pasted line by line.
     func paste(_ text: String) {
@@ -435,7 +450,7 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             case .keyboardTab: "tab"
             default: nil
             }
-            if let named { key(named); handled = true }
+            if let named { if k.modifierFlags.contains(.shift) { shift = true }; key(named); handled = true }
             else if k.modifierFlags.contains(.control), let c = k.charactersIgnoringModifiers.first {
                 ctrl = true; type(String(c)); handled = true
             }

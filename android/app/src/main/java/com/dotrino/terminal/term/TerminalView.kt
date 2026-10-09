@@ -92,6 +92,7 @@ class TerminalView(context: Context) : View(context) {
     /** Sticky modifiers of the extra-keys row: they apply to the NEXT key and switch off. */
     var ctrl = false
     var alt = false
+    var shift = false
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE }
     private val bold = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
@@ -361,10 +362,10 @@ class TerminalView(context: Context) : View(context) {
     /** Send what a key means, applying the sticky modifiers of the extra row to it. */
     fun type(text: String) {
         if (text.isEmpty()) return
-        var out = text
+        var out = if (shift) text.uppercase() else text
         if (ctrl && text.length == 1) controlOf(text[0])?.let { out = it.toString() }
         if (alt) out = "\u001b" + out
-        if (ctrl || alt) { ctrl = false; alt = false; onModifiersChanged() }
+        if (ctrl || alt || shift) { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
     }
@@ -385,7 +386,7 @@ class TerminalView(context: Context) : View(context) {
     /** A named key of the extra row or of a real keyboard, as the escape sequence a shell expects. */
     fun key(name: String) {
         val app = terminal?.appCursorKeys == true
-        val seq = when (name) {
+        val seq = if (shift) shifted(name) ?: return else when (name) {
             "esc" -> "\u001b"; "tab" -> "\t"; "enter" -> "\r"; "backspace" -> "\u007f"
             "up" -> if (app) "\u001bOA" else "\u001b[A"
             "down" -> if (app) "\u001bOB" else "\u001b[B"
@@ -401,9 +402,19 @@ class TerminalView(context: Context) : View(context) {
         }
         // Ctrl does not change these keys; Alt still prefixes them.
         val out = if (alt) "\u001b" + seq else seq
-        if (ctrl || alt) { ctrl = false; alt = false; onModifiersChanged() }
+        if (ctrl || alt || shift) { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
+    }
+
+    /** A named key with Shift, as xterm sends it: Shift+Tab is `CSI Z`, the rest carry the modifier `2`. */
+    private fun shifted(name: String): String? = when (name) {
+        "tab" -> "\u001b[Z"
+        "up" -> "\u001b[1;2A"; "down" -> "\u001b[1;2B"; "right" -> "\u001b[1;2C"; "left" -> "\u001b[1;2D"
+        "home" -> "\u001b[1;2H"; "end" -> "\u001b[1;2F"
+        "pgup" -> "\u001b[5;2~"; "pgdn" -> "\u001b[6;2~"; "del" -> "\u001b[3;2~"; "ins" -> "\u001b[2;2~"
+        "esc" -> "\u001b"; "enter" -> "\r"; "backspace" -> "\u007f"
+        else -> null
     }
 
     /** Paste: bracketed when the program asked for it, so it does not run what was pasted line by line. */
@@ -468,7 +479,7 @@ class TerminalView(context: Context) : View(context) {
             in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> "f${keyCode - KeyEvent.KEYCODE_F1 + 1}"
             else -> null
         }
-        if (named != null) { key(named); return true }
+        if (named != null) { if (event.isShiftPressed) shift = true; key(named); return true }
         if (keyCode == KeyEvent.KEYCODE_BACK || event.isSystem) return super.onKeyDown(keyCode, event)
         // A real keyboard: Ctrl and Alt come in the event itself.
         val meta = event.metaState and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK).inv()

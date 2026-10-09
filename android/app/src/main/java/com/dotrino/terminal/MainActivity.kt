@@ -37,7 +37,7 @@ class MainActivity : Activity() {
         const val ARROW_DP = 6
         const val WIKI = "https://wiki.dotrino.com"
         /** The keys a phone keyboard lacks. A name [TerminalView.key] knows, or a literal character. */
-        val EXTRA_KEYS = listOf("esc", "tab", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~")
+        val EXTRA_KEYS = listOf("esc", "tab", "shift", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~")
         val KEY_LABELS = mapOf("esc" to "Esc", "tab" to "Tab", "up" to "↑", "down" to "↓", "left" to "←", "right" to "→", "home" to "Home", "end" to "End", "pgup" to "PgUp", "pgdn" to "PgDn")
     }
 
@@ -718,7 +718,7 @@ class MainActivity : Activity() {
         }
         row.addView(composeKey, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(4) })
         for (k in EXTRA_KEYS) {
-            val key = label(KEY_LABELS[k] ?: when (k) { "ctrl" -> t("key.ctrl"); "alt" -> t("key.alt"); else -> k }, 14f, bold = true).apply {
+            val key = label(KEY_LABELS[k] ?: when (k) { "shift" -> t("key.shift"); "ctrl" -> t("key.ctrl"); "alt" -> t("key.alt"); else -> k }, 14f, bold = true).apply {
                 tag = "key-$k"; gravity = Gravity.CENTER; minWidth = px(44)
                 setPadding(px(10), px(9), px(10), px(9))
                 background = rounded(col(R.color.t_panel2), px(8))
@@ -726,6 +726,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     val v = view ?: return@setOnClickListener
                     when (k) {
+                        "shift" -> { v.shift = !v.shift; renderModifiers() }
                         "ctrl" -> { v.ctrl = !v.ctrl; renderModifiers() }
                         "alt" -> { v.alt = !v.alt; renderModifiers() }
                         in KEY_LABELS.keys -> v.key(k)
@@ -735,15 +736,16 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            if (k == "ctrl" || k == "alt") modKeys[k] = key
+            if (k == "shift" || k == "ctrl" || k == "alt") modKeys[k] = key
             row.addView(key, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(4) })
         }
         return HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; setBackgroundColor(col(R.color.t_panel)); addView(row) }
     }
 
-    /** Ctrl and Alt stay lit until the next key uses them. */
+    /** Shift, Ctrl and Alt stay lit until the next key uses them. */
     private fun renderModifiers() {
         val v = view ?: return
+        modKeys["shift"]?.background = rounded(col(if (v.shift) R.color.t_accent else R.color.t_panel2), px(8))
         modKeys["ctrl"]?.background = rounded(col(if (v.ctrl) R.color.t_accent else R.color.t_panel2), px(8))
         modKeys["alt"]?.background = rounded(col(if (v.alt) R.color.t_accent else R.color.t_panel2), px(8))
     }

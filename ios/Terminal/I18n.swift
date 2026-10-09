@@ -68,6 +68,7 @@ enum I18n {
         "boot.create": "Crear perfil",
         "boot.adopt": "Adoptar un perfil",
         "boot.retry": "Reintentar",
+        "key.shift": "Shift",
         "key.ctrl": "Ctrl",
         "key.alt": "Alt",
     ]
@@ -134,6 +135,7 @@ enum I18n {
         "boot.create": "Create profile",
         "boot.adopt": "Adopt a profile",
         "boot.retry": "Retry",
+        "key.shift": "Shift",
         "key.ctrl": "Ctrl",
         "key.alt": "Alt",
     ]
