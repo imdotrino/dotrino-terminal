@@ -30,6 +30,19 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private var cellH: CGFloat = 1
     /// Lines scrolled back into the history (0 = the live screen).
     private var scrollBack = 0
+
+    /// Rows of the console that do not fit in the view (another screen has its size, or the keyboard is up).
+    private func below(_ t: Terminal) -> Int { max(0, t.rows - rows) }
+    /// The console line on the view's first row when nothing is scrolled. A console taller than the
+    /// view FOLLOWS THE CURSOR: drawn always from the top, what was being typed stayed out of reach
+    /// under the keyboard.
+    private func liveTop(_ t: Terminal) -> Int { min(max(t.cursorY - rows + 1, 0), below(t)) }
+    /// How far the view can go: up, the hidden rows above and then the history; down (negative), the hidden rows below.
+    private func maxBack(_ t: Terminal) -> Int { t.historySize + liveTop(t) }
+    private func minBack(_ t: Terminal) -> Int { liveTop(t) - below(t) }
+    private func back(_ t: Terminal) -> Int { min(max(scrollBack, minBack(t)), maxBack(t)) }
+    /// The console line on the view's first row (negative = history).
+    private func topLine(_ t: Terminal) -> Int { liveTop(t) - back(t) }
     private var scrollRemainder: CGFloat = 0
     /// Columns panned sideways, when the console is wider than the view.
     private var panX = 0
@@ -152,7 +165,7 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         guard let t = terminal else { Self.defaultBg.setFill(); ctx.fill(bounds); return }
         Self.outsideBg.setFill(); ctx.fill(bounds)
         panX = min(max(panX, 0), max(0, t.cols - cols))
-        let back = min(scrollBack, t.historySize)
+        let top = topLine(t)
         let visibleRows = min(rows, t.rows)
         let shownCols = min(t.cols - panX, cols + 1)
         Self.defaultBg.setFill()
@@ -161,7 +174,7 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         ctx.clip(to: CGRect(x: 0, y: 0, width: CGFloat(shownCols) * cellW, height: CGFloat(visibleRows) * cellH))
         ctx.translateBy(x: -CGFloat(panX) * cellW, y: 0)
         for y in 0..<visibleRows {
-            let line = y - back
+            let line = top + y
             if line >= t.rows { break }
             drawRow(ctx, t.row(line), CGFloat(y) * cellH, min(panX + cols + 1, t.cols))
         }
@@ -170,15 +183,16 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             if (b.line, b.col) < (a.line, a.col) { swap(&a, &b) }
             Self.selectionColor.setFill()
             for y in 0..<visibleRows {
-                let abs = t.historySize + (y - back)
+                let abs = t.historySize + top + y
                 guard abs >= a.line, abs <= b.line else { continue }
                 let from = abs == a.line ? a.col : 0
                 let to = abs == b.line ? b.col + 1 : t.cols
                 if to > from { ctx.fill(CGRect(x: CGFloat(from) * cellW, y: CGFloat(y) * cellH, width: CGFloat(to - from) * cellW, height: cellH)) }
             }
         }
-        if t.cursorVisible && back == 0 && t.cursorY < visibleRows && t.cursorX < t.cols {
-            let r = CGRect(x: CGFloat(t.cursorX) * cellW, y: CGFloat(t.cursorY) * cellH, width: cellW, height: cellH)
+        let cursorRow = t.cursorY - top
+        if t.cursorVisible && cursorRow >= 0 && cursorRow < visibleRows && t.cursorX < t.cols {
+            let r = CGRect(x: CGFloat(t.cursorX) * cellW, y: CGFloat(cursorRow) * cellH, width: cellW, height: cellH)
             Self.cursorColor.setFill(); ctx.fill(r)
             let cp = t.row(t.cursorY).cp[t.cursorX]
             if cp > 32, let u = Unicode.Scalar(cp) {
@@ -261,10 +275,9 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// The buffer cell under a point of the view, or nil outside the console.
     private func cell(at p: CGPoint) -> Cell? {
         guard let t = terminal else { return nil }
-        let back = min(scrollBack, t.historySize)
         let y = Int(p.y / cellH), x = Int(p.x / cellW) + panX
         guard y >= 0, y < min(rows, t.rows), x >= 0, x < t.cols else { return nil }
-        return Cell(line: t.historySize + (y - back), col: x)
+        return Cell(line: t.historySize + topLine(t) + y, col: x)
     }
 
     /// The selected text: whole lines between the ends, the ends cut at their columns, no false
@@ -306,7 +319,7 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         } else {
             scrollRemainder += d.y
             let k = Int(scrollRemainder / cellH)
-            if k != 0 { scrollRemainder -= CGFloat(k) * cellH; scrollBack = min(max(scrollBack + k, 0), t.historySize); setNeedsDisplay() }
+            if k != 0 { scrollRemainder -= CGFloat(k) * cellH; scrollBack = min(max(back(t) + k, minBack(t)), maxBack(t)); setNeedsDisplay() }
         }
     }
 

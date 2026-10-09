@@ -57,10 +57,9 @@ class TerminalView(context: Context) : View(context) {
     /** The buffer cell under a point of the view, or null outside the console. */
     private fun cellAt(px: Float, py: Float): Cell? {
         val t = terminal ?: return null
-        val back = min(scrollBack, t.historySize)
         val y = (py / cellH).toInt(); val x = (px / cellW).toInt() + panX
         if (y < 0 || y >= min(rows, t.rows) || x < 0 || x >= t.cols) return null
-        return Cell(t.historySize + (y - back), x)
+        return Cell(t.historySize + topLine(t) + y, x)
     }
 
     private fun ordered(): Pair<Cell, Cell>? {
@@ -103,6 +102,19 @@ class TerminalView(context: Context) : View(context) {
     private var baseline = 0f
     /** Lines scrolled back into the history (0 = the live screen). */
     private var scrollBack = 0
+
+    /** Rows of the console that do not fit in the view (another screen has its size, or the keyboard is up). */
+    private fun below(t: Terminal) = max(0, t.rows - rows)
+    /** The console line on the view's first row when nothing is scrolled. A console taller than the
+     *  view FOLLOWS THE CURSOR: drawn always from the top, what was being typed stayed out of reach
+     *  under the keyboard. */
+    private fun liveTop(t: Terminal) = (t.cursorY - rows + 1).coerceIn(0, below(t))
+    /** How far the view can go: up, the hidden rows above and then the history; down (negative), the hidden rows below. */
+    private fun maxBack(t: Terminal) = t.historySize + liveTop(t)
+    private fun minBack(t: Terminal) = liveTop(t) - below(t)
+    private fun back(t: Terminal) = scrollBack.coerceIn(minBack(t), maxBack(t))
+    /** The console line on the view's first row (negative = history). */
+    private fun topLine(t: Terminal) = liveTop(t) - back(t)
     private var scrollRemainder = 0f
     /** Columns panned sideways, when the console is wider than the view. */
     private var panX = 0
@@ -184,7 +196,7 @@ class TerminalView(context: Context) : View(context) {
         val t = terminal ?: run { canvas.drawColor(defaultBg); return }
         canvas.drawColor(outsideBg)
         panX = panX.coerceIn(0, max(0, t.cols - cols))
-        val back = min(scrollBack, t.historySize)
+        val top = topLine(t)
         val visibleRows = min(rows, t.rows)
         val shownCols = min(t.cols - panX, cols + 1)
         bgPaint.color = defaultBg
@@ -193,21 +205,22 @@ class TerminalView(context: Context) : View(context) {
         canvas.clipRect(0f, 0f, shownCols * cellW, visibleRows * cellH)
         canvas.translate(-panX * cellW, 0f)
         for (y in 0 until visibleRows) {
-            val line = y - back
+            val line = top + y
             if (line >= t.rows) break
             drawRow(canvas, t.row(line), y * cellH, min(panX + cols + 1, t.cols))
         }
         ordered()?.let { (a, b) ->
             for (y in 0 until visibleRows) {
-                val abs = t.historySize + (y - back)
+                val abs = t.historySize + top + y
                 if (abs < a.line || abs > b.line) continue
                 val from = if (abs == a.line) a.col else 0
                 val to = if (abs == b.line) b.col + 1 else t.cols
                 if (to > from) canvas.drawRect(from * cellW, y * cellH, to * cellW, (y + 1) * cellH, selectionPaint)
             }
         }
-        if (t.cursorVisible && back == 0 && t.cursorY < visibleRows && t.cursorX < t.cols) {
-            val x = t.cursorX * cellW; val y = t.cursorY * cellH
+        val cursorRow = t.cursorY - top
+        if (t.cursorVisible && cursorRow in 0 until visibleRows && t.cursorX < t.cols) {
+            val x = t.cursorX * cellW; val y = cursorRow * cellH
             bgPaint.color = cursorColor
             canvas.drawRect(x, y, x + cellW, y + cellH, bgPaint)
             val cp = t.row(t.cursorY).cp[t.cursorX]
@@ -277,7 +290,7 @@ class TerminalView(context: Context) : View(context) {
         }
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
             val t = terminal ?: return true
-            scroller.fling(0, (scrollBack * cellH).toInt(), 0, vy.toInt(), 0, 0, 0, (t.historySize * cellH).toInt())
+            scroller.fling(0, (scrollBack * cellH).toInt(), 0, vy.toInt(), 0, 0, (minBack(t) * cellH).toInt(), (maxBack(t) * cellH).toInt())
             postInvalidateOnAnimation()
             return true
         }
@@ -298,7 +311,7 @@ class TerminalView(context: Context) : View(context) {
         val lines = (scrollRemainder / cellH).toInt()
         if (lines == 0) return
         scrollRemainder -= lines * cellH
-        scrollBack = (scrollBack + lines).coerceIn(0, t.historySize)
+        scrollBack = (back(t) + lines).coerceIn(minBack(t), maxBack(t))
         invalidate()
     }
 
@@ -316,7 +329,7 @@ class TerminalView(context: Context) : View(context) {
     override fun computeScroll() {
         if (!scroller.computeScrollOffset()) return
         val t = terminal ?: return
-        scrollBack = (scroller.currY / cellH).roundToInt().coerceIn(0, t.historySize)
+        scrollBack = (scroller.currY / cellH).roundToInt().coerceIn(minBack(t), maxBack(t))
         postInvalidateOnAnimation()
     }
 
