@@ -350,7 +350,10 @@ final class Tab: ObservableObject, Identifiable {
             consoleId = m["id"]?.string
             if let c = m["console"].flatMap(consoleOf) { upsert(c); follow(c) }
             state = .open; note = nil
-            if screenCols != saidCols || screenRows != saidRows { sayScreen() }
+            // Every console put on screen takes THIS screen's size, as ⤢ does (owner, 2026-10-09):
+            // the size said now (it may have changed while attaching), and chosen on purpose.
+            sayScreen()
+            try? channel?.send(["type": "pin", "on": .bool(true)])
             if !pendingInput.isEmpty { let t = pendingInput; pendingInput = ""; input(t) }
             list()
         case "meta":

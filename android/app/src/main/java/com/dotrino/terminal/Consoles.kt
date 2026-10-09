@@ -438,7 +438,10 @@ object Consoles {
                     consoleId = (m["id"] as? JsonPrimitive)?.content
                     (m["console"] as? JsonObject)?.let(::consoleOf)?.let { upsert(it); follow(it) }
                     state = State.OPEN; note = null; resuming = false
-                    if (screenCols != saidCols || screenRows != saidRows) sayScreen()
+                    // Every console put on screen takes THIS screen's size, as ⤢ does (owner, 2026-10-09):
+                    // the size said now (it may have changed while attaching), and chosen on purpose.
+                    sayScreen()
+                    try { channel?.send(buildJsonObject { put("type", "pin"); put("on", true) }) } catch (_: Exception) {}
                     if (pendingInput.isNotEmpty()) { val t = pendingInput.toString(); pendingInput.clear(); input(t) }
                     list(); onChange()
                 }
