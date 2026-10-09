@@ -141,6 +141,7 @@ export class AgentClient {
   async open (cols, rows) {
     const p = await this._ask({ type: 'open', cols, rows }, 'attached')
     this.consoleId = p.id
+    this._take()
     return p
   }
 
@@ -151,8 +152,16 @@ export class AgentClient {
   async attach (id, cols, rows) {
     const p = await this._ask({ type: 'attach', id, cols, rows }, 'attached')
     this.consoleId = p.id
+    this._take()
     return p
   }
+
+  /**
+   * Toda consola que se pone en pantalla toma el tamaño de ESTA pantalla, como hace ⤢ (dueño,
+   * 2026-10-09; las apps nativas ya lo hacían). El tamaño va en el `open`/`attach`; aquí se fija.
+   * Si no sale, se dice: la consola queda con el tamaño de otra pantalla.
+   */
+  _take () { Promise.resolve(this.pin(true)).catch((e) => this.onError(e)) }
 
   input (data) { return this.rc.send({ type: 'input', data }) }
   resize (cols, rows) { return this.rc.send({ type: 'resize', cols, rows }) }

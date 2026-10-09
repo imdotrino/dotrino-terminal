@@ -344,70 +344,19 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// Send what a key means, applying the sticky modifiers of the extra row to it.
     func type(_ text: String) {
         guard !text.isEmpty else { return }
-        var out = shift ? text.uppercased() : text
-        if ctrl, text.unicodeScalars.count == 1, let c = Self.controlOf(Character(text)) { out = String(c) }
-        if alt { out = "\u{1b}" + out }
+        let out = Keys.text(text, shift: shift, ctrl: ctrl, alt: alt)
         if ctrl || alt || shift { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
-    }
-
-    private static func controlOf(_ c: Character) -> Character? {
-        guard let a = c.asciiValue else { return nil }
-        switch c {
-        case "a"..."z": return Character(Unicode.Scalar(a - 96))
-        case "A"..."Z": return Character(Unicode.Scalar(a - 64))
-        case " ", "2", "@": return Character(Unicode.Scalar(0))
-        case "[", "3": return Character(Unicode.Scalar(27))
-        case "\\", "4": return Character(Unicode.Scalar(28))
-        case "]", "5": return Character(Unicode.Scalar(29))
-        case "^", "6": return Character(Unicode.Scalar(30))
-        case "_", "7", "/": return Character(Unicode.Scalar(31))
-        case "?", "8": return Character(Unicode.Scalar(127))
-        default: return nil
-        }
     }
 
     /// A named key of the extra row or of a real keyboard, as the escape sequence a shell expects.
     func key(_ name: String) {
-        let app = terminal?.appCursorKeys == true
-        let seq: String
-        if shift {
-            guard let s = Self.shifted[name] else { return }
-            seq = s
-        } else {
-        switch name {
-        case "esc": seq = "\u{1b}"
-        case "tab": seq = "\t"
-        case "enter": seq = "\r"
-        case "backspace": seq = "\u{7f}"
-        case "up": seq = app ? "\u{1b}OA" : "\u{1b}[A"
-        case "down": seq = app ? "\u{1b}OB" : "\u{1b}[B"
-        case "right": seq = app ? "\u{1b}OC" : "\u{1b}[C"
-        case "left": seq = app ? "\u{1b}OD" : "\u{1b}[D"
-        case "home": seq = app ? "\u{1b}OH" : "\u{1b}[H"
-        case "end": seq = app ? "\u{1b}OF" : "\u{1b}[F"
-        case "pgup": seq = "\u{1b}[5~"
-        case "pgdn": seq = "\u{1b}[6~"
-        case "del": seq = "\u{1b}[3~"
-        default: return
-        }
-        }
-        // Ctrl does not change these keys; Alt still prefixes them.
-        let out = alt ? "\u{1b}" + seq : seq
+        guard let out = Keys.named(name, shift: shift, alt: alt, app: terminal?.appCursorKeys == true) else { return }
         if ctrl || alt || shift { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
     }
-
-    /// A named key with Shift, as xterm sends it: Shift+Tab is `CSI Z`, the rest carry the modifier `2`.
-    private static let shifted: [String: String] = [
-        "tab": "\u{1b}[Z",
-        "up": "\u{1b}[1;2A", "down": "\u{1b}[1;2B", "right": "\u{1b}[1;2C", "left": "\u{1b}[1;2D",
-        "home": "\u{1b}[1;2H", "end": "\u{1b}[1;2F",
-        "pgup": "\u{1b}[5;2~", "pgdn": "\u{1b}[6;2~", "del": "\u{1b}[3;2~",
-        "esc": "\u{1b}", "enter": "\r", "backspace": "\u{7f}",
-    ]
 
     /// Paste: bracketed when the program asked for it, so it does not run what was pasted line by line.
     func paste(_ text: String) {

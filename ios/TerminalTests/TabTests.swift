@@ -55,6 +55,20 @@ final class TabTests: XCTestCase {
         XCTAssertTrue(ch3.types.contains("open"))                  // the machine has none: a new one
     }
 
+    func testEveryConsolePutOnScreenTakesThisScreensSize() {
+        let (t, ch) = tab()
+        t.handle(consoles(console("a", 1, 80, 24), console("b", 2, 80, 24)))
+        t.handle(attached(console("a", 1, 50, 20, watchers: 1, by: me)))
+        XCTAssertEqual(Array(ch.types.suffix(2)), ["resize", "pin"], "as ⤢: the size, then chosen on purpose")
+        t.switchTo("b")
+        ch.sent.removeAll()
+        t.screen(50, 11)                                   // the keyboard came up before the agent answered
+        XCTAssertNil(ch.last("resize"), "nothing is said while attaching")
+        t.handle(attached(console("b", 2, 50, 20, watchers: 1, by: me)))
+        XCTAssertEqual(ch.last("resize")?["rows"]?.int, 11, "the size it has NOW")
+        XCTAssertEqual(ch.last("pin")?["on"], .bool(true))
+    }
+
     func testTheEmulatorFollowsTheConsoleSizeNotTheScreen() {
         let (t, ch) = tab()
         t.handle(consoles())

@@ -362,59 +362,18 @@ class TerminalView(context: Context) : View(context) {
     /** Send what a key means, applying the sticky modifiers of the extra row to it. */
     fun type(text: String) {
         if (text.isEmpty()) return
-        var out = if (shift) text.uppercase() else text
-        if (ctrl && text.length == 1) controlOf(text[0])?.let { out = it.toString() }
-        if (alt) out = "\u001b" + out
+        val out = Keys.text(text, shift, ctrl, alt)
         if (ctrl || alt || shift) { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
-    }
-
-    private fun controlOf(c: Char): Char? = when (c) {
-        in 'a'..'z' -> (c - 'a' + 1).toChar()
-        in 'A'..'Z' -> (c - 'A' + 1).toChar()
-        ' ', '2', '@' -> 0.toChar()
-        '[', '3' -> 27.toChar()
-        '\\', '4' -> 28.toChar()
-        ']', '5' -> 29.toChar()
-        '^', '6' -> 30.toChar()
-        '_', '7', '/' -> 31.toChar()
-        '?', '8' -> 127.toChar()
-        else -> null
     }
 
     /** A named key of the extra row or of a real keyboard, as the escape sequence a shell expects. */
     fun key(name: String) {
-        val app = terminal?.appCursorKeys == true
-        val seq = if (shift) shifted(name) ?: return else when (name) {
-            "esc" -> "\u001b"; "tab" -> "\t"; "enter" -> "\r"; "backspace" -> "\u007f"
-            "up" -> if (app) "\u001bOA" else "\u001b[A"
-            "down" -> if (app) "\u001bOB" else "\u001b[B"
-            "right" -> if (app) "\u001bOC" else "\u001b[C"
-            "left" -> if (app) "\u001bOD" else "\u001b[D"
-            "home" -> if (app) "\u001bOH" else "\u001b[H"
-            "end" -> if (app) "\u001bOF" else "\u001b[F"
-            "pgup" -> "\u001b[5~"; "pgdn" -> "\u001b[6~"; "del" -> "\u001b[3~"; "ins" -> "\u001b[2~"
-            "f1" -> "\u001bOP"; "f2" -> "\u001bOQ"; "f3" -> "\u001bOR"; "f4" -> "\u001bOS"
-            "f5" -> "\u001b[15~"; "f6" -> "\u001b[17~"; "f7" -> "\u001b[18~"; "f8" -> "\u001b[19~"
-            "f9" -> "\u001b[20~"; "f10" -> "\u001b[21~"; "f11" -> "\u001b[23~"; "f12" -> "\u001b[24~"
-            else -> return
-        }
-        // Ctrl does not change these keys; Alt still prefixes them.
-        val out = if (alt) "\u001b" + seq else seq
+        val out = Keys.named(name, shift, alt, terminal?.appCursorKeys == true) ?: return
         if (ctrl || alt || shift) { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
         onInput(out)
-    }
-
-    /** A named key with Shift, as xterm sends it: Shift+Tab is `CSI Z`, the rest carry the modifier `2`. */
-    private fun shifted(name: String): String? = when (name) {
-        "tab" -> "\u001b[Z"
-        "up" -> "\u001b[1;2A"; "down" -> "\u001b[1;2B"; "right" -> "\u001b[1;2C"; "left" -> "\u001b[1;2D"
-        "home" -> "\u001b[1;2H"; "end" -> "\u001b[1;2F"
-        "pgup" -> "\u001b[5;2~"; "pgdn" -> "\u001b[6;2~"; "del" -> "\u001b[3;2~"; "ins" -> "\u001b[2;2~"
-        "esc" -> "\u001b"; "enter" -> "\r"; "backspace" -> "\u007f"
-        else -> null
     }
 
     /** Paste: bracketed when the program asked for it, so it does not run what was pasted line by line. */
