@@ -32,10 +32,18 @@ No reescribas, ordenes, corrijas ni resumas lo que él escribió. Tampoco lo cop
 1. Comprueba que corres dentro de una consola: `echo "$DOTRINO_TERMINAL_CONSOLE"`. Vacío = no hay
    consola ni tarjeta: no hagas nada y no lo menciones.
 2. **Al empezar una tarea**: pon la tarea.
-3. **Cuando cambia** (otra tarea, otro rumbo, un bloqueo): vuelve a ponerla.
-4. **Al terminar o al quedar esperando al usuario**: dilo en la primera línea.
+3. **Mientras pasan cosas, no solo al principio y al final.** El dueño mira la tarjeta para saber
+   por dónde vas sin leer la consola: una tarjeta que dice lo de hace veinte minutos no le sirve.
+   Actualízala cada vez que:
+   - terminas un paso («Hecho: agente publicado»);
+   - publicas, despliegas o subes algo;
+   - algo falla o te bloquea;
+   - cambia el rumbo o llega otro encargo a mitad;
+   - quedas **esperando** algo (una compilación, CI, una prueba larga, su respuesta): dilo.
+4. **Al terminar**: dilo en la primera línea (`Terminado: …`) y deja lo que quede pendiente.
 
-Una orden por momento, sin anunciarlo ni comentarlo en la respuesta.
+En una tarea larga eso son varias actualizaciones; es lo esperado. Una orden cada vez, sin
+anunciarlo ni comentarlo en la respuesta.
 
 ## Cómo
 
@@ -57,8 +65,9 @@ No hace falta decir qué consola: es la tuya.
 
 - **Primera línea = la tarea, en una frase corta** (hasta ~60 caracteres): es lo que se ve en la
   lista. «Tarjeta de notas en dotrino-terminal», no «Trabajando en lo que pidió el usuario».
-- Debajo, solo lo que ayuda a retomar: `Hecho:` / `Falta:` / `Espera: tu visto bueno`. Tres o
-  cuatro líneas en total.
+- Debajo, el estado en tres o cuatro líneas: `Hecho:` (lo ya cerrado), `Ahora:` (lo que haces en
+  este momento), `Falta:` y, si aplica, `Espera:` (a qué). Reescríbela entera cada vez: es el
+  estado actual, no un historial.
 - En el idioma del usuario. Sin secretos, llaves ni rutas con credenciales: la nota la ven todos
   los aparatos de la cuenta.
 - Al terminar no la quites: di que terminó (`Terminado: …`).
