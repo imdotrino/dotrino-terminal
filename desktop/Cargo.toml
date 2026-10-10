@@ -1,6 +1,6 @@
 [package]
 name = "dotrino-terminal-desktop"
-version = "0.2.43"
+version = "0.2.44"
 edition = "2024"
 description = "Dotrino Terminal: terminal windows (Linux, macOS) whose consoles you can also open from your other devices."
 license = "MIT"
@@ -42,4 +42,17 @@ assets = [
   ["assets/xfce-helper-dotrino-terminal.desktop", "usr/share/xfce4/helpers/dotrino-terminal.desktop", "644"],
   ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/dotrino-terminal.svg", "644"],
   ["assets/icon-512.png", "usr/share/icons/hicolor/512x512/apps/dotrino-terminal.png", "644"],
+]
+
+# `cargo generate-rpm`: el mismo paquete para Fedora, RHEL y openSUSE, con los mismos archivos
+# que el .deb. Las dependencias salen del binario (`builtin` = lo que dice `ldd`), sin `rpmbuild`.
+[package.metadata.generate-rpm]
+summary = "Dotrino Terminal: terminal windows whose consoles you can also open from your other devices"
+auto-req = "builtin"
+assets = [
+  { source = "target/release/dotrino-terminal-desktop", dest = "/usr/bin/dotrino-terminal-desktop", mode = "755" },
+  { source = "assets/dotrino-terminal.desktop", dest = "/usr/share/applications/dotrino-terminal.desktop", mode = "644" },
+  { source = "assets/xfce-helper-dotrino-terminal.desktop", dest = "/usr/share/xfce4/helpers/dotrino-terminal.desktop", mode = "644" },
+  { source = "assets/icon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/dotrino-terminal.svg", mode = "644" },
+  { source = "assets/icon-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/dotrino-terminal.png", mode = "644" },
 ]
