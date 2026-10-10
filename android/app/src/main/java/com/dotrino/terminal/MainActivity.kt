@@ -57,13 +57,20 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The same on every Android version: the app draws to the edges and pads itself (`shell`).
+        window.setDecorFitsSystemWindows(false)
         I18n.load(this)
         setContentView(shell())
         Consoles.onChange = { refresh() }
         boot()
     }
 
-    override fun onResume() { super.onResume(); if (Consoles.profile == null && !Consoles.demo) boot() }
+    override fun onResume() {
+        super.onResume()
+        // Coming back (from another app, from the lock screen), the margins are asked again.
+        window.decorView.requestApplyInsets()
+        if (Consoles.profile == null && !Consoles.demo) boot()
+    }
     // Back from the background the connection is checked at once, and it is said on screen.
     private var wasStopped = false
     override fun onStop() { super.onStop(); wasStopped = true }
@@ -82,7 +89,22 @@ class MainActivity : Activity() {
     private fun shell(): View = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setBackgroundColor(col(R.color.t_bg))
-        fitsSystemWindows = true
+        // THE SYSTEM'S MARGINS ARE APPLIED HERE, BY HAND: the bars, the cutout and the keyboard, as
+        // padding of the whole screen. `fitsSystemWindows` left it to the system's legacy path, and
+        // on a tablet the console stayed taller than what was visible (its last rows under the
+        // keyboard or the taskbar) until the keyboard was opened or closed again; ⤢ could not fix
+        // it because the view really measured that much.
+        setOnApplyWindowInsetsListener { v, insets ->
+            val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+            val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
+            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            android.view.WindowInsets.CONSUMED
+        }
+        // A screen put in place later (after the profile loads) must hear the margins too.
+        addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) { v.requestApplyInsets() }
+            override fun onViewDetachedFromWindow(v: View) {}
+        })
         addView(DotrinoTopbar(this@MainActivity, repo = "imdotrino/dotrino-terminal",
             brand = DotrinoTopbar.Brand("Terminal", R.drawable.terminal_brand),
             profile = Consoles.profile?.topbar(),
