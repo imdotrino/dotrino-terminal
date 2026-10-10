@@ -221,7 +221,9 @@ mod tests {
     fn a_window_left_without_its_console_takes_the_first_one_nobody_has_open() {
         let list: Vec<super::ConsoleInfo> = serde_json::from_str(r#"[{"id":"a","watchers":[{"origin":"local","tag":"w2"}]},{"id":"b","watchers":[{"origin":"remote"}]},{"id":"c","watchers":[]}]"#).unwrap();
         assert_eq!(super::next_console(&list).as_deref(), Some("c"));
-        assert_eq!(super::next_console(&list[..2]).as_deref(), Some("a"), "all open elsewhere: the first");
+        // Sin ninguna libre del todo: la que solo mira otro aparato, antes que la de otra ventana de aquí.
+        assert_eq!(super::next_console(&list[..2]).as_deref(), Some("b"), "watched only from another device: still unattended here");
+        assert_eq!(super::next_console(&list[..1]).as_deref(), Some("a"), "all in a window of this machine: the first");
         assert_eq!(super::next_console(&[]), None);
     }
 
