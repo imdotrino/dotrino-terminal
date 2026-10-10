@@ -1206,7 +1206,7 @@ impl App {
                 container(text(t("Quitar la tarea", "Remove the task")).size(12)).padding(6).style(container::rounded_box),
                 iced::widget::tooltip::Position::Left,
             );
-            let body = text(task.to_string()).size(12).width(Length::Fill).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) });
+            let body = text(task.to_string()).size(12).width(Length::Fill);
             card = card.push(row![container(iced::widget::scrollable(body)).max_height(160).width(Length::Fill), del].spacing(6)).push(rule::horizontal(1));
         }
         if let Some((_, content)) = editing {
