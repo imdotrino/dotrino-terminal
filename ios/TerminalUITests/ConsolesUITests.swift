@@ -75,10 +75,15 @@ final class ConsolesUITests: XCTestCase {
     /// with ×, never edited) and the person's note, edited in a sheet.
     func testAboutCard() {
         let app = XCUIApplication()
-        app.launchArguments = ["-demo", "-compose", "0", "-aboutFolded", "YES"]
+        // `-aboutFolded NO`: it starts open whatever an earlier run left in the defaults.
+        app.launchArguments = ["-demo", "-compose", "0", "-aboutFolded", "NO"]
         app.launch()
+        XCTAssertTrue(app.staticTexts["about-title"].waitForExistence(timeout: 10), "the card starts open")
+        // Folding takes a touch well OUTSIDE what the «–» shows: 14 pt to its left and below.
+        let hide = app.buttons["about-hide"]
+        hide.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 1)).withOffset(CGVector(dx: -14, dy: 12)).tap()
         let show = app.buttons["about-show"]
-        XCTAssertTrue(show.waitForExistence(timeout: 10), "folded, the card is one line")
+        XCTAssertTrue(show.waitForExistence(timeout: 5), "a touch near «–» folds it to one line")
         shot("6-about-folded")
         show.tap()
         XCTAssertTrue(app.staticTexts["about-title"].waitForExistence(timeout: 5))

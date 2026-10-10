@@ -584,14 +584,28 @@ class MainActivity : Activity() {
     // ---------- what the console is about ----------
     //
     // The same card as the PWA and the desktop: the console's title, the task the program inside
-    // set (read and removed here, never edited) and the person's note (edited in a sheet). On a
-    // phone it starts FOLDED to one line — the task — because open it covers what is being read;
-    // on a wide screen it starts open. Folding is remembered.
+    // set (read and removed here, never edited) and the person's note (edited in a sheet). It
+    // starts OPEN (owner, 2026-10-10); folded it is one line — the task. Folding is remembered.
 
     private var aboutCard: LinearLayout? = null
     private var aboutFolded: Boolean
-        get() = prefs.getBoolean("aboutFolded", resources.configuration.smallestScreenWidthDp < 600)
+        get() = prefs.getBoolean("aboutFolded", false)
         set(v) { prefs.edit().putBoolean("aboutFolded", v).apply() }
+
+    /**
+     * A bigger area to touch, the same size to look at (owner, 2026-10-10: folding it on a phone was
+     * hard): touches around [v], up to [dp] away and inside its parent, count as touches on it.
+     */
+    private fun widerTouch(v: View, dp: Int = 16, host: ViewGroup? = v.parent as? ViewGroup) {
+        host ?: return
+        host.post {
+            if (!v.isAttachedToWindow) return@post
+            val r = android.graphics.Rect(0, 0, v.width, v.height)
+            host.offsetDescendantRectToMyCoords(v, r)
+            r.inset(-px(dp), -px(dp))
+            host.touchDelegate = android.view.TouchDelegate(r, v)
+        }
+    }
 
     private fun renderAbout() {
         val box = aboutCard ?: return
@@ -610,8 +624,11 @@ class MainActivity : Activity() {
                 isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END; maxWidth = px(190)
             })
             box.setOnClickListener { aboutFolded = false; renderAbout() }
+            widerTouch(box, 14)
             return
         }
+        (box.parent as? View)?.touchDelegate = null
+        box.touchDelegate = null
         box.setOnClickListener(null); box.isClickable = true      // a touch on the card does not reach the console
         box.background = rounded(glass, px(14), px(1), col(R.color.t_accent_soft))
         box.setPadding(px(10), px(8), px(10), px(8))
@@ -628,7 +645,7 @@ class MainActivity : Activity() {
             addView(label("–", 15f, col(R.color.t_muted)).apply {
                 tag = "about-hide"; contentDescription = t("about.hide"); gravity = Gravity.CENTER
                 setPadding(px(10), 0, px(6), px(4)); setOnClickListener { aboutFolded = true; renderAbout() }
-            })
+            }.also { b -> widerTouch(b, 22, box) })
         }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
         c.task?.takeIf { it.isNotBlank() }?.let { task ->
             box.addView(line(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(1)).apply { topMargin = px(6); bottomMargin = px(6) })
@@ -638,7 +655,7 @@ class MainActivity : Activity() {
                 addView(label("×", 16f, col(R.color.t_muted)).apply {
                     tag = "about-task-del"; contentDescription = t("about.taskDel")
                     setPadding(px(10), 0, px(6), px(4)); setOnClickListener { tab.clearTask() }
-                })
+                }.also { b -> widerTouch(b, 22, this) })
             }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         box.addView(line(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(1)).apply { topMargin = px(6); bottomMargin = px(6) })
@@ -647,12 +664,15 @@ class MainActivity : Activity() {
             tag = "about-note"; maxLines = 10; ellipsize = android.text.TextUtils.TruncateAt.END
         }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
         // A machine that keeps no notes: the button shows, off (the line above says why).
-        box.addView(label(t(if (note.isNullOrEmpty()) "about.add" else "about.edit"), 12f, col(R.color.t_text), bold = true).apply {
-            tag = "about-edit"; gravity = Gravity.CENTER
-            background = rounded(0, px(12), px(1), col(R.color.t_line)); setPadding(px(12), px(4), px(12), px(4))
-            isEnabled = note != null; alpha = if (note != null) 1f else .4f
-            setOnClickListener { editNote(tab, c) }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; topMargin = px(6) })
+        box.addView(LinearLayout(this).apply {
+            gravity = Gravity.END; setPadding(0, px(6), 0, 0)
+            addView(label(t(if (note.isNullOrEmpty()) "about.add" else "about.edit"), 12f, col(R.color.t_text), bold = true).apply {
+                tag = "about-edit"; gravity = Gravity.CENTER
+                background = rounded(0, px(12), px(1), col(R.color.t_line)); setPadding(px(12), px(4), px(12), px(4))
+                isEnabled = note != null; alpha = if (note != null) 1f else .4f
+                setOnClickListener { editNote(tab, c) }
+            }.also { b -> widerTouch(b, 16, this) })
+        }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
     /** The person's note, edited in a sheet: only theirs — the task is not in the box. */

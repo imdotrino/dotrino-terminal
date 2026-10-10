@@ -239,8 +239,8 @@ private struct ConsoleScreen: View {
     /// back before it shows; here it shows at once and goes whole, with Enter. The extra keys still
     /// go straight. Off, everything goes key by key, as full-screen programs (vim, htop) need.
     @AppStorage("compose") private var composing = false
-    /// «What it is about»: folded to one line (remembered). A phone starts folded; an iPad, open.
-    @AppStorage("aboutFolded") private var aboutFolded = UIDevice.current.userInterfaceIdiom == .phone
+    /// «What it is about»: folded to one line (remembered). It starts open.
+    @AppStorage("aboutFolded") private var aboutFolded = false
     @State private var editing: ConsoleInfo?
     @State private var noteDraft = ""
     @State private var composeText = ""
@@ -450,8 +450,9 @@ private struct ConsoleScreen: View {
     }
 
     // The same card as the PWA and the desktop: the console's title, the task the program inside set
-    // (read and removed here, never edited) and the person's note. On a phone it starts FOLDED to
-    // one line — the task — because open it covers what is being read; on an iPad it starts open.
+    // (read and removed here, never edited) and the person's note. It starts OPEN (owner,
+    // 2026-10-10); folded it is one line — the task. The buttons take touches well beyond what
+    // they show (`.padding(n).contentShape(Rectangle()).padding(-n)`): folding it was hard to hit.
     @ViewBuilder private func aboutCard(_ c: ConsoleInfo) -> some View {
         let glass = RoundedRectangle(cornerRadius: 14).fill(Palette.panel2.opacity(0.8))
         if aboutFolded {
@@ -460,6 +461,7 @@ private struct ConsoleScreen: View {
                     .lineLimit(1).truncationMode(.tail).frame(maxWidth: 190, alignment: .leading).fixedSize(horizontal: c.aboutLine == nil, vertical: false)
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(glass).overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line, lineWidth: 1))
+                    .padding(12).contentShape(Rectangle()).padding(-12)
             }
             .fixedSize()
             .accessibilityLabel(t("about.show")).accessibilityIdentifier("about-show")
@@ -474,7 +476,7 @@ private struct ConsoleScreen: View {
                         Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    Button { aboutFolded = true } label: { Text("–").foregroundColor(Palette.muted).padding(.horizontal, 8) }
+                    Button { aboutFolded = true } label: { Text("–").foregroundColor(Palette.muted).padding(.horizontal, 8).padding(16).contentShape(Rectangle()).padding(-16) }
                         .accessibilityLabel(t("about.hide")).accessibilityIdentifier("about-hide")
                 }
                 if let task = c.task, !task.isEmpty {
@@ -482,7 +484,7 @@ private struct ConsoleScreen: View {
                     HStack(alignment: .top, spacing: 6) {
                         Text(task).font(.caption).foregroundColor(Palette.text).lineLimit(8)
                             .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("about-task")
-                        Button { tab.clearTask() } label: { Text("×").foregroundColor(Palette.muted).padding(.horizontal, 8) }
+                        Button { tab.clearTask() } label: { Text("×").foregroundColor(Palette.muted).padding(.horizontal, 8).padding(16).contentShape(Rectangle()).padding(-16) }
                             .accessibilityLabel(t("about.taskDel")).accessibilityIdentifier("about-task-del")
                     }
                 }
@@ -494,6 +496,7 @@ private struct ConsoleScreen: View {
                 Button { noteDraft = c.note ?? ""; editing = c } label: {
                     Text(t((c.note ?? "").isEmpty ? "about.add" : "about.edit")).font(.caption.bold()).foregroundColor(Palette.text)
                         .padding(.horizontal, 12).padding(.vertical, 4).overlay(Capsule().stroke(Palette.line))
+                        .padding(12).contentShape(Rectangle()).padding(-12)
                 }
                 .disabled(c.note == nil).opacity(c.note == nil ? 0.4 : 1)
                 .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("about-edit")
