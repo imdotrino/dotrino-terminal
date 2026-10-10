@@ -183,6 +183,19 @@ mod tests {
     use super::{drop_target, panel_lines};
 
     #[test]
+    fn a_new_window_takes_a_console_no_window_of_this_machine_shows_before_making_one() {
+        let c = |id: &str, watchers: &str| -> super::ConsoleInfo { serde_json::from_str(&format!(r#"{{"id":"{id}","watchers":{watchers}}}"#)).unwrap() };
+        let local = r#"[{"origin":"local","tag":"desktop-1-1"}]"#;
+        let remote = r#"[{"origin":"remote","device":"phone"}]"#;
+        // La que solo mira el teléfono cuenta como libre aquí; antes se creaba una nueva.
+        assert_eq!(super::unattended(&[c("a", local), c("b", remote)]), Some("b".into()));
+        // Pero una que no mira nadie va primero.
+        assert_eq!(super::unattended(&[c("a", remote), c("b", "[]")]), Some("b".into()));
+        // Todas en alguna ventana de esta máquina: ninguna, y entonces sí se crea.
+        assert_eq!(super::unattended(&[c("a", local)]), None);
+    }
+
+    #[test]
     fn what_one_window_saw_is_added_to_what_the_others_saw() {
         let file = std::env::temp_dir().join(format!("dotrino-seen-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&file);
@@ -267,6 +280,14 @@ fn drop_target(ids: &[&str], id: &str, over: &str) -> Option<Option<String>> {
 /// si todas lo están, la primera. `None` = no queda ninguna (la ventana queda sin consola).
 fn next_console(list: &[ConsoleInfo]) -> Option<String> {
     list.iter().find(|c| c.watchers.is_empty()).or_else(|| list.first()).map(|c| c.id.clone())
+}
+
+/// La consola a la que se engancha una ventana NUEVA en vez de crear otra: una que nadie mira y, si
+/// no hay, una que no esté en ninguna ventana de ESTA máquina. Que la tenga abierta el teléfono o el
+/// navegador no la hace atendida aquí: antes eso bastaba para ignorarla y crear una consola nueva.
+/// `None` = todas están en alguna ventana de esta máquina.
+fn unattended(list: &[ConsoleInfo]) -> Option<String> {
+    list.iter().find(|c| c.watchers.is_empty()).or_else(|| list.iter().find(|c| !c.open_in_a_window())).map(|c| c.id.clone())
 }
 
 /// Qué hace una consola, para el color del panel.
@@ -1136,8 +1157,12 @@ impl App {
         if !self.panel_ready() {
             return None;
         }
-        let list = self.profile_dir(profile).and_then(|dir| agent_list(&dir))?;
-        list.into_iter().find(|c| c.watchers.is_empty() && !self.dying.contains(&c.id)).map(|c| c.id)
+        let dir = self.profile_dir(profile)?;
+        // Si el agente no contesta a la primera (va justo de tiempo), se pregunta otra vez antes de
+        // darlo por sin consolas: equivocarse aquí es crear una consola de más.
+        let list = agent_list(&dir).or_else(|| agent_list(&dir))?;
+        let alive: Vec<ConsoleInfo> = list.into_iter().filter(|c| !self.dying.contains(&c.id)).collect();
+        unattended(&alive)
     }
 
     /// Abre una ventana enganchada a `attach` (si hay) o con una consola nueva.
