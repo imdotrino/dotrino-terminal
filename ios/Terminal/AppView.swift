@@ -452,7 +452,7 @@ private struct ConsoleScreen: View {
     // The same card as the PWA and the desktop: the console's title, the task the program inside set
     // (read and removed here, never edited) and the person's note. It starts OPEN (owner,
     // 2026-10-10); folded it is one line — the task. The buttons take touches well beyond what
-    // they show (`.padding(n).contentShape(Rectangle()).padding(-n)`): folding it was hard to hit.
+    // they show (`touch`): folding it was hard to hit.
     @ViewBuilder private func aboutCard(_ c: ConsoleInfo) -> some View {
         let glass = RoundedRectangle(cornerRadius: 14).fill(Palette.panel2.opacity(0.8))
         if aboutFolded {
@@ -461,7 +461,7 @@ private struct ConsoleScreen: View {
                     .lineLimit(1).truncationMode(.tail).frame(maxWidth: 190, alignment: .leading).fixedSize(horizontal: c.aboutLine == nil, vertical: false)
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(glass).overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line, lineWidth: 1))
-                    .padding(12).contentShape(Rectangle()).padding(-12)
+                    .padding(.leading, 14).padding(.bottom, 14).contentShape(Rectangle())
             }
             .fixedSize()
             .accessibilityLabel(t("about.show")).accessibilityIdentifier("about-show")
@@ -476,7 +476,7 @@ private struct ConsoleScreen: View {
                         Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    Button { aboutFolded = true } label: { Text("–").foregroundColor(Palette.muted).padding(.horizontal, 8).padding(16).contentShape(Rectangle()).padding(-16) }
+                    Button { aboutFolded = true } label: { Text("–").foregroundColor(Palette.muted).padding(.horizontal, 8) }
                         .accessibilityLabel(t("about.hide")).accessibilityIdentifier("about-hide")
                 }
                 if let task = c.task, !task.isEmpty {
@@ -484,9 +484,10 @@ private struct ConsoleScreen: View {
                     HStack(alignment: .top, spacing: 6) {
                         Text(task).font(.caption).foregroundColor(Palette.text).lineLimit(8)
                             .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("about-task")
-                        Button { tab.clearTask() } label: { Text("×").foregroundColor(Palette.muted).padding(.horizontal, 8).padding(16).contentShape(Rectangle()).padding(-16) }
+                        Button { tab.clearTask() } label: { Text("×").foregroundColor(Palette.muted).padding(.horizontal, 8) }
                             .accessibilityLabel(t("about.taskDel")).accessibilityIdentifier("about-task-del")
                     }
+                    .overlay(alignment: .trailing) { touch(width: 60, height: nil) { tab.clearTask() }.padding(.vertical, -6).padding(.trailing, -10) }
                 }
                 Rectangle().fill(Palette.line).frame(height: 1)
                 Text(c.note == nil ? t("about.old") : c.note!.isEmpty ? t("about.empty") : c.note!)
@@ -496,7 +497,6 @@ private struct ConsoleScreen: View {
                 Button { noteDraft = c.note ?? ""; editing = c } label: {
                     Text(t((c.note ?? "").isEmpty ? "about.add" : "about.edit")).font(.caption.bold()).foregroundColor(Palette.text)
                         .padding(.horizontal, 12).padding(.vertical, 4).overlay(Capsule().stroke(Palette.line))
-                        .padding(12).contentShape(Rectangle()).padding(-12)
                 }
                 .disabled(c.note == nil).opacity(c.note == nil ? 0.4 : 1)
                 .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("about-edit")
@@ -505,7 +505,17 @@ private struct ConsoleScreen: View {
             .frame(width: 260)
             .background(glass).overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.accentSoft, lineWidth: 1))
             .contentShape(Rectangle()).onTapGesture {}      // a touch on the card does not reach the console
+            // A bigger area to touch, the same size to look at (owner, 2026-10-10: folding it on a
+            // phone was hard): the card's top corner folds it and its bottom corner edits the note,
+            // well beyond what «–» and «Editar» show.
+            .overlay(alignment: .topTrailing) { touch(width: 64, height: 54) { aboutFolded = true } }
+            .overlay(alignment: .bottomTrailing) { if c.note != nil { touch(width: 130, height: 46) { noteDraft = c.note ?? ""; editing = c } } }
         }
+    }
+
+    /// An invisible area that takes a touch for the button it lies over.
+    private func touch(width: CGFloat, height: CGFloat?, _ action: @escaping () -> Void) -> some View {
+        Color.clear.frame(width: width, height: height).contentShape(Rectangle()).onTapGesture(perform: action).accessibilityHidden(true)
     }
 
     private func whereIs(_ c: ConsoleInfo) -> String {
