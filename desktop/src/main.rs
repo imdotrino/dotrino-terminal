@@ -183,6 +183,19 @@ mod tests {
     use super::{drop_target, panel_lines};
 
     #[test]
+    fn what_one_window_saw_is_added_to_what_the_others_saw() {
+        let file = std::env::temp_dir().join(format!("dotrino-seen-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        super::write_seen(&file, &[("a".to_string(), 10u64)].into_iter().collect());
+        // Otro proceso: vio otra consola, y de «a» sabe menos. Nada de lo anterior se pierde.
+        super::write_seen(&file, &[("b".to_string(), 20u64), ("a".to_string(), 5u64)].into_iter().collect());
+        let all = super::read_seen(&file);
+        assert_eq!(all.get("a"), Some(&10));
+        assert_eq!(all.get("b"), Some(&20));
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
     fn a_console_open_in_a_local_window_is_marked_and_a_remote_one_is_not() {
         let c = |watchers: &str| serde_json::from_str::<super::ConsoleInfo>(&format!(r#"{{"id":"a","watchers":{watchers}}}"#)).unwrap();
         assert!(!c("[]").open_in_a_window());
@@ -810,6 +823,51 @@ fn save_last_profile(name: &str) {
     let _ = std::fs::write(file, name);
 }
 
+/// Lo que ya se vio (consola → el `doneAt` que tenía), COMPARTIDO entre las ventanas de la app:
+/// cada lanzamiento es un proceso aparte, y sin esto una consola que terminó dejaba de parpadear
+/// solo en las ventanas del proceso que la miró; las demás seguían hasta que alguien tecleaba.
+fn seen_file() -> Option<PathBuf> {
+    Some(last_profile_file()?.with_file_name("seen.json"))
+}
+
+fn load_seen() -> HashMap<String, u64> {
+    seen_file().map(|f| read_seen(&f)).unwrap_or_default()
+}
+
+fn read_seen(file: &Path) -> HashMap<String, u64> {
+    std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Suma lo de este proceso a lo que haya (otro pudo escribir entre medias) y lo deja de una vez
+/// (archivo temporal + renombrar). Si no se puede guardar, solo deja de compartirse: es una pista visual.
+fn save_seen(mine: &HashMap<String, u64>) {
+    if let Some(file) = seen_file() {
+        write_seen(&file, mine);
+    }
+}
+
+fn write_seen(file: &Path, mine: &HashMap<String, u64>) {
+    let mut all = read_seen(file);
+    for (id, at) in mine {
+        let e = all.entry(id.clone()).or_insert(*at);
+        *e = (*e).max(*at);
+    }
+    // Las consolas que ya no existen se quedarían para siempre: se guardan solo las últimas.
+    if all.len() > 200 {
+        let mut by_time: Vec<(String, u64)> = all.into_iter().collect();
+        by_time.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
+        by_time.truncate(200);
+        all = by_time.into_iter().collect();
+    }
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = file.with_extension(format!("{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, serde_json::to_string(&all).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(tmp, file);
+    }
+}
+
 /// ¿Está plegada la tarjeta «de qué va»? Una preferencia, junto al último perfil.
 fn about_folded_file() -> Option<PathBuf> {
     Some(last_profile_file()?.with_file_name("about-folded"))
@@ -1107,6 +1165,10 @@ impl App {
             list.retain(|c| !self.dying.contains(&c.id));
         }
         self.consoles = fresh;
+        // Lo que vio OTRA ventana de la app (cada lanzamiento es un proceso aparte): también cuenta.
+        for (id, at) in load_seen() {
+            self.seen.entry(id).and_modify(|mine| *mine = (*mine).max(at)).or_insert(at);
+        }
         self.seen.retain(|id, _| alive_now.contains(id));
         self.mark_seen();
         // Lo marcado a mano se suelta en cuanto la lista lo dice (o la consola ya no está).
@@ -1129,7 +1191,9 @@ impl App {
         let Some(cid) = self.focused.and_then(|id| self.mine(id)) else { return };
         let done = self.consoles.values().flatten().find(|c| c.id == cid).and_then(|c| c.done_at);
         if let Some(at) = done {
-            self.seen.insert(cid, at);
+            if self.seen.insert(cid, at) != Some(at) {
+                save_seen(&self.seen);
+            }
         }
     }
 
