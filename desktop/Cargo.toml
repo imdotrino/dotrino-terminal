@@ -1,6 +1,6 @@
 [package]
 name = "dotrino-terminal-desktop"
-version = "0.2.47"
+version = "0.2.48"
 edition = "2024"
 description = "Dotrino Terminal: terminal windows (Linux, macOS) whose consoles you can also open from your other devices."
 license = "MIT"
@@ -32,7 +32,9 @@ strip = true
 [package.metadata.deb]
 maintainer = "Dotrino <sandrade@dotrino.com>"
 section = "utils"
-depends = "$auto"
+# La ventana carga estas librerías al arrancar (no enlazadas: `$auto` no las ve). Sin ellas la
+# app no abre en un sistema mínimo.
+depends = "$auto, libxcursor1, libxi6, libxrandr2, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0"
 extended-description = "Each window runs dotrino-terminal (npm: @dotrino/terminal-agent). Install it with: npm install -g @dotrino/terminal-agent"
 assets = [
   ["target/release/dotrino-terminal-desktop", "usr/bin/", "755"],
@@ -49,6 +51,9 @@ assets = [
 [package.metadata.generate-rpm]
 summary = "Dotrino Terminal: terminal windows whose consoles you can also open from your other devices"
 auto-req = "builtin"
+# Lo que la ventana carga al arrancar y `ldd` no ve: sin esto, en un Fedora mínimo la app se
+# instalaba y no abría (`libXcursor.so.1: cannot open shared object file`).
+requires = { libXcursor = "*", libXi = "*", libXrandr = "*", libxkbcommon = "*", libxkbcommon-x11 = "*", libwayland-client = "*" }
 assets = [
   { source = "target/release/dotrino-terminal-desktop", dest = "/usr/bin/dotrino-terminal-desktop", mode = "755" },
   { source = "assets/dotrino-terminal.desktop", dest = "/usr/share/applications/dotrino-terminal.desktop", mode = "644" },

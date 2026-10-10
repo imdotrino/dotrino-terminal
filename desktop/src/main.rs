@@ -1327,7 +1327,7 @@ impl App {
                     Some(Far::Silent) => {
                         let n = self.far_silent.entry(p.clone()).or_insert(0);
                         *n += 1;
-                        if *n >= 4 && !self.far.contains_key(p) {
+                        if *n >= 2 && !self.far.contains_key(p) {
                             self.far_why.insert(p.clone(), t("El agente de esta máquina no contesta por tus otras máquinas. Si actualizaste dotrino-terminal, el agente sigue con la versión anterior hasta que se reinicie: cierra sus consolas y reinícialo.", "This machine's agent does not answer about your other machines. If you updated dotrino-terminal, the agent keeps the old version until it restarts: close its consoles and restart it."));
                         }
                     }
@@ -2372,7 +2372,8 @@ impl App {
             }
             // Sin otras máquinas por un motivo que se arregla: una «!» que lo dice al pasar.
             if let Some((why, true)) = here.is_none().then(|| self.far_notice(profile)).flatten() {
-                let b = button(centered("!".into(), 12)).width(24).padding([3, 0]).style(menu_button);
+                let mark = text("!").size(13).width(Length::Fill).align_x(iced::alignment::Horizontal::Center).style(|theme: &Theme| text::Style { color: Some(theme.palette().primary) });
+                let b = button(mark).width(24).padding([3, 0]).style(menu_button);
                 let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(why).size(12)).padding(6).max_width(320).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(container(separator()).width(24));
                 strip = strip.push(container(b).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
