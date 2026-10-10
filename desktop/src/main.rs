@@ -1381,9 +1381,14 @@ impl App {
             Message::Paste(id) => iced::clipboard::read().map(move |c| Message::Pasted(id, c)),
             Message::Pasted(id, content) => {
                 self.clear_stray_selection(id);
-                if let (Some(data), Some(term)) = (content, self.windows.get_mut(&id).and_then(|w| w.term.as_mut())) {
-                    // Entre corchetes si la shell lo pidió: lo pegado no se ejecuta solo.
-                    let bytes = term.paste_bytes(&data);
+                if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
+                    let bytes = match content.filter(|d| !d.is_empty()) {
+                        // Entre corchetes si la shell lo pidió: lo pegado no se ejecuta solo.
+                        Some(data) => term.paste_bytes(&data),
+                        // Sin texto en el portapapeles (una imagen): se manda Ctrl+V, como hace la
+                        // tecla, y el programa que la sepa leer (Claude Code) la toma él.
+                        None => vec![0x16],
+                    };
                     term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(bytes)));
                 }
                 self.focus(id)
@@ -1627,7 +1632,6 @@ impl App {
         let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
         // Corre en una ventana aparte.
         profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
-        let pin_on = self.pinned_here(id);
         let view_menu = Menu::new(vec![
             Item::new(entry(
                 format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
@@ -1636,7 +1640,7 @@ impl App {
             )),
             // ⤢ Quién manda en el tamaño: esta ventana, si se marca (con un cliente ≥ 0.14).
             Item::new(entry(
-                format!("{}{}", if pin_on { "✓  " } else { "     " }, t("Esta ventana manda en el tamaño", "This window sets the size")),
+                format!("     {}", t("Usar el tamaño de esta ventana", "Use this window's size")),
                 "",
                 (self.pin_ready() && win.profile.is_some() && self.mine(id).is_some()).then_some(Message::TogglePin(id)),
             )),
