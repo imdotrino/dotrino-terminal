@@ -520,6 +520,8 @@ struct App {
     polls: u32,
     /// Perfiles cuyo agente no contestó por las otras máquinas, y cuántas veces seguidas.
     far_silent: HashMap<String, u32>,
+    /// Por qué no se ven las otras máquinas de un perfil, cuando hay un motivo que decir.
+    far_why: HashMap<String, String>,
     /// La fila del panel bajo el puntero (ventana, consola): de ahí arranca un arrastre.
     hover: Option<(window::Id, String)>,
     /// La consola que se está arrastrando en el panel para cambiarla de sitio.
@@ -977,7 +979,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1236,6 +1238,21 @@ impl App {
         self.open_window_with(profile, cwd, None, attach, None)
     }
 
+    /// Lo que el panel dice cuando no hay otras máquinas que enseñar, y si es un problema (hay
+    /// algo que arreglar) o solo un estado (no hay ninguna encendida).
+    fn far_notice(&self, profile: &str) -> Option<(String, bool)> {
+        if self.launch.is_ok() && !self.far_ready() {
+            return Some((t("Para ver las consolas de tus otras máquinas hace falta dotrino-terminal 0.38.0 o más reciente: actualízalo en Perfil → Actualizar dotrino-terminal…", "Seeing the consoles of your other machines needs dotrino-terminal 0.38.0 or newer: update it in Profile → Update dotrino-terminal…"), true));
+        }
+        if let Some(why) = self.far_why.get(profile) {
+            return Some((why.clone(), true));
+        }
+        match self.far.get(profile) {
+            Some(l) if l.is_empty() => Some((t("No hay otras máquinas encendidas con Dotrino Terminal.", "No other machines are on with Dotrino Terminal."), false)),
+            _ => None,
+        }
+    }
+
     /// ¿Sabe el cliente instalado de las otras máquinas de la cuenta?
     fn far_ready(&self) -> bool {
         self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= FAR_CLIENT)
@@ -1292,18 +1309,33 @@ impl App {
                     Some(Far::List(list)) => {
                         self.far.insert(p.clone(), list);
                         self.far_silent.remove(p);
+                        self.far_why.remove(p);
                     }
-                    // Sin enlazar, o el agente dijo por qué no: no hay otras máquinas que enseñar.
-                    Some(Far::No) => {
+                    // Sin enlazar, o el agente dijo por qué no: no hay otras máquinas que enseñar,
+                    // y el motivo se enseña en el panel (callarlo se ve igual que «no hay ninguna»).
+                    Some(Far::No(code, message)) => {
                         self.far.remove(p);
                         self.far_silent.remove(p);
+                        let why = match code.as_str() {
+                            "not-linked" => t("Este perfil no está enlazado con tu bóveda, así que no ve tus otras máquinas. Enlázalo en Perfil → Enrolar…", "This profile is not linked to your vault, so it cannot see your other machines. Link it in Profile → Enroll…"),
+                            _ => format!("{}: {message} ({code})", t("No se pudieron ver tus otras máquinas", "Could not see your other machines")),
+                        };
+                        self.far_why.insert(p.clone(), why);
                     }
                     // No contestó a tiempo: se deja lo que había (la primera vez tarda, sale a la red).
-                    Some(Far::Silent) => *self.far_silent.entry(p.clone()).or_insert(0) += 1,
+                    // Si sigue callado y nunca dijo nada, es un agente anterior a la 0.38 aún corriendo.
+                    Some(Far::Silent) => {
+                        let n = self.far_silent.entry(p.clone()).or_insert(0);
+                        *n += 1;
+                        if *n >= 4 && !self.far.contains_key(p) {
+                            self.far_why.insert(p.clone(), t("El agente de esta máquina no contesta por tus otras máquinas. Si actualizaste dotrino-terminal, el agente sigue con la versión anterior hasta que se reinicie: cierra sus consolas y reinícialo.", "This machine's agent does not answer about your other machines. If you updated dotrino-terminal, the agent keeps the old version until it restarts: close its consoles and restart it."));
+                        }
+                    }
                     None => {}
                 }
             }
             self.far.retain(|p, _| profiles.contains(p));
+            self.far_why.retain(|p, _| profiles.contains(p));
             for (p, machines) in &self.far {
                 for m in machines {
                     if let Some(list) = &m.consoles {
@@ -2338,6 +2370,13 @@ impl App {
                     strip = strip.push(container(b).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
                 }
             }
+            // Sin otras máquinas por un motivo que se arregla: una «!» que lo dice al pasar.
+            if let Some((why, true)) = here.is_none().then(|| self.far_notice(profile)).flatten() {
+                let b = button(centered("!".into(), 12)).width(24).padding([3, 0]).style(menu_button);
+                let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(why).size(12)).padding(6).max_width(320).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                strip = strip.push(container(separator()).width(24));
+                strip = strip.push(container(b).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+            }
             // Lo justo para dos dígitos («00»): 24 px de botón en 30 de franja.
             return with_arrow_gutter(strip.into(), 30.0, iced::Padding { top: 4.0, bottom: 4.0, left: 3.0, right: 0.0 }, term_bg);
         }
@@ -2452,6 +2491,13 @@ impl App {
                 let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(false, c.act())).on_press_maybe(act(Message::OpenFar(id, m.id.clone(), Some(c.id.clone()))));
                 items = items.push(container(pick).padding(iced::Padding { right: 4.0 + ARROW_W, ..Default::default() }));
             }
+        }
+        // Ninguna otra máquina a la vista: se dice por qué, en vez de dejar el panel igual que si
+        // no existieran.
+        if let Some((why, problem)) = here.is_none().then(|| self.far_notice(profile)).flatten() {
+            let tone = move |theme: &Theme| text::Style { color: Some(if problem { theme.extended_palette().background.base.text } else { theme.extended_palette().background.base.text.scale_alpha(0.65) }) };
+            items = items.push(container(separator()).padding(iced::Padding { top: 6.0, right: ARROW_W, ..Default::default() }));
+            items = items.push(container(column![text(t("Otras máquinas", "Other machines")).size(13), text(why).size(11).style(tone)].spacing(2)).padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
         }
         with_arrow_gutter(items.into(), 210.0, iced::Padding { top: 4.0, bottom: 4.0, left: 4.0, right: 0.0 }, term_bg)
     }
@@ -2568,8 +2614,8 @@ fn agent_list(dir: &Path) -> Option<Vec<ConsoleInfo>> {
 /// Lo que contestó el agente al preguntarle por las otras máquinas de la cuenta.
 enum Far {
     List(Vec<Machine>),
-    /// Dijo que no (sin enlazar con la bóveda, p. ej.): no hay nada que enseñar.
-    No,
+    /// Dijo que no (sin enlazar con la bóveda, p. ej.), con su código y su motivo.
+    No(String, String),
     /// No contestó a tiempo: aún está preguntando a la red, o es anterior a la 0.38.
     Silent,
 }
@@ -2596,7 +2642,7 @@ fn agent_machines(dir: &Path) -> Far {
             return serde_json::from_value(v["list"].clone()).map(Far::List).unwrap_or(Far::Silent);
         }
         if v["type"] == "fail" {
-            return Far::No;
+            return Far::No(v["code"].as_str().unwrap_or("far-error").to_string(), v["message"].as_str().unwrap_or("").to_string());
         }
     }
 }
