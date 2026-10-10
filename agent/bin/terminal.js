@@ -17,6 +17,8 @@
  *   dotrino-terminal vscode [--name <n>]       la terminal embebida de VS Code abre consolas de aquí
  *   dotrino-terminal vscode --off              lo deshace
  *   dotrino-terminal desktop update [--check]  actualiza la app de escritorio (la ventana)
+ *   dotrino-terminal updates [--json] [--desktop <versión>]
+ *                                              qué versiones nuevas hay (del cliente y de la app)
  *   dotrino-terminal service install|uninstall|status [--name <n>]
  *                                              el agente como servicio: arranca solo con la máquina
  *
@@ -87,6 +89,8 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal desktop update            actualiza la app de escritorio (la ventana): baja la
                                              versión nueva, comprueba su firma y la instala
                                              (--check solo mira si hay una)
+  dotrino-terminal updates [--json]          dice si hay versión nueva de dotrino-terminal y de la app
+                                             (--desktop <versión> es la app que tienes; no instala nada)
   dotrino-terminal service install [--name <n>]   deja el agente como servicio de tu usuario: arranca
                                              solo al encender la máquina, sin abrir ninguna ventana
   dotrino-terminal service uninstall [--name <n>] lo quita (para el agente: cierra sus consolas)
@@ -125,6 +129,8 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal desktop update            update the desktop app (the window): downloads the
                                              new version, checks its signature and installs it
                                              (--check only looks for one)
+  dotrino-terminal updates [--json]          say whether there is a new version of dotrino-terminal and of
+                                             the app (--desktop <version> is the app you have; installs nothing)
   dotrino-terminal service install [--name <n>]   run the agent as a service of your user: it starts
                                              by itself when the machine boots, with no window open
   dotrino-terminal service uninstall [--name <n>] remove it (stops the agent: closes its consoles)
@@ -240,6 +246,32 @@ function vscode () {
     console.log(`  ${d.name.padEnd(18)} ${what}  ${d.settings}`)
   }
   if (!off) console.log(t('\nLas terminales nuevas del editor ya abren aquí. Si actualizas o cambias de Node, vuelve a correr esta orden.', '\nNew terminals in the editor now open here. If you update or switch Node, run this command again.'))
+}
+
+/**
+ * Qué versiones nuevas hay, sin instalar nada: del cliente (npm) y, con `--desktop <versión>`,
+ * de la app de escritorio. La app lo pregunta al arrancar (ella no tiene red). Cada una dice
+ * `newer` o por qué no se pudo mirar: «no se pudo mirar» no es «al día».
+ */
+async function updates () {
+  const { latestVersion, isNewer } = await import('@dotrino/update')
+  const one = async (current, ask) => {
+    const r = await ask()
+    return r.ok ? { current, latest: r.version, newer: isNewer(r.version, current) } : { current, error: r.reason }
+  }
+  const out = { agent: await one(VERSION, () => latestVersion({ source: 'npm', pkg: '@dotrino/terminal-agent', product: 'dotrino-terminal', version: VERSION })) }
+  const app = opt('--desktop')
+  if (app) {
+    const { latestDesktop } = await import('../desktop.js')
+    out.desktop = await one(app, () => latestDesktop({ version: app }))
+  }
+  if (args.includes('--json')) { console.log(JSON.stringify(out)); return }
+  const say = (name, x) => console.log(x.error
+    ? t(`${name}: no se pudo mirar (${x.error}).`, `${name}: could not check (${x.error}).`)
+    : x.newer ? t(`${name}: hay ${x.latest} y tienes ${x.current}.`, `${name}: ${x.latest} is out and you have ${x.current}.`)
+      : t(`${name}: al día (${x.current}).`, `${name}: up to date (${x.current}).`))
+  say('dotrino-terminal', out.agent)
+  if (out.desktop) say(t('La app', 'The app'), out.desktop)
 }
 
 /** Dónde está la app de escritorio, si no lo dijo quien llama: la del PATH. */
@@ -846,6 +878,7 @@ try {
   if (cmd === 'lock') { await lock(); process.exit(0) }
   if (cmd === 'vscode') { vscode(); process.exit(0) }
   if (cmd === 'desktop') { await desktop(); process.exit(0) }
+  if (cmd === 'updates') { await updates(); process.exit(0) }
   if (cmd === 'service') { await service(); process.exit(0) }
   if (cmd === 'note') { await note(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))

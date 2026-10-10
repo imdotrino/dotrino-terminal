@@ -48,6 +48,8 @@ export { LABEL }
 
 /** Cada cuánto mira un agente sin enlazar si ya lo enlazaron. */
 export const LINK_POLL_MS = 2000
+/** Cada cuánto se reintenta la parte remota cuando no pudo arrancar (sin red, proxio caído). */
+const REMOTE_RETRY_MS = 15_000
 
 export function loadPty () {
   // node-pty (Microsoft, el de VS Code) ≥ 1.2 trae los binarios DENTRO del paquete para Linux,
@@ -300,7 +302,26 @@ export async function startAgent (opts = {}) {
   })
   let watcher = null
   if (loadLink(dir)) {
-    try { remote = await startRemote() } catch (e) { local.close(); throw e }
+    try { remote = await startRemote() } catch (e) {
+      // SIN RED AL ARRANCAR (o con el proxio caído) LAS VENTANAS DE ESTA MÁQUINA ABREN IGUAL:
+      // una terminal no puede depender de internet. Antes el agente moría aquí y, con la
+      // máquina enlazada, no se podía abrir ni una consola local. La parte remota se
+      // reintenta por detrás hasta que salga; mientras, se dice.
+      console.error(`[terminal-agent] the remote side did not start (${e.message}); local windows work, retrying every ${REMOTE_RETRY_MS / 1000} s`)
+      opts.onLinkError?.(e)
+      let trying = false
+      watcher = setInterval(() => {
+        if (trying) return
+        trying = true
+        startRemote().then((r) => {
+          if (stopped) { r.close(); return }
+          clearInterval(watcher); watcher = null
+          remote = r
+          opts.onLinked?.(r)
+        }).catch(() => {}).finally(() => { trying = false })
+      }, REMOTE_RETRY_MS)
+      watcher.unref()
+    }
   } else {
     // Sin enlace: se mira cada poco si aparece (`dotrino-terminal link` desde una ventana).
     // Al aparecer se enciende la parte remota SIN reiniciar, así las consolas abiertas siguen.

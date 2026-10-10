@@ -77,8 +77,6 @@ const FAR_EVERY: u32 = 3;
 const FAR_SILENT_EVERY: u32 = 20;
 /// El primer cliente con `dotrino-terminal vscode`.
 const VSCODE_CLIENT: (u32, u32, u32) = (0, 20, 0);
-/// Desde qué versión sabe el cliente actualizar esta app (`dotrino-terminal desktop update`).
-const APP_UPDATE_CLIENT: (u32, u32, u32) = (0, 39, 0);
 
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
@@ -452,6 +450,65 @@ enum Pending {
     Far { machine: Option<String>, attach: Option<String> },
 }
 
+/// Lo que la app le dice a la persona en un aviso sobre la ventana.
+#[derive(Clone, Debug)]
+enum Notice {
+    /// Hay versión nueva: qué, en una línea por pieza.
+    Offer(Vec<String>),
+    /// La app se actualizó en el disco: la que corre sigue siendo la anterior.
+    Restart,
+}
+
+/// El binario de esta app en el disco (Linux lo nombra «… (deleted)» si ya lo cambiaron).
+fn exe_path() -> Option<PathBuf> {
+    let p = std::env::current_exe().ok()?;
+    Some(PathBuf::from(p.to_string_lossy().trim_end_matches(" (deleted)").to_string()))
+}
+
+fn exe_stamp() -> Option<(u64, std::time::SystemTime)> {
+    let m = std::fs::metadata(exe_path()?).ok()?;
+    Some((m.len(), m.modified().ok()?))
+}
+
+/// Pregunta al cliente qué versiones nuevas hay (la app no tiene red). `None`: no se pudo saber
+/// (sin cliente, uno anterior a `updates`, sin red); queda en el registro y no se inventa nada.
+fn check_updates(launch: Launch) -> Option<Vec<String>> {
+    let out = std::process::Command::new(&launch.program)
+        .args(["updates", "--json", "--desktop", VERSION])
+        .env("PATH", &launch.path)
+        .stdin(std::process::Stdio::null())
+        .output();
+    let out = match out {
+        Ok(o) if o.status.success() => o,
+        Ok(o) => {
+            log(&format!("updates: the client could not say (exit {:?}): {}", o.status.code(), String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("")));
+            return None;
+        }
+        Err(e) => {
+            log(&format!("updates: could not run the client: {e}"));
+            return None;
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_slice(&out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            log(&format!("updates: unreadable answer: {e}"));
+            return None;
+        }
+    };
+    let mut lines = Vec::new();
+    for (key, name) in [("agent", "dotrino-terminal".to_string()), ("desktop", t("La app", "The app"))] {
+        let x = &v[key];
+        if let Some(e) = x["error"].as_str() {
+            log(&format!("updates: {key} could not be checked: {e}"));
+        }
+        if x["newer"].as_bool() == Some(true) {
+            lines.push(format!("{name}: {} → {}", x["current"].as_str().unwrap_or("?"), x["latest"].as_str().unwrap_or("?")));
+        }
+    }
+    Some(lines)
+}
+
 /// Qué corre en la TTY de la ventana.
 enum Mode {
     /// Con perfil, una consola del agente de `Win::profile`; sin perfil, la shell del usuario.
@@ -526,6 +583,14 @@ struct App {
     far_silent: HashMap<String, u32>,
     /// Por qué no se ven las otras máquinas de un perfil, cuando hay un motivo que decir.
     far_why: HashMap<String, String>,
+    /// El aviso que flota sobre las ventanas: hay versión nueva, o la app ya se actualizó.
+    notice: Option<Notice>,
+    /// Cómo era el binario de la app al arrancar: si cambia tras actualizar, hay versión nueva
+    /// instalada y se ofrece reiniciar.
+    exe_stamp: Option<(u64, std::time::SystemTime)>,
+    /// Reiniciar la app: las ventanas que se vuelven a abrir (perfil y carpeta) cuando la
+    /// última de ahora se cierre.
+    respawn: Option<Vec<(Option<String>, PathBuf)>>,
     /// La fila del panel bajo el puntero (ventana, consola): de ahí arranca un arrastre.
     hover: Option<(window::Id, String)>,
     /// La consola que se está arrastrando en el panel para cambiarla de sitio.
@@ -569,7 +634,14 @@ enum Message {
     Vscode(window::Id, bool),
     /// Escribe en la consola de la ventana la orden que instala (o actualiza) el cliente.
     InstallClient(window::Id),
-    UpdateApp(window::Id),
+    /// Lo que contestó el cliente al arrancar sobre versiones nuevas (`None`: no se supo).
+    UpdatesChecked(Option<Vec<String>>),
+    /// El aviso: «Después».
+    NoticeLater,
+    /// El aviso: actualizar ahora, en esta ventana.
+    NoticeUpdate(window::Id),
+    /// El aviso tras actualizar: reiniciar la app con la versión nueva.
+    RestartApp,
     /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
     CheckClient,
     Copy(window::Id),
@@ -985,7 +1057,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1010,7 +1082,17 @@ impl App {
                 win.error = Some(format!("{}: {e}", t("no puedo abrir en esta carpeta", "can't open in this folder")));
             }
         }
-        (app, task)
+        // AL ARRANCAR se mira si hay versión nueva (del cliente y de la app) y, si la hay, se
+        // ofrece actualizar ahora o después (dueño, 2026-10-10). Por detrás: no retrasa la ventana.
+        // Una orden de `-x`/`-e` no es una sesión de la persona: ahí no se pregunta.
+        let check = match (&app.launch, &cli.command) {
+            (Ok(launch), None) => {
+                let launch = launch.clone();
+                Task::perform(async move { tokio::task::spawn_blocking(move || check_updates(launch)).await.ok().flatten() }, Message::UpdatesChecked)
+            }
+            _ => Task::none(),
+        };
+        (app, Task::batch([task, check]))
     }
 
     /// El perfil con el que abre una ventana si nadie pide otro. Por defecto SE USA UN PERFIL;
@@ -1248,7 +1330,7 @@ impl App {
     /// algo que arreglar) o solo un estado (no hay ninguna encendida).
     fn far_notice(&self, profile: &str) -> Option<(String, bool)> {
         if self.launch.is_ok() && !self.far_ready() {
-            return Some((t("Para ver las consolas de tus otras máquinas hace falta dotrino-terminal 0.38.0 o más reciente: actualízalo en Perfil → Actualizar dotrino-terminal…", "Seeing the consoles of your other machines needs dotrino-terminal 0.38.0 or newer: update it in Profile → Update dotrino-terminal…"), true));
+            return Some((t("Para ver las consolas de tus otras máquinas hace falta dotrino-terminal 0.38.0 o más reciente: actualízalo en Perfil → Actualizar dotrino-terminal y la app…", "Seeing the consoles of your other machines needs dotrino-terminal 0.38.0 or newer: update it in Profile → Update dotrino-terminal and the app…"), true));
         }
         if let Some(why) = self.far_why.get(profile) {
             return Some((why.clone(), true));
@@ -1591,7 +1673,27 @@ impl App {
             }
         }
         let close = window::close(id);
-        if self.windows.is_empty() { close.chain(iced::exit()) } else { close }
+        if !self.windows.is_empty() {
+            return close;
+        }
+        // Reiniciar: ya no queda ninguna ventana (todas soltaron su consola). Se abre la app
+        // nueva, una por cada ventana que había, y esta termina.
+        if let (Some(again), Some(exe)) = (self.respawn.take(), exe_path()) {
+            for (profile, cwd) in again {
+                let mut cmd = std::process::Command::new(&exe);
+                if let Some(p) = profile {
+                    cmd.args(["--name", &p]);
+                }
+                if cwd.is_dir() {
+                    cmd.current_dir(&cwd);
+                }
+                match cmd.stdin(std::process::Stdio::null()).spawn() {
+                    Ok(_) => log(&format!("restart: started {}", exe.display())),
+                    Err(e) => log(&format!("restart: could not start {}: {e}", exe.display())),
+                }
+            }
+        }
+        close.chain(iced::exit())
     }
 
     /// La TTY de la ventana terminó.
@@ -1652,6 +1754,12 @@ impl App {
                 if let Some(win) = self.windows.get_mut(&id) {
                     win.showing = back.clone();
                     win.attach = back;
+                }
+                // La app cambió en el disco: la que corre es la anterior. Se ofrece reiniciar.
+                let now = exe_stamp();
+                if now.is_some() && now != self.exe_stamp {
+                    self.exe_stamp = now;
+                    self.notice = Some(Notice::Restart);
                 }
                 self.start(id, Mode::Console);
                 self.focus(id)
@@ -1731,34 +1839,42 @@ impl App {
                 let fail = t("No se pudo. Si dice EACCES, tu npm instala en una carpeta del sistema: usa nvm, o instálalo con sudo.", "It failed. If it says EACCES, your npm installs into a system folder: use nvm, or install it with sudo.");
                 let no_npm = t("No encuentro npm: instala Node 20 o más reciente (https://nodejs.org).", "Can't find npm: install Node 20 or newer (https://nodejs.org).");
                 let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
+                // Y DESPUÉS LA APP, en la misma pasada (dueño, 2026-10-10: una sola acción). La baja,
+                // la verifica y la instala el cliente recién puesto; un paquete del sistema pide ahí
+                // la contraseña de sudo. Sin cliente no hay con qué, y se dice.
+                // Tras una actualización anterior sin reiniciar, Linux nombra el binario «… (deleted)».
+                let exe = std::env::current_exe().map(|p| p.to_string_lossy().trim_end_matches(" (deleted)").to_string()).unwrap_or_default();
+                let no_client = t("La app no se actualizó: hace falta dotrino-terminal para bajarla y comprobarla.", "The app was not updated: dotrino-terminal is needed to download and check it.");
                 let script = format!(
-                    "PATH={}; export PATH; if command -v npm >/dev/null; then echo '$ npm install -g {CLIENT_PKG}@latest'; npm install -g {CLIENT_PKG}@latest && echo && echo {} || {{ echo; echo {}; }}; else echo {}; fi; echo; echo {}; read _",
-                    sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&close)
+                    "PATH={}; export PATH; if command -v npm >/dev/null; then echo '$ npm install -g {CLIENT_PKG}@latest'; npm install -g {CLIENT_PKG}@latest && echo && echo {} || {{ echo; echo {}; }}; else echo {}; fi; echo; if command -v dotrino-terminal >/dev/null; then echo '$ dotrino-terminal desktop update'; dotrino-terminal desktop update --current {VERSION} --exe {}; else echo {}; fi; echo; echo {}; read _",
+                    sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&exe), sh_quote(&no_client), sh_quote(&close)
                 );
                 self.awaiting_client = true;
                 self.run_aside(id, script, t("Actualizar", "Update"))
             }
-            Message::UpdateApp(id) => {
-                // Como «Actualizar dotrino-terminal»: en ESTA ventana y en otra TTY, a la vista. La
-                // app no baja nada ella: lo hace el cliente, que verifica la firma antes de
-                // instalar. Un paquete del sistema pide ahí mismo la contraseña de sudo.
-                let Ok(launch) = self.launch.clone() else { return Task::none() };
-                let exe = match std::env::current_exe() {
-                    // Tras una actualización anterior sin reiniciar, Linux lo nombra «… (deleted)».
-                    Ok(p) => p.to_string_lossy().trim_end_matches(" (deleted)").to_string(),
-                    Err(e) => {
-                        if let Some(w) = self.windows.get_mut(&id) {
-                            w.error = Some(format!("{}: {e}", t("No sé dónde está instalada la app", "Can't tell where the app is installed")));
-                        }
-                        return Task::none();
-                    }
-                };
-                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
-                let script = format!(
-                    "PATH={}; export PATH; echo '$ dotrino-terminal desktop update'; {} desktop update --current {VERSION} --exe {}; echo; echo {}; read _",
-                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&exe), sh_quote(&close)
-                );
-                self.run_aside(id, script, t("Actualizar la app", "Update the app"))
+            Message::UpdatesChecked(found) => {
+                if let Some(lines) = found.filter(|l| !l.is_empty()) {
+                    log(&format!("updates: {}", lines.join(" · ")));
+                    self.notice = Some(Notice::Offer(lines));
+                }
+                Task::none()
+            }
+            Message::NoticeLater => {
+                self.notice = None;
+                Task::none()
+            }
+            Message::NoticeUpdate(id) => {
+                self.notice = None;
+                self.update(Message::InstallClient(id))
+            }
+            Message::RestartApp => {
+                self.notice = None;
+                // Cada ventana suelta su consola (sigue viva en el agente) y se cierra; al irse
+                // la última, `close` abre la app nueva. Las ventanas nuevas se enganchan a las
+                // consolas que quedaron sueltas.
+                self.respawn = Some(self.windows.values().filter(|w| w.command.is_none()).map(|w| (w.profile.clone(), w.cwd.clone())).collect());
+                let ids: Vec<window::Id> = self.windows.keys().copied().collect();
+                Task::batch(ids.into_iter().map(|id| self.request_close(id)))
             }
             Message::CheckClient => {
                 // Se mira hasta que haya un cliente que entienda el panel (o, si no había ninguno,
@@ -2159,15 +2275,10 @@ impl App {
         if let Err(why) = &self.launch {
             profiles.push(Item::new(note(why.clone())));
         }
-        let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
+        // Una sola acción: el cliente y, después, la app.
+        let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal y la app…", "Update dotrino-terminal and the app…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
         // Corre en una ventana aparte.
         profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
-        // La app misma: la baja, la verifica y la instala el cliente.
-        let app_update_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= APP_UPDATE_CLIENT);
-        profiles.push(Item::new(entry(t("Actualizar la app…", "Update the app…"), "", (!linking && app_update_ready).then_some(Message::UpdateApp(id)))));
-        if !app_update_ready {
-            profiles.push(Item::new(note(t("Para actualizar la app hace falta dotrino-terminal 0.39.0 o más reciente: instálalo o actualízalo aquí arriba.", "Updating the app needs dotrino-terminal 0.39.0 or newer: install or update it just above."))));
-        }
         let view_menu = Menu::new(vec![
             Item::new(entry(
                 format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
@@ -2283,7 +2394,12 @@ impl App {
             (true, Some(profile)) => row![self.side(id, profile), body].into(),
             _ => body,
         };
-        column![self.menu(id, win), main].into()
+        let all: Element<'_, Message> = column![self.menu(id, win), main].into();
+        // El aviso (versión nueva, o reiniciar) flota centrado sobre la ventana.
+        match &self.notice {
+            Some(n) => iced::widget::stack![all, self.notice_card(id, n)].into(),
+            None => all,
+        }
     }
 
     /// Clic derecho sobre una consola del panel (colapsado o no): lo que se puede hacer con ella.
@@ -2312,6 +2428,42 @@ impl App {
             .into()
         })
         .into()
+    }
+
+    /// El aviso sobre la ventana: qué pasa y dos botones (hacerlo ahora, o después).
+    fn notice_card<'a>(&'a self, id: window::Id, notice: &Notice) -> Element<'a, Message> {
+        let (title, lines, go, go_msg) = match notice {
+            Notice::Offer(lines) => (
+                t("Hay una versión nueva", "There is a new version"),
+                lines.clone(),
+                t("Actualizar ahora", "Update now"),
+                Message::NoticeUpdate(id),
+            ),
+            Notice::Restart => (
+                t("La app se actualizó", "The app was updated"),
+                vec![t("Esta ventana sigue con la versión anterior. Al reiniciar, tus consolas no se cierran.", "This window keeps the old version. Restarting does not close your consoles.")],
+                t("Reiniciar la app", "Restart the app"),
+                Message::RestartApp,
+            ),
+        };
+        let mut body = column![text(title).size(16)].spacing(6);
+        for l in lines {
+            body = body.push(text(l).size(13));
+        }
+        let buttons = row![
+            button(text(t("Después", "Later")).size(13)).padding([6, 12]).style(menu_button).on_press(Message::NoticeLater),
+            button(text(go).size(13)).padding([6, 12]).on_press(go_msg),
+        ]
+        .spacing(8);
+        let card = container(column![body, container(buttons).width(Length::Fill).align_x(iced::alignment::Horizontal::Right)].spacing(14))
+            .padding(16)
+            .max_width(420)
+            .style(|theme: &Theme| container::Style {
+                background: Some(theme.extended_palette().background.weak.color.into()),
+                border: Border { color: theme.extended_palette().background.strong.color, width: 1.0, radius: 8.0.into() },
+                ..Default::default()
+            });
+        container(card).width(Length::Fill).height(Length::Fill).align_x(iced::alignment::Horizontal::Center).align_y(iced::alignment::Vertical::Center).into()
     }
 
     /// El panel lateral: un botón por cada consola abierta en el perfil de la ventana.
