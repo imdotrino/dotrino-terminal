@@ -241,6 +241,9 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .cmenu button:hover:not(:disabled) { background: var(--line); }
 .cmenu button:disabled { color: var(--muted); cursor: default; }
 .term .xterm { padding: 8px; height: 100%; }
+/* La consola no cabe en el panel: se desplaza el panel, y la barra del historial se esconde (una sola barra). */
+.term.over .xterm-viewport { scrollbar-width: none; }
+.term.over .xterm-viewport::-webkit-scrollbar { display: none; }
 
 /* Pantalla de elección de modo (vault externo vs dispositivo) */
 .choice { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }

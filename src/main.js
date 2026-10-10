@@ -520,6 +520,24 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   function follow (p, info) {
     if (!info?.cols || !info?.rows) return
     if (info.cols !== p.term.cols || info.rows !== p.term.rows) { try { p.term.resize(info.cols, info.rows) } catch {} }
+    markOverflow(p)
+  }
+
+  /**
+   * UNA sola barra de desplazamiento. Si la consola no cabe en el panel (su tamaño lo tiene otra
+   * pantalla), el panel se desplaza para llegar a lo que queda fuera, y la barra del historial de
+   * xterm se esconde: con las dos a la vez no se sabía cuál mover. El historial sigue con la rueda
+   * o el dedo. Al dejar de caber se va al final, que es donde está el cursor.
+   */
+  function markOverflow (p) {
+    requestAnimationFrame(() => {
+      const v = p.view
+      if (!v?.isConnected) return
+      const over = v.scrollHeight > v.clientHeight + 1 || v.scrollWidth > v.clientWidth + 1
+      if (over === v.classList.contains('over')) return
+      v.classList.toggle('over', over)
+      if (over) v.scrollTop = v.scrollHeight
+    })
   }
 
   function mountTerm (s, p) {
@@ -544,6 +562,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       requestAnimationFrame(() => {
         pending = false
         if (active === s && p.agent?.consoleId) { const d = fitted(p); p.agent.resize(d.cols, d.rows) }
+        markOverflow(p)
       })
     }
     p.resizeObs = new ResizeObserver(p.onResize)
