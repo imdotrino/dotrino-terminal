@@ -464,6 +464,19 @@ test('la nota de una consola: la pone una pantalla, la ve la otra y sale en la l
   b.deliver({ type: 'note', id, text: 'otra nota' })
   await until(() => h.list()[0].note === 'otra nota')
   assert.equal(h.list()[0].task, 'migrando')
+
+  // El título que pone el programa sustituye al de la shell, que sigue sabiéndose; quitar la
+  // tarea se lo lleva.
+  const shell = h.list()[0].title
+  b.deliver({ type: 'note', id, title: '  Login  nuevo ' })
+  await until(() => h.list()[0].title === 'Login nuevo')
+  assert.equal(h.list()[0].subject, 'Login nuevo')
+  assert.equal(h.list()[0].shellTitle, shell)
+  assert.equal(h.list()[0].task, 'migrando')
+  b.deliver({ type: 'note', id, task: '' })
+  await until(() => h.list()[0].task === '')
+  assert.equal(h.list()[0].subject, '')
+  assert.equal(h.list()[0].title, shell)
   b.sent.length = 0
 
   b.deliver({ type: 'note', id: 'nope', text: 'x' })

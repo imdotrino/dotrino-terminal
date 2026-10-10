@@ -1,6 +1,6 @@
 ---
 name: dotrino-terminal-note
-description: Mantiene al día la tarea en curso en la tarjeta «de qué va» de la consola de Dotrino Terminal en la que corres (la ve el dueño flotando sobre la consola, en todas sus pantallas). Úsalo AL EMPEZAR cada tarea, cuando la tarea cambia de rumbo, y al terminar o quedar esperando al usuario, siempre que exista la variable de entorno DOTRINO_TERMINAL_CONSOLE. También cuando el usuario diga «nota de la consola», «el flotante», «la tarjeta» o «de qué va este chat». Orden: `dotrino-terminal note --task`. Las notas personales del dueño NO se tocan.
+description: Mantiene al día la tarea en curso en la tarjeta «de qué va» de la consola de Dotrino Terminal en la que corres (la ve el dueño flotando sobre la consola, en todas sus pantallas). Úsalo AL EMPEZAR cada tarea, cuando la tarea cambia de rumbo, y al terminar o quedar esperando al usuario, siempre que exista la variable de entorno DOTRINO_TERMINAL_CONSOLE. También cuando el usuario diga «nota de la consola», «el flotante», «la tarjeta» o «de qué va este chat». Orden: `dotrino-terminal note --task … --title …` (la tarea y el título de la consola). Las notas personales del dueño NO se tocan.
 ---
 
 # La tarea en curso de la consola (Dotrino Terminal)
@@ -12,12 +12,14 @@ abiertas, sepa **de qué va la tarea en curso de cada una** sin entrar a leerla.
 La tarjeta tiene dos partes, y son dos campos distintos:
 
 - **La tarea**: es TUYA. La pones con `--task`. El dueño la ve y puede quitarla, no la edita.
+- **El título**: también es TUYO, con `--title`. Es el nombre de la consola en la tarjeta, en la
+  lista y en la barra de la ventana.
 - **Las notas**: son **personales del dueño**. Las escribe él desde la tarjeta. No son tuyas.
 
 ## Regla dura: las notas personales no se tocan
 
-**Usa SOLO `dotrino-terminal note --task`.** Esa orden escribe la tarea y no puede tocar las notas
-del dueño.
+**Usa SOLO `dotrino-terminal note --task … --title …`.** Esa orden escribe la tarea y el título, y
+no puede tocar las notas del dueño.
 
 **Prohibido**, salvo que el usuario te lo pida con esas palabras en ese momento:
 
@@ -52,15 +54,15 @@ anunciarlo ni comentarlo en la respuesta.
 ## Cómo
 
 ```bash
-dotrino-terminal note --task - <<'EOF_TASK'    # varias líneas, por la entrada estándar
-Arreglando el login de facturero
+# la tarea por la entrada estándar; el título, en la misma orden y SIEMPRE después de --task
+dotrino-terminal note --task - --title 'Login de facturero' <<'EOF_TASK'
 Hecho: el formulario
 Ahora: la validación
 Falta: probar con firma real
 Modelo: Opus 5.5
 EOF_TASK
 
-dotrino-terminal note --task ''                # quita tu tarea (lo del dueño se queda)
+dotrino-terminal note --task ''                # quita tu tarea y tu título (lo del dueño se queda)
 dotrino-terminal note                          # solo LEER: tu tarea (con «▸ ») y debajo sus notas
 ```
 
@@ -68,9 +70,13 @@ No hace falta decir qué consola: es la tuya.
 
 ## Qué escribir
 
-- **Primera línea = la tarea, en una frase corta** (hasta ~60 caracteres): es lo que se ve en la
-  lista. «Tarjeta de notas en dotrino-terminal», no «Trabajando en lo que pidió el usuario».
-- Debajo, el estado en tres o cuatro líneas: `Hecho:` (lo ya cerrado), `Ahora:` (lo que haces en
+- **El título (`--title`) = de qué va la tarea, en pocas palabras** (hasta ~40 caracteres): «Login
+  de facturero», «Tarjeta de notas en Terminal». No «Trabajando en lo que pidió el usuario». Sin
+  él la consola se llama como tu sesión, que se nombró con el primer mensaje y ya no tiene que ver
+  con lo que haces: **el dueño lee ese nombre para saber qué consola es cuál**.
+  Mándalo en cada actualización. Mientras la tarea sea la misma, **el mismo título** (no lo
+  reescribas con otras palabras: lo reconoce por él). Cuando llega otro encargo, cámbialo.
+- La tarea (`--task`) es el estado, en tres o cuatro líneas: `Hecho:` (lo ya cerrado), `Ahora:` (lo que haces en
   este momento), `Falta:` y, si aplica, `Espera:` (a qué). Reescríbela entera cada vez: es el
   estado actual, no un historial.
 - **La última línea dice qué modelo eres**: `Modelo: Opus 5.5` (el nombre con el que te presentas,
@@ -83,6 +89,9 @@ No hace falta decir qué consola: es la tuya.
 ## Si falla
 
 - «no sé de qué consola» / `no console to act on`: no corres dentro de Dotrino Terminal. Sigue sin nota.
+- «el agente que corre es anterior a la 0.41.0 y no guarda el título»: la tarea sí quedó puesta.
+  Díselo al usuario una vez y sigue mandando solo `--task`, con la tarea en una frase como primera
+  línea.
 - «el agente que corre es anterior a la 0.37.0 y no guarda tareas», o «el agente no contestó»:
   el agente de esta máquina es viejo. **No uses las otras formas como sustituto**: díselo al
   usuario una vez (`npm i -g @dotrino/terminal-agent@latest` y reiniciarlo él) y sigue sin tarea.

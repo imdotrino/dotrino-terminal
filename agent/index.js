@@ -214,6 +214,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       if (!c) return fail('no-console', 'that console no longer exists')
       if (typeof msg.text === 'string') c.setNote(msg.text)
       if (typeof msg.task === 'string') c.setTask(msg.task)
+      if (typeof msg.title === 'string') c.setSubject(msg.title)
       session.send({ type: 'noted', console: c.info() })
       return
     }

@@ -87,6 +87,10 @@ class Console {
     // (`dotrino-terminal note --task`). Son dos campos para que un agente de IA no pueda pisar lo
     // que escribió la persona, ni la persona tenga que editar lo del agente: solo lo quita.
     this.task = ''
+    // EL TÍTULO QUE PONE EL PROGRAMA (`dotrino-terminal note --title`). El de la shell (OSC 0/2) lo
+    // fija un agente de IA al empezar su sesión y no lo cambia aunque la tarea sea ya otra: este
+    // lo sustituye en todas las pantallas mientras exista. Se va con la tarea.
+    this.subject = ''
     this.cols = cols
     this.rows = rows
     this.createdAt = Date.now()
@@ -161,6 +165,15 @@ class Console {
     const task = String(text ?? '').slice(0, NOTE_MAX)
     if (task === this.task) return
     this.task = task
+    if (!task) this.subject = ''
+    this._meta()
+  }
+
+  /** Cambia el título que pone el programa. Vacío, vuelve a mandar el de la shell. */
+  setSubject (text) {
+    const subject = String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)
+    if (subject === this.subject) return
+    this.subject = subject
     this._meta()
   }
 
@@ -275,7 +288,7 @@ class Console {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
     const d = this.holder
     const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null } : null
-    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, note: this.note, task: this.task, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.subject || this.title, shellTitle: this.title, subject: this.subject, note: this.note, task: this.task, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 

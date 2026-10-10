@@ -71,6 +71,8 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal note --clear              la borra
   dotrino-terminal note --task <texto>       pone la TAREA en curso, que va aparte de la nota: es
                                              lo que usa un programa; --task '' la quita
+  dotrino-terminal note --title <texto>      pone el TÍTULO de la consola en vez del de la shell
+                                             (solo o junto a --task); --title '' devuelve el de la shell
                                              (--id <id> para otra consola; --json para leerla una máquina)
   dotrino-terminal profiles [--json]         los perfiles de esta máquina
   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
@@ -107,6 +109,8 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal note --clear              clear it
   dotrino-terminal note --task <text>        set the TASK in progress, kept apart from the note: what
                                              a program uses; --task '' removes it
+  dotrino-terminal note --title <text>       set the console's TITLE instead of the shell's (alone
+                                             or with --task); --title '' gives the shell's back
                                              (--id <id> for another console; --json for a machine to read)
   dotrino-terminal profiles [--json]         this machine's profiles
   dotrino-terminal link [--name <n>]         link a profile with your vault
@@ -596,7 +600,7 @@ async function note () {
   if (!id) die(t('no sé de qué consola: esta shell no corre dentro de Dotrino Terminal. Usa --id <id> (mira «dotrino-terminal ls»).', 'no console to act on: this shell is not running inside Dotrino Terminal. Use --id <id> (see "dotrino-terminal ls").'))
   // Dentro de una consola, el perfil es el de esa consola, no el `default`.
   const dir = opt('--dir') || (opt('--name') ? dataDir(opt('--name')) : process.env.DOTRINO_TERMINAL_PROFILE_DIR || dataDir())
-  const valued = new Set(['--id', '--dir', '--name', '--add', '--task'])
+  const valued = new Set(['--id', '--dir', '--name', '--add', '--task', '--title'])
   const words = []
   for (let i = 1; i < args.length; i++) {
     if (valued.has(args[i])) { i++; continue }
@@ -606,6 +610,7 @@ async function note () {
   const given = words.length ? (words.length === 1 && words[0] === '-' ? stdin() : words.join(' ')) : null
   const add = opt('--add') === '-' ? stdin() : opt('--add')
   const task = opt('--task') === '-' ? stdin() : opt('--task')
+  const title = opt('--title')
   let conn
   try { conn = await connectLocal(dir) } catch (e) {
     if (e.code !== 'ENOAGENT') throw e
@@ -622,10 +627,16 @@ async function note () {
   if (task !== undefined) {
     // LA TAREA ES DEL PROGRAMA, LA NOTA ES DE LA PERSONA: dos campos. Esta orden solo escribe el
     // primero, así un agente de IA no puede pisar una nota personal ni por descuido.
-    c = await ask({ type: 'note', id, task: task.split('\n').map((l) => l.trim()).filter(Boolean).join('\n') })
+    c = await ask({ type: 'note', id, task: task.split('\n').map((l) => l.trim()).filter(Boolean).join('\n'), ...(title === undefined ? {} : { title }) })
     // Un agente anterior a la 0.37 contesta, pero no guarda tareas: se dice, no se da por hecha.
     if (c.task === undefined) die(t('el agente que corre es anterior a la 0.37.0 y no guarda tareas. Reinícialo con la versión nueva (cierra sus consolas).', 'the running agent predates 0.37.0 and keeps no tasks. Restart it with the new version (closes its consoles).'))
-  } else if (args.includes('--clear')) c = await ask({ type: 'note', id, text: '' })
+    // Y uno anterior a la 0.41 no guarda el título: lo mismo.
+    if (title !== undefined && c.subject === undefined) die(t('el agente que corre es anterior a la 0.41.0 y no guarda el título. Reinícialo con la versión nueva (cierra sus consolas).', 'the running agent predates 0.41.0 and keeps no title. Restart it with the new version (closes its consoles).'))
+  } else if (title !== undefined) {
+    c = await ask({ type: 'note', id, title })
+    if (c.subject === undefined) die(t('el agente que corre es anterior a la 0.41.0 y no guarda el título. Reinícialo con la versión nueva (cierra sus consolas).', 'the running agent predates 0.41.0 and keeps no title. Restart it with the new version (closes its consoles).'))
+  }
+  else if (args.includes('--clear')) c = await ask({ type: 'note', id, text: '' })
   else if (add !== undefined) {
     const before = (await ask({ type: 'note', id })).note || ''
     c = await ask({ type: 'note', id, text: before ? `${before}\n${add}` : add })
@@ -654,17 +665,20 @@ function interactive (conn, first, dir) {
   const out = process.stdout
   let consoleId = null
   let shellTitle = ''
+  let subject = ''
   let remote = new Set()
   let ending = false
 
   const showTitle = () => {
-    const base = shellTitle || 'Dotrino Terminal'
+    const base = subject || shellTitle || 'Dotrino Terminal'
     const mark = remote.size ? `  ● ${t('abierta desde otro aparato', 'open on another device')}${remote.size > 1 ? ` ×${remote.size}` : ''}` : ''
     out.write(`\x1b]2;${base}${mark}\x07`)
   }
   const onInfo = (info) => {
     if (!info) return
-    shellTitle = info.title || ''
+    // El título que puso el programa (`note --title`) manda sobre el de la shell.
+    subject = info.subject || ''
+    shellTitle = info.shellTitle ?? info.title ?? ''
     // En otra máquina (`--machine`) esta ventana es, para aquella, «otro aparato»: no se cuenta
     // a sí misma (se reconoce por su etiqueta; sin etiqueta, es una de las que salen).
     let far = info.watchers.filter((w) => w.origin === 'remote')
@@ -729,7 +743,7 @@ function interactive (conn, first, dir) {
           const other = rest.find((c) => !c.watchers.length) || rest.find((c) => !c.watchers.some((w) => w.origin === 'local')) || rest[0]
           if (other) return switchTo({ type: 'attach', id: other.id })
           empty = true
-          shellTitle = ''; remote = new Set(); showTitle()
+          shellTitle = ''; subject = ''; remote = new Set(); showTitle()
           out.write(`\x1bc\x1b[2m${t('No hay consolas abiertas. Ctrl+] y luego n abre una.', 'No open consoles. Ctrl+] then n opens one.')}\x1b[0m\r\n`)
         })
         return

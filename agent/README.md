@@ -109,6 +109,7 @@ dotrino-terminal note "texto"         # la reemplaza («-» la lee de la entrada
 dotrino-terminal note --add "línea"   # le añade una línea
 dotrino-terminal note --clear         # la borra
 dotrino-terminal note --task "tarea"  # la TAREA en curso, que va aparte de la nota
+dotrino-terminal note --title "título" # el TÍTULO de la consola, en vez del de la shell (solo o con --task)
 ```
 
 Son dos campos: la **nota** es de la persona (la edita desde la tarjeta) y la **tarea** es del
