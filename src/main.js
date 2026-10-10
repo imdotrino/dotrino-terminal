@@ -709,7 +709,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     box.innerHTML = `
       <div class="about-head">
         <b class="about-n">${esc(String(n))}</b>
-        <span class="about-title" data-testid="about-title">${esc(c.title || t('about_untitled'))}</span>
+        <span class="about-titles"><span class="about-title" data-testid="about-title">${esc(c.title || t('about_untitled'))}</span><small class="about-where" data-testid="about-where">${esc(where(s, c, p))}</small></span>
         <button class="about-btn" data-a="hide" data-testid="about-hide" title="${esc(t('about_hide'))}" aria-label="${esc(t('about_hide'))}" aria-expanded="true">–</button>
       </div>
       ${taskBox}

@@ -1182,7 +1182,20 @@ impl App {
             container::Style { background: Some(p.primary.base.color.into()), text_color: Some(p.primary.base.text), border: Border::default().rounded(4.0), ..Default::default() }
         });
         let title = if c.title.is_empty() { t("Sin título", "Untitled") } else { c.title.clone() };
-        let head = row![badge, text(title).size(12).width(Length::Fill), button(text("–").size(12)).padding([0, 7]).style(round).on_press(Message::AboutFold)].spacing(6);
+        // Debajo del título, lo mismo que la barra de la ventana añade al suyo: si la consola está
+        // abierta desde otro aparato, y el perfil.
+        let remote = c.watchers.iter().filter(|w| w.origin == "remote").count();
+        let mark = match remote {
+            0 => None,
+            1 => Some(format!("● {}", t("abierta desde otro aparato", "open on another device"))),
+            n => Some(format!("● {} ×{n}", t("abierta desde otro aparato", "open on another device"))),
+        };
+        let second = [mark, win.profile.clone()].into_iter().flatten().collect::<Vec<_>>().join(" — ");
+        let mut titles = column![text(title).size(12).width(Length::Fill)].width(Length::Fill);
+        if !second.is_empty() {
+            titles = titles.push(text(second).size(11).style(dim));
+        }
+        let head = row![badge, titles, button(text("–").size(12)).padding([0, 7]).style(round).on_press(Message::AboutFold)].spacing(6);
         let act = |label: String, msg: Option<Message>| button(text(label).size(12)).padding([2, 10]).style(round).on_press_maybe(msg);
         let editing = win.note_edit.as_ref().filter(|(cid, _)| *cid == c.id);
         let mut card = column![head, rule::horizontal(1)].spacing(6);

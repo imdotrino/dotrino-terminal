@@ -181,7 +181,9 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .about.folded { width: auto; padding: 0; border: 0; background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .about-head { display: flex; align-items: flex-start; gap: 6px; }
 .about-n { flex: none; min-width: 18px; text-align: center; border-radius: 5px; background: var(--brand); color: var(--on-brand); font-weight: 700; padding: 0 4px; }
-.about-title { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.about-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.about-where { color: var(--muted); font-size: 11px; }
+.about-title { font-weight: 600; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .about-btn { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 1; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
 .about.folded .about-btn { font-style: italic; font-weight: 700; font-family: Georgia, serif; opacity: .7; }
 .about-btn:hover { color: var(--text); border-color: var(--brand); opacity: 1 !important; }
