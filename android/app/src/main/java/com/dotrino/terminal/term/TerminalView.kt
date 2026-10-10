@@ -41,14 +41,23 @@ class TerminalView(context: Context) : View(context) {
     var onInput: (String) -> Unit = {}
     /** The columns and rows that fit changed (the view's size, the font, the keyboard). */
     var onResize: (cols: Int, rows: Int) -> Unit = { _, _ -> }
-    var onLongPress: () -> Unit = {}
+    /** The selection appeared, changed or went away (the «copy» key follows it). */
+    var onSelectionChanged: () -> Unit = {}
 
     /** A cell of the buffer, by ABSOLUTE line (history first, then the screen): stable while the
      *  console scrolls and while new output pushes lines into the history. */
     data class Cell(val line: Int, val col: Int)
     /** What the finger selected (long press, then drag): the two ends, in any order. Null = nothing. */
-    var selection: Pair<Cell, Cell>? = null; private set
+    var selection: Pair<Cell, Cell>? = null
+        private set(v) { val had = field != null; field = v; if (had != (v != null)) onSelectionChanged() }
     private var selecting = false
+    // The two ends carry a handle each, to adjust the selection after lifting the finger.
+    private val handleR = 9f * resources.displayMetrics.density
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF81CFFF.toInt() }
+    /** While a handle is dragged: the end that stays, and where the finger grabbed it. */
+    private var dragFixed: Cell? = null
+    private var grabDx = 0f
+    private var grabDy = 0f
     private val selectionPaint = Paint().apply { color = 0x5981CFFF.toInt() }
     val hasSelection: Boolean get() = selection != null
 
@@ -231,6 +240,42 @@ class TerminalView(context: Context) : View(context) {
             }
         }
         canvas.restore()
+        // The handles go under each end, outside the clip: on the last row they hang below it.
+        handles()?.let { (a, b) -> drawHandle(canvas, a); drawHandle(canvas, b) }
+    }
+
+    /** Where each handle hangs in the view: under the left edge of the first cell and under the
+     *  right edge of the last one. Null with no selection, or while it is being made. */
+    private fun handles(): Pair<android.graphics.PointF, android.graphics.PointF>? {
+        val t = terminal ?: return null
+        if (selecting) return null
+        val (a, b) = ordered() ?: return null
+        val top = t.historySize + topLine(t)
+        fun at(c: Cell, right: Boolean) = android.graphics.PointF((c.col + (if (right) 1 else 0) - panX) * cellW, (c.line - top + 1) * cellH)
+        return at(a, false) to at(b, true)
+    }
+
+    private fun drawHandle(canvas: Canvas, p: android.graphics.PointF) {
+        if (p.y < 0 || p.y > height || p.x < -handleR || p.x > width + handleR) return
+        canvas.drawRect(p.x - 1.5f, p.y - cellH, p.x + 1.5f, p.y, handlePaint)
+        canvas.drawCircle(p.x, p.y + handleR, handleR, handlePaint)
+    }
+
+    /** A touch that lands on a handle starts dragging that end. */
+    private fun grabHandle(x: Float, y: Float): Boolean {
+        val (a, b) = handles() ?: return false
+        val (first, last) = ordered() ?: return false
+        val reach = handleR * 2.6f
+        fun near(p: android.graphics.PointF) = kotlin.math.hypot(x - p.x, y - (p.y + handleR)) <= reach
+        val start = near(a); val end = near(b)
+        if (!start && !end) return false
+        // Both in reach (a short selection): the closer one.
+        val takeEnd = end && (!start || kotlin.math.hypot(x - b.x, y - b.y) <= kotlin.math.hypot(x - a.x, y - a.y))
+        val p = if (takeEnd) b else a
+        dragFixed = if (takeEnd) first else last
+        // The finger rests under the row: the cell is the one the handle points at, not the one under it.
+        grabDx = x - (p.x + (if (takeEnd) -cellW / 2 else cellW / 2)); grabDy = y - (p.y - cellH / 2)
+        return true
     }
 
     private fun drawRow(canvas: Canvas, r: Terminal.Row, top: Float, n: Int) {
@@ -276,7 +321,8 @@ class TerminalView(context: Context) : View(context) {
         override fun onDown(e: MotionEvent): Boolean { scroller.forceFinished(true); return true }
         override fun onSingleTapUp(e: MotionEvent): Boolean { clearSelection(); showKeyboard(); return true }
         // Long press: the cell under the finger starts a selection; dragging extends it (handled in
-        // onTouchEvent: the detector stops scrolling after a long press); lifting shows the menu.
+        // onTouchEvent: the detector stops scrolling after a long press). Lifting opens nothing:
+        // the handles adjust it and the «copy» key of the key row takes it (owner, 2026-10-09).
         override fun onLongPress(e: MotionEvent) {
             val c = cellAt(e.x, e.y) ?: return
             selection = c to c; selecting = true
@@ -338,10 +384,18 @@ class TerminalView(context: Context) : View(context) {
         if (selecting) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_MOVE -> { val c = cellAt(event.x, event.y); val s = selection; if (c != null && s != null) { selection = s.first to c; invalidate() } }
-                MotionEvent.ACTION_UP -> { selecting = false; onLongPress() }
+                MotionEvent.ACTION_UP -> { selecting = false; invalidate() }
                 MotionEvent.ACTION_CANCEL -> { selecting = false; clearSelection() }
             }
             gestures.onTouchEvent(event)
+            return true
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && grabHandle(event.x, event.y)) return true
+        dragFixed?.let { fixed ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> cellAt(event.x - grabDx, event.y - grabDy)?.let { selection = fixed to it; invalidate() }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragFixed = null
+            }
             return true
         }
         pinch.onTouchEvent(event)

@@ -241,7 +241,7 @@ class MainActivity : Activity() {
             tag = "terminal"
             onInput = { active?.input(it) }
             onResize = { cols, rows -> active?.screen(cols, rows) }
-            onLongPress = { consoleMenu() }
+            onSelectionChanged = { renderCopyKey() }
             onModifiersChanged = { renderModifiers() }
             terminal = tab.terminal
         }
@@ -704,6 +704,8 @@ class MainActivity : Activity() {
         else { composeInput?.setText(""); view?.showKeyboard() }
     }
 
+    private var copyKey: android.widget.TextView? = null
+
     private fun extraKeys(): View {
         modKeys.clear()
         val row = LinearLayout(this).apply { setPadding(px(4), px(4), px(4), px(4)) }
@@ -714,6 +716,26 @@ class MainActivity : Activity() {
             isClickable = true; setOnClickListener { toggleCompose() }
         }
         row.addView(composeKey, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(4) })
+        // Copy and paste live here, not in a menu: selecting text opens nothing (owner, 2026-10-09).
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        fun clipKey(name: String, text: String, action: () -> Unit) = label(text, 14f, bold = true).apply {
+            tag = "key-$name"; gravity = Gravity.CENTER; minWidth = px(44)
+            setPadding(px(10), px(9), px(10), px(9))
+            background = rounded(col(R.color.t_panel2), px(8))
+            isClickable = true; setOnClickListener { action() }
+        }.also { row.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(4) }) }
+        copyKey = clipKey("copy", t("key.copy")) {
+            val v = view ?: return@clipKey
+            if (!v.hasSelection) return@clipKey
+            clipboard.setPrimaryClip(ClipData.newPlainText("terminal", v.selectedText()))
+            v.clearSelection(); toast(t("key.copied"))
+        }
+        clipKey("paste", t("key.paste")) {
+            val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+            if (text.isEmpty()) return@clipKey
+            if (composing && composeInput != null) composeInput!!.append(text) else view?.paste(text)
+        }
+        renderCopyKey()
         for (k in EXTRA_KEYS) {
             val key = label(KEY_LABELS[k] ?: when (k) { "shift" -> t("key.shift"); "ctrl" -> t("key.ctrl"); "alt" -> t("key.alt"); else -> k }, 14f, bold = true).apply {
                 tag = "key-$k"; gravity = Gravity.CENTER; minWidth = px(44)
@@ -747,23 +769,12 @@ class MainActivity : Activity() {
         modKeys["alt"]?.background = rounded(col(if (v.alt) R.color.t_accent else R.color.t_panel2), px(8))
     }
 
-    private fun consoleMenu() {
-        val (dialog, body) = sheet(t("menu.title"))
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        if (view?.hasSelection == true) body.add(pill(t("menu.copySel"), filled = true) {
-            dialog.dismiss()
-            clipboard.setPrimaryClip(ClipData.newPlainText("terminal", view?.selectedText().orEmpty()))
-            view?.clearSelection(); toast(t("menu.copiedSel"))
-        }.apply { tag = "copy-selection" }, top = 8)
-        body.add(pill(t("menu.paste"), filled = view?.hasSelection != true) {
-            dialog.dismiss()
-            clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.let { view?.paste(it) }
-        }.apply { tag = "paste" }, top = 8)
-        body.add(pill(t("menu.copy")) {
-            dialog.dismiss()
-            clipboard.setPrimaryClip(ClipData.newPlainText("terminal", view?.screenText().orEmpty()))
-            toast(t("menu.copied"))
-        }.apply { tag = "copy" }, top = 10)
-        dialog.show()
+    /** «Copy» is there always; it is dim, and does nothing, until some text is selected. */
+    private fun renderCopyKey() {
+        val on = view?.hasSelection == true
+        copyKey?.isEnabled = on
+        copyKey?.alpha = if (on) 1f else 0.4f
+        copyKey?.background = rounded(col(if (on) R.color.t_accent else R.color.t_panel2), px(8))
+        copyKey?.setTextColor(col(if (on) R.color.t_on_accent else R.color.t_text))
     }
 }

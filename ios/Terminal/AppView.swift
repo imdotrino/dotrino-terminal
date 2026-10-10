@@ -232,7 +232,7 @@ private struct ConsoleScreen: View {
     @State private var actions: ConsoleInfo?
     @State private var toast: String?
     @State private var mods = (shift: false, ctrl: false, alt: false)
-    @State private var termMenu = false
+    @State private var hasSelection = false
     @State private var askingCode = false
     @State private var code = ""
     /// ✎ The writing line (remembered): over a slow connection every key travels to the machine and
@@ -289,14 +289,6 @@ private struct ConsoleScreen: View {
             Button(t("code.cancel"), role: .cancel) { code = "" }
         } message: {
             Text(codeMessage)
-        }
-        // Long press on the console: paste, or copy what is on screen (the same as Android).
-        .confirmationDialog(t("menu.title"), isPresented: $termMenu, titleVisibility: .visible) {
-            if view?.hasSelection == true {
-                Button(t("menu.copySel")) { UIPasteboard.general.string = view?.selectedText() ?? ""; view?.clearSelection(); show(t("menu.copiedSel")) }
-            }
-            Button(t("menu.paste")) { if let s = UIPasteboard.general.string { view?.paste(s) } }
-            Button(t("menu.copy")) { UIPasteboard.general.string = view?.screenText() ?? ""; show(t("menu.copied")) }
         }
         .confirmationDialog(actions.map { "\($0.n) · " + shortTitle($0.title.isEmpty ? t("console.n", ("n", $0.n)) : $0.title) } ?? "",
                             isPresented: Binding(get: { actions != nil }, set: { if !$0 { actions = nil } }), titleVisibility: .visible) {
@@ -577,6 +569,25 @@ private struct ConsoleScreen: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(composing ? Palette.accent : Palette.panel2))
                 }
                 .accessibilityLabel(t("compose.toggle")).accessibilityIdentifier("key-compose")
+                // Copy and paste live here, not in a menu: selecting text opens nothing (owner, 2026-10-09).
+                Button {
+                    guard let v = view, v.hasSelection else { return }
+                    UIPasteboard.general.string = v.selectedText(); v.clearSelection(); show(t("key.copied"))
+                } label: {
+                    Text(t("key.copy")).font(.subheadline.bold()).foregroundColor(hasSelection ? Palette.onAccent : Palette.text)
+                        .frame(minWidth: 44).padding(.vertical, 9).padding(.horizontal, 6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(hasSelection ? Palette.accent : Palette.panel2))
+                }
+                .disabled(!hasSelection).opacity(hasSelection ? 1 : 0.4).accessibilityIdentifier("key-copy")
+                Button {
+                    guard let s = UIPasteboard.general.string, !s.isEmpty else { return }
+                    if composing { composeText += s } else { view?.paste(s) }
+                } label: {
+                    Text(t("key.paste")).font(.subheadline.bold()).foregroundColor(Palette.text)
+                        .frame(minWidth: 44).padding(.vertical, 9).padding(.horizontal, 6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel2))
+                }
+                .accessibilityIdentifier("key-paste")
                 ForEach(Self.keys, id: \.self) { k in
                     let lit = (k == "shift" && mods.shift) || (k == "ctrl" && mods.ctrl) || (k == "alt" && mods.alt)
                     Button { press(k) } label: {
@@ -597,7 +608,8 @@ private struct ConsoleScreen: View {
 
     private func wire(_ v: TerminalView?) {
         v?.onModifiersChanged = { syncMods() }
-        v?.onLongPress = { termMenu = true }
+        v?.onSelectionChanged = { hasSelection = view?.hasSelection ?? false }
+        hasSelection = v?.hasSelection ?? false
     }
 
     private func syncMods() { if let v = view { mods = (v.shift, v.ctrl, v.alt) } }

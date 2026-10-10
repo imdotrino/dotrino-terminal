@@ -15,7 +15,8 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     var onInput: (String) -> Void = { _ in }
     /// The columns and rows that fit changed (the view's size, the font, the keyboard).
     var onResize: (Int, Int) -> Void = { _, _ in }
-    var onLongPress: () -> Void = {}
+    /// The selection appeared or went away (the «copy» key follows it).
+    var onSelectionChanged: () -> Void = {}
     /// A sticky modifier was used up by the key that followed it.
     var onModifiersChanged: () -> Void = {}
 
@@ -56,7 +57,16 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// console scrolls and while new output pushes lines into the history.
     struct Cell: Equatable { var line: Int; var col: Int }
     /// What the finger selected (long press, then drag): the two ends, in any order. Nil = nothing.
-    private(set) var selection: (a: Cell, b: Cell)?
+    private(set) var selection: (a: Cell, b: Cell)? {
+        didSet { if (oldValue == nil) != (selection == nil) { onSelectionChanged() } }
+    }
+    // The two ends carry a handle each, to adjust the selection after lifting the finger.
+    private static let handleR: CGFloat = 9
+    private static let handleColor = UIColor(rgb: 0x81CFFF)
+    private var pressing = false
+    /// While a handle is dragged: the end that stays, and where the finger grabbed it.
+    private var dragFixed: Cell?
+    private var grab = CGPoint.zero
     static let selectionColor = UIColor(rgb: 0x81CFFF).withAlphaComponent(0.35)
     /// The console is never asked to be narrower than this (owner, 2026-10-07: with the panel open the
     /// view got 16 columns wide and the shell reflowed everything). Narrower views pan sideways.
@@ -201,6 +211,48 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             }
         }
         ctx.restoreGState()
+        // The handles go under each end, outside the clip: on the last row they hang below it.
+        if let h = handles() { drawHandle(ctx, h.start); drawHandle(ctx, h.end) }
+    }
+
+    private func orderedSelection() -> (a: Cell, b: Cell)? {
+        guard let sel = selection else { return nil }
+        return (sel.b.line, sel.b.col) < (sel.a.line, sel.a.col) ? (sel.b, sel.a) : sel
+    }
+
+    /// Where each handle hangs in the view: under the left edge of the first cell and under the
+    /// right edge of the last one. Nil with no selection, or while it is being made.
+    private func handles() -> (start: CGPoint, end: CGPoint)? {
+        guard let t = terminal, !pressing, let sel = orderedSelection() else { return nil }
+        let top = t.historySize + topLine(t)
+        func at(_ c: Cell, right: Bool) -> CGPoint {
+            CGPoint(x: CGFloat(c.col + (right ? 1 : 0) - panX) * cellW, y: CGFloat(c.line - top + 1) * cellH)
+        }
+        return (at(sel.a, right: false), at(sel.b, right: true))
+    }
+
+    private func drawHandle(_ ctx: CGContext, _ p: CGPoint) {
+        let r = Self.handleR
+        guard p.y >= 0, p.y <= bounds.height, p.x >= -r, p.x <= bounds.width + r else { return }
+        Self.handleColor.setFill()
+        ctx.fill(CGRect(x: p.x - 1.5, y: p.y - cellH, width: 3, height: cellH))
+        ctx.fillEllipse(in: CGRect(x: p.x - r, y: p.y, width: r * 2, height: r * 2))
+    }
+
+    /// A touch that lands on a handle starts dragging that end.
+    private func grabHandle(_ p: CGPoint) -> Bool {
+        guard let h = handles(), let sel = orderedSelection() else { return false }
+        let r = Self.handleR, reach = r * 2.6
+        func near(_ q: CGPoint) -> Bool { hypot(p.x - q.x, p.y - (q.y + r)) <= reach }
+        let start = near(h.start), end = near(h.end)
+        guard start || end else { return false }
+        // Both in reach (a short selection): the closer one.
+        let takeEnd = end && (!start || hypot(p.x - h.end.x, p.y - h.end.y) <= hypot(p.x - h.start.x, p.y - h.start.y))
+        let q = takeEnd ? h.end : h.start
+        dragFixed = takeEnd ? sel.a : sel.b
+        // The finger rests under the row: the cell is the one the handle points at, not the one under it.
+        grab = CGPoint(x: p.x - (q.x + (takeEnd ? -cellW / 2 : cellW / 2)), y: p.y - (q.y - cellH / 2))
+        return true
     }
 
     private func drawRow(_ ctx: CGContext, _ r: Terminal.Row, _ top: CGFloat, _ n: Int) {
@@ -252,20 +304,21 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     @objc private func tapped() { clearSelection(); _ = becomeFirstResponder() }
 
-    /// Long press: the cell under the finger starts a selection; dragging extends it; lifting
-    /// shows the menu (copy what was selected). The selection stays until a tap.
+    /// Long press: the cell under the finger starts a selection; dragging extends it. Lifting opens
+    /// nothing: the handles adjust it and the «copy» key of the key row takes it (owner,
+    /// 2026-10-09). The selection stays until a tap.
     @objc private func pressed(_ g: UILongPressGestureRecognizer) {
         switch g.state {
         case .began:
             guard let c = cell(at: g.location(in: self)) else { return }
-            selection = (c, c); setNeedsDisplay()
+            pressing = true; selection = (c, c); setNeedsDisplay()
         case .changed:
             guard var sel = selection, let c = cell(at: g.location(in: self)) else { return }
             sel.b = c; selection = sel; setNeedsDisplay()
         case .ended:
-            onLongPress()
+            pressing = false; setNeedsDisplay()
         case .cancelled, .failed:
-            clearSelection()
+            pressing = false; clearSelection()
         default: break
         }
     }
@@ -310,6 +363,17 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     @objc private func panned(_ g: UIPanGestureRecognizer) {
         guard let t = terminal else { return }
+        // A drag that starts on a handle moves that end of the selection.
+        let at = g.location(in: self)
+        if g.state == .began {
+            let d = g.translation(in: self)
+            _ = grabHandle(CGPoint(x: at.x - d.x, y: at.y - d.y))
+        }
+        if let fixed = dragFixed {
+            if let c = cell(at: CGPoint(x: at.x - grab.x, y: at.y - grab.y)) { selection = (fixed, c); setNeedsDisplay() }
+            if g.state == .ended || g.state == .cancelled || g.state == .failed { dragFixed = nil }
+            return
+        }
         let d = g.translation(in: self); g.setTranslation(.zero, in: self)
         if abs(d.x) > abs(d.y) {
             // Sideways only pans a console wider than the view.

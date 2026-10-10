@@ -46,11 +46,6 @@ object I18n {
         "code.label" to "Clave de la máquina", "code.ok" to "Entrar",
         "code.wrong" to "Esa no es la clave.",
         "code.wait" to "Demasiados intentos. Espera {min} min y vuelve a probar.",
-        "menu.paste" to "Pegar",
-        "menu.copySel" to "Copiar lo seleccionado", "menu.copiedSel" to "Copiado",
-        "menu.copy" to "Copiar la pantalla",
-        "menu.copied" to "Pantalla copiada",
-        "menu.title" to "Consola",
         "link.connecting" to "Conectando…",
         "link.offline" to "Sin conexión. Reintentando…",
         "boot.noIdentityApp" to "Tu perfil de Dotrino vive en la app «Identidad Dotrino». Instálala y vuelve aquí.",
@@ -59,6 +54,7 @@ object I18n {
         "boot.connectVault" to "Conectar mi bóveda",
         "boot.create" to "Crear perfil", "boot.adopt" to "Adoptar un perfil", "boot.retry" to "Reintentar",
         "key.shift" to "Shift", "key.ctrl" to "Ctrl", "key.alt" to "Alt",
+        "key.copy" to "Copiar", "key.paste" to "Pegar", "key.copied" to "Copiado",
     )
     private val en = mapOf(
         "machines.title" to "Your machines",
@@ -95,11 +91,6 @@ object I18n {
         "code.label" to "Machine code", "code.ok" to "Enter",
         "code.wrong" to "That is not the code.",
         "code.wait" to "Too many tries. Wait {min} min and try again.",
-        "menu.paste" to "Paste",
-        "menu.copySel" to "Copy the selection", "menu.copiedSel" to "Copied",
-        "menu.copy" to "Copy the screen",
-        "menu.copied" to "Screen copied",
-        "menu.title" to "Console",
         "link.connecting" to "Connecting…",
         "link.offline" to "Offline. Retrying…",
         "boot.noIdentityApp" to "Your Dotrino profile lives in the «Dotrino Identity» app. Install it and come back here.",
@@ -108,6 +99,7 @@ object I18n {
         "boot.connectVault" to "Connect my vault",
         "boot.create" to "Create profile", "boot.adopt" to "Adopt a profile", "boot.retry" to "Retry",
         "key.shift" to "Shift", "key.ctrl" to "Ctrl", "key.alt" to "Alt",
+        "key.copy" to "Copy", "key.paste" to "Paste", "key.copied" to "Copied",
     )
 
     fun t(key: String, vararg vars: Pair<String, Any>): String {

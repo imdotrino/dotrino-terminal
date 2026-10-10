@@ -49,12 +49,7 @@ enum I18n {
         "code.label": "Clave de la máquina", "code.ok": "Entrar", "code.cancel": "Cancelar",
         "code.wrong": "Esa no es la clave.",
         "code.wait": "Demasiados intentos. Espera {min} min y vuelve a probar.",
-        "menu.paste": "Pegar",
-        "menu.copySel": "Copiar lo seleccionado", "menu.copiedSel": "Copiado",
         "compose.hint": "Escribe aquí y pulsa Enter", "compose.send": "Enviar", "compose.toggle": "Escribir aquí y enviar de una vez",
-        "menu.copy": "Copiar la pantalla",
-        "menu.copied": "Pantalla copiada",
-        "menu.title": "Consola",
         "link.connecting": "Conectando…",
         "link.offline": "Sin conexión. Reintentando…",
         "boot.noIdentityApp": "Tu perfil de Dotrino vive en la app «Identidad Dotrino». Instálala y vuelve aquí.",
@@ -67,6 +62,9 @@ enum I18n {
         "key.shift": "Shift",
         "key.ctrl": "Ctrl",
         "key.alt": "Alt",
+        "key.copy": "Copiar",
+        "key.paste": "Pegar",
+        "key.copied": "Copiado",
     ]
     static let en: [String: String] = [
         "machines.title": "Your machines",
@@ -112,12 +110,7 @@ enum I18n {
         "code.label": "Machine code", "code.ok": "Enter", "code.cancel": "Cancel",
         "code.wrong": "That is not the code.",
         "code.wait": "Too many tries. Wait {min} min and try again.",
-        "menu.paste": "Paste",
-        "menu.copySel": "Copy the selection", "menu.copiedSel": "Copied",
         "compose.hint": "Type here and press Enter", "compose.send": "Send", "compose.toggle": "Type here and send at once",
-        "menu.copy": "Copy the screen",
-        "menu.copied": "Screen copied",
-        "menu.title": "Console",
         "link.connecting": "Connecting…",
         "link.offline": "Offline. Retrying…",
         "boot.noIdentityApp": "Your Dotrino profile lives in the «Dotrino Identity» app. Install it and come back here.",
@@ -130,6 +123,9 @@ enum I18n {
         "key.shift": "Shift",
         "key.ctrl": "Ctrl",
         "key.alt": "Alt",
+        "key.copy": "Copy",
+        "key.paste": "Paste",
+        "key.copied": "Copied",
     ]
 
     /// Both languages say the same things: a key in one and not in the other is a text nobody translated.
