@@ -52,11 +52,12 @@ anunciarlo ni comentarlo en la respuesta.
 ## Cómo
 
 ```bash
-dotrino-terminal note --task "Arreglando el login de facturero"
-
 dotrino-terminal note --task - <<'EOF_TASK'    # varias líneas, por la entrada estándar
 Arreglando el login de facturero
+Hecho: el formulario
+Ahora: la validación
 Falta: probar con firma real
+Modelo: Opus 5.5
 EOF_TASK
 
 dotrino-terminal note --task ''                # quita tu tarea (lo del dueño se queda)
@@ -72,6 +73,9 @@ No hace falta decir qué consola: es la tuya.
 - Debajo, el estado en tres o cuatro líneas: `Hecho:` (lo ya cerrado), `Ahora:` (lo que haces en
   este momento), `Falta:` y, si aplica, `Espera:` (a qué). Reescríbela entera cada vez: es el
   estado actual, no un historial.
+- **La última línea dice qué modelo eres**: `Modelo: Opus 5.5` (el nombre con el que te presentas,
+  tal como lo dice tu contexto; no lo adivines ni pongas el identificador largo). Va siempre, en
+  cada actualización: el dueño tiene varias consolas con modelos distintos y quiere verlo ahí.
 - En el idioma del usuario. Sin secretos, llaves ni rutas con credenciales: la nota la ven todos
   los aparatos de la cuenta.
 - Al terminar no la quites: di que terminó (`Terminado: …`).
