@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { installKind, assetFor, install, updateDesktop, BINARY } from '../desktop.js'
+import { installKind, assetFor, install, packageCommand, updateDesktop, BINARY } from '../desktop.js'
 
 const ASSETS = ['dotrino-terminal-desktop-0.3.0-1.x86_64.rpm', 'dotrino-terminal-desktop-0.3.0-linux-x64.tar.gz', 'dotrino-terminal-desktop-0.3.0-macos-universal.zip', 'dotrino-terminal-desktop_0.3.0-1_amd64.deb'].map((name) => ({ name, url: `https://x/${name}` }))
 const owner = (who) => (cmd) => { if (cmd !== who) throw new Error('not mine') }
@@ -35,13 +35,27 @@ test('cada forma baja su archivo', () => {
   assert.equal(assetFor([], 'deb').ok, false)
 })
 
-test('un paquete se instala con sudo, y sin sudo si ya se es root', () => {
-  const calls = []
-  const run = (c, a) => calls.push([c, ...a].join(' '))
-  assert.equal(install('/t/a.deb', { kind: 'deb' }, { run, uid: 1000 }).ok, true)
-  assert.equal(install('/t/a.rpm', { kind: 'rpm' }, { run, uid: 0 }).ok, true)
-  assert.deepEqual(calls, ['sudo dpkg -i /t/a.deb', 'rpm -U /t/a.rpm'])
-  const bad = install('/t/a.deb', { kind: 'deb' }, { run: () => { throw new Error('exit 1') }, uid: 1000 })
+test('un paquete se instala con el gestor que resuelve dependencias, con sudo salvo root', () => {
+  // `tiene`: qué gestores hay en esa máquina.
+  const maquina = (tiene) => {
+    const calls = []
+    const run = (c, a) => {
+      if (c === 'sh') { if (!tiene.includes(a[1].replace('command -v ', ''))) throw new Error('no'); return }
+      calls.push([c, ...a].join(' '))
+    }
+    return { calls, run }
+  }
+  const debian = maquina(['apt-get'])
+  assert.equal(install('/t/a.deb', { kind: 'deb' }, { run: debian.run, uid: 1000 }).ok, true)
+  assert.deepEqual(debian.calls, ['sudo apt-get install -y /t/a.deb'])
+  const fedora = maquina(['dnf'])
+  assert.equal(install('/t/a.rpm', { kind: 'rpm' }, { run: fedora.run, uid: 0 }).ok, true)
+  assert.deepEqual(fedora.calls, ['dnf install -y /t/a.rpm'], 'como root, sin sudo')
+  assert.deepEqual(packageCommand('rpm', '/t/a.rpm', { run: maquina(['zypper']).run }), ['zypper', ['--non-interactive', 'install', '--allow-unsigned-rpm', '/t/a.rpm']])
+  // Sin ninguno de los que resuelven, el que desempaqueta.
+  assert.deepEqual(packageCommand('rpm', '/t/a.rpm', { run: maquina([]).run }), ['rpm', ['-U', '/t/a.rpm']])
+  assert.deepEqual(packageCommand('deb', '/t/a.deb', { run: maquina([]).run }), ['dpkg', ['-i', '/t/a.deb']])
+  const bad = install('/t/a.deb', { kind: 'deb' }, { run: (c) => { if (c !== 'sh') throw new Error('exit 1') }, uid: 1000 })
   assert.deepEqual([bad.ok, bad.code, bad.file], [false, 'install-failed', '/t/a.deb'])
 })
 

@@ -79,7 +79,23 @@ export const assetFor = (assets, kind) => pickAsset(assets, [MATCH[kind]])
 function asRoot (cmd, args, { run, uid }) {
   const [c, a] = uid === 0 ? [cmd, args] : ['sudo', [cmd, ...args]]
   run(c, a, { stdio: 'inherit' })
-  return [c, ...a].join(' ')
+}
+
+const has = (cmd, run) => { try { run('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }); return true } catch (_) { return false } }
+
+/**
+ * Con qué se instala el paquete ya bajado. Se prefiere el gestor que RESUELVE dependencias
+ * (`apt-get`, `dnf`, `zypper`) al que solo desempaqueta (`dpkg`, `rpm`): una versión nueva
+ * puede pedir una librería que la anterior no pedía, y `rpm -U` se para ahí sin traerla.
+ *
+ * @returns {[string, string[]]}
+ */
+export function packageCommand (kind, file, { run = execFileSync } = {}) {
+  if (kind === 'deb') return has('apt-get', run) ? ['apt-get', ['install', '-y', file]] : ['dpkg', ['-i', file]]
+  if (has('dnf', run)) return ['dnf', ['install', '-y', file]]
+  // El paquete no va firmado con una llave de rpm: lo que se comprobó es su atestación.
+  if (has('zypper', run)) return ['zypper', ['--non-interactive', 'install', '--allow-unsigned-rpm', file]]
+  return ['rpm', ['-U', file]]
 }
 
 /**
@@ -92,11 +108,10 @@ function asRoot (cmd, args, { run, uid }) {
  * @returns {any}
  */
 export function install (file, how, { exe, run = execFileSync, uid = process.getuid?.() } = {}) {
-  try {
-    if (how.kind === 'deb') { asRoot('dpkg', ['-i', file], { run, uid }); return { ok: true } }
-    if (how.kind === 'rpm') { asRoot('rpm', ['-U', file], { run, uid }); return { ok: true } }
-  } catch (e) {
-    return fail('install-failed', `the package manager did not install it: ${e.message}`, { file })
+  if (how.kind === 'deb' || how.kind === 'rpm') {
+    try { asRoot(...packageCommand(how.kind, file, { run }), { run, uid }); return { ok: true } } catch (e) {
+      return fail('install-failed', `the package manager did not install it: ${e.message}`, { file })
+    }
   }
   if (how.kind === 'tar') {
     const work = path.dirname(file)
@@ -171,4 +186,4 @@ export async function updateDesktop ({ exe, current, check = false, say = () => 
   }
 }
 
-export default { updateDesktop, latestDesktop, installKind, assetFor, install, DESKTOP_TAG, BINARY }
+export default { packageCommand, updateDesktop, latestDesktop, installKind, assetFor, install, DESKTOP_TAG, BINARY }
