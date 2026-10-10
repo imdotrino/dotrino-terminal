@@ -83,6 +83,25 @@ carpeta concreta. El `link.json` guarda la llave privada: trátalo como una llav
 
 MIT.
 
+## La nota de una consola (de qué va)
+
+Cada consola lleva una nota de texto libre: la tarea en curso, lo que falta. Sale en una tarjeta
+flotante sobre la consola (junto con su título) y, su primera línea, en la lista de consolas. La
+edita la persona desde la tarjeta, o el programa que corre dentro:
+
+```bash
+dotrino-terminal note                 # la enseña
+dotrino-terminal note "texto"         # la reemplaza («-» la lee de la entrada estándar)
+dotrino-terminal note --add "línea"   # le añade una línea
+dotrino-terminal note --clear         # la borra
+```
+
+Sin `--id`, es la consola en la que corre la orden: el agente pone su id en
+`DOTRINO_TERMINAL_CONSOLE`. Vive en memoria, como la consola: se va con ella. Hasta 4000 caracteres.
+
+Para que un agente de IA la mantenga al día, el paquete trae un skill de Claude Code en
+`skills/dotrino-terminal-note/`: se copia a `~/.claude/skills/`.
+
 ## Clave de la máquina (opcional)
 
 Por defecto, cualquier aparato de tu cuenta con permiso abre consolas en esta máquina. Si

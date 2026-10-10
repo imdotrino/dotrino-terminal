@@ -6,6 +6,7 @@
  *   dotrino-terminal attach <id> [--name <n>]  se engancha a una consola que ya existe
  *   dotrino-terminal ls [--name <n>] [--json]  las consolas abiertas en el agente
  *   dotrino-terminal kill <id> [--name <n>]    cierra una consola
+ *   dotrino-terminal note [texto]              la nota de esta consola (de qué va): la lee o la cambia
  *   dotrino-terminal profiles [--json]         los perfiles de esta máquina (enlazados o no)
  *   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
  *   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente si corre)
@@ -55,6 +56,11 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal attach <id> [--name <n>]  se engancha a una consola abierta
   dotrino-terminal ls [--name <n>] [--json]  las consolas abiertas
   dotrino-terminal kill <id> [--name <n>]    cierra una consola
+  dotrino-terminal note                      enseña la nota de esta consola (de qué va)
+  dotrino-terminal note <texto>              la reemplaza («-» la lee de la entrada estándar)
+  dotrino-terminal note --add <texto>        le añade una línea
+  dotrino-terminal note --clear              la borra
+                                             (--id <id> para otra consola; --json para leerla una máquina)
   dotrino-terminal profiles [--json]         los perfiles de esta máquina
   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
   dotrino-terminal rename <perfil> [nuevo]   renombra un perfil (para su agente: cierra sus consolas)
@@ -74,6 +80,11 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal attach <id> [--name <n>]  attach to an open console
   dotrino-terminal ls [--name <n>] [--json]  list open consoles
   dotrino-terminal kill <id> [--name <n>]    close a console
+  dotrino-terminal note                      show this console's note (what it is about)
+  dotrino-terminal note <text>               replace it ("-" reads it from standard input)
+  dotrino-terminal note --add <text>         append a line
+  dotrino-terminal note --clear              clear it
+                                             (--id <id> for another console; --json for a machine to read)
   dotrino-terminal profiles [--json]         this machine's profiles
   dotrino-terminal link [--name <n>]         link a profile with your vault
   dotrino-terminal rename <profile> [new]    rename a profile (stops its agent: closes its consoles)
@@ -372,6 +383,49 @@ async function list (conn) {
   }
 }
 
+/**
+ * La nota de una consola: de qué va. Sin `--id` es la consola en la que corre esta orden (el
+ * agente pone su id en `DOTRINO_TERMINAL_CONSOLE`), que es como la cambia un programa desde dentro.
+ * No levanta ningún agente: sin agente no hay consola a la que ponerle nota.
+ */
+async function note () {
+  const id = opt('--id') || process.env.DOTRINO_TERMINAL_CONSOLE
+  if (!id) die(t('no sé de qué consola: esta shell no corre dentro de Dotrino Terminal. Usa --id <id> (mira «dotrino-terminal ls»).', 'no console to act on: this shell is not running inside Dotrino Terminal. Use --id <id> (see "dotrino-terminal ls").'))
+  // Dentro de una consola, el perfil es el de esa consola, no el `default`.
+  const dir = opt('--dir') || (opt('--name') ? dataDir(opt('--name')) : process.env.DOTRINO_TERMINAL_PROFILE_DIR || dataDir())
+  const valued = new Set(['--id', '--dir', '--name', '--add'])
+  const words = []
+  for (let i = 1; i < args.length; i++) {
+    if (valued.has(args[i])) { i++; continue }
+    if (args[i] === '-' || !args[i].startsWith('-')) words.push(args[i])
+  }
+  const stdin = () => fs.readFileSync(0, 'utf8').replace(/\n+$/, '')
+  const given = words.length ? (words.length === 1 && words[0] === '-' ? stdin() : words.join(' ')) : null
+  const add = opt('--add') === '-' ? stdin() : opt('--add')
+  let conn
+  try { conn = await connectLocal(dir) } catch (e) {
+    if (e.code !== 'ENOAGENT') throw e
+    die(t('el agente de este perfil no está corriendo.', 'this profile\'s agent is not running.'))
+  }
+  const ask = async (msg) => {
+    const r = await Promise.race([request(conn, msg, 'noted'), new Promise((resolve) => setTimeout(() => resolve(null), 5000))])
+    // Un agente anterior a la 0.36 no conoce la orden y no contesta: se dice, no se da por hecho.
+    if (!r) die(t('el agente no contestó: es anterior a la 0.36.0 y no tiene notas. Actualízalo y reinícialo.', 'the agent did not answer: it predates 0.36.0 and has no notes. Update and restart it.'))
+    if (r.type === 'fail') die(`dotrino-terminal: ${r.message} (${r.code})`)
+    return r.console
+  }
+  let c
+  if (args.includes('--clear')) c = await ask({ type: 'note', id, text: '' })
+  else if (add !== undefined) {
+    const before = (await ask({ type: 'note', id })).note || ''
+    c = await ask({ type: 'note', id, text: before ? `${before}\n${add}` : add })
+  } else if (given !== null) c = await ask({ type: 'note', id, text: given })
+  else c = await ask({ type: 'note', id })
+  conn.close()
+  if (args.includes('--json')) console.log(JSON.stringify({ id: c.id, n: c.n, title: c.title, note: c.note }, null, 2))
+  else if (c.note) console.log(c.note)
+}
+
 /** La ventana: la TTY enganchada a una consola del agente. */
 function interactive (conn, first, dir) {
   // Hasta que el agente diga `attached` no hay consola a la que escribir: se guarda.
@@ -550,6 +604,7 @@ try {
   if (cmd === 'rename') { await rename(); process.exit(0) }
   if (cmd === 'lock') { await lock(); process.exit(0) }
   if (cmd === 'vscode') { vscode(); process.exit(0) }
+  if (cmd === 'note') { await note(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))
   if (cmd === 'open' || cmd === 'attach') captureEarly()
   const conn = await agent(dir)

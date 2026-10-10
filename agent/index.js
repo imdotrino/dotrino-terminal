@@ -15,11 +15,13 @@
  *                     { type:'input', data } · { type:'resize', cols, rows } · { type:'take' } ·
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id } ·
  *                     { type:'move', id, before? } (el orden del panel; contesta con `consoles`) ·
+ *                     { type:'note', id?, text? } (la nota de una consola: sin `id`, la enganchada;
+ *                       sin `text`, solo la lee; contesta con `noted`) ·
  *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
  *                     { type:'exit', code, closedBy? } · { type:'fail', code, message, retryMs? } ·
- *                     { type:'unlocked' }
+ *                     { type:'unlocked' } · { type:'noted', console }
  *
  * Con clave puesta, una sesión remota que no la ha escrito recibe `fail` con `code:'locked'`
  * a todo lo que pida; tras `unlock` vale para esa conexión. `bad-code` y `wait` traen
@@ -64,12 +66,13 @@ export function makeHub (pty, opts = {}) {
   const shell = opts.shell || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
   return new ConsoleHub({
     ...(opts.quietMs ? { quietMs: opts.quietMs } : {}),
-    spawn: ({ cols, rows, cwd }) => pty.spawn(shell, [], {
+    spawn: ({ cols, rows, cwd, id }) => pty.spawn(shell, [], {
       name: 'xterm-256color', cols, rows,
       cwd: cwd || os.homedir(),
       // La carpeta del perfil viaja a la shell: `dotrino-terminal rename` sabe así si corre
       // dentro del mismo perfil que renombra (y que parar su agente cerraría su consola).
-      env: { ...process.env, TERM: 'xterm-256color', ...(opts.dir ? { DOTRINO_TERMINAL_PROFILE_DIR: opts.dir } : {}) }
+      // El id de la consola también: `dotrino-terminal note` sabe así cuál es la suya.
+      env: { ...process.env, TERM: 'xterm-256color', DOTRINO_TERMINAL_CONSOLE: id, ...(opts.dir ? { DOTRINO_TERMINAL_PROFILE_DIR: opts.dir } : {}) }
     })
   })
 }
@@ -203,6 +206,14 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
     if (msg.type === 'take') { current?.take(viewer); return }
     if (msg.type === 'close') { if (current) hub.kill(current.id, viewer); return }
     if (msg.type === 'kill') { if (!hub.kill(msg.id, viewer)) fail('no-console', 'that console no longer exists'); return }
+    // La nota de una consola (de qué va): la escribe cualquier pantalla, o lo que corre dentro.
+    if (msg.type === 'note') {
+      const c = msg.id == null ? current : hub.get(String(msg.id))
+      if (!c) return fail('no-console', 'that console no longer exists')
+      if (typeof msg.text === 'string') c.setNote(msg.text)
+      session.send({ type: 'noted', console: c.info() })
+      return
+    }
     // El orden del panel: es de la máquina, así que lo ve igual cualquier pantalla.
     if (msg.type === 'move') {
       if (!hub.move(String(msg.id), msg.before == null ? null : String(msg.before))) return fail('no-console', 'that console no longer exists')

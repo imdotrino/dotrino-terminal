@@ -435,3 +435,41 @@ test('con el canal directo ya abierto (o en local) va todo de una vez', async ()
   assert.equal(b.sent.filter((p) => p.type === 'replay' && p.data.startsWith('\x1bc')).length, 0, 'sin segunda foto')
   h.killAll()
 })
+
+test('la nota de una consola: la pone una pantalla, la ve la otra y sale en la lista', async () => {
+  const h = hub()
+  const a = fakeSession(); serveSession(a, h)
+  a.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => a.sent.some((p) => p.type === 'attached'))
+  const id = a.sent.find((p) => p.type === 'attached').id
+  assert.equal(h.list()[0].note, '', 'nace sin nota')
+
+  // Otra pantalla, sin engancharse a nada, la cambia por el id (así lo hace `dotrino-terminal note`).
+  const b = fakeSession(); serveSession(b, h)
+  b.deliver({ type: 'note', id, text: 'arreglando el login' })
+  await until(() => b.sent.some((p) => p.type === 'noted'))
+  assert.equal(b.sent.find((p) => p.type === 'noted').console.note, 'arreglando el login')
+  assert.equal(h.list()[0].note, 'arreglando el login')
+  await until(() => a.sent.some((p) => p.type === 'meta' && p.console.note === 'arreglando el login'))
+
+  // Sin `text` solo se lee; sin `id` es la consola enganchada.
+  a.deliver({ type: 'note' })
+  await until(() => a.sent.some((p) => p.type === 'noted'))
+  assert.equal(a.sent.find((p) => p.type === 'noted').console.note, 'arreglando el login')
+
+  b.deliver({ type: 'note', id: 'nope', text: 'x' })
+  await until(() => b.sent.some((p) => p.type === 'fail'))
+  assert.equal(b.sent.find((p) => p.type === 'fail').code, 'no-console')
+  h.killAll()
+})
+
+test('la shell de una consola sabe cuál es la suya (DOTRINO_TERMINAL_CONSOLE)', async () => {
+  const h = hub()
+  const s = fakeSession(); serveSession(s, h)
+  s.deliver({ type: 'open', cols: 80, rows: 24 })
+  await until(() => s.sent.some((p) => p.type === 'attached'))
+  const id = s.sent.find((p) => p.type === 'attached').id
+  s.deliver({ type: 'input', data: 'echo "id=<$DOTRINO_TERMINAL_CONSOLE>"\r' })
+  await until(() => s.out().includes(`id=<${id}>`))
+  h.killAll()
+})

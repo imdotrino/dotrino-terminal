@@ -86,6 +86,10 @@ const M = {
     console_free: 'suelta',
     console_local: 'ventana abierta en la máquina',
     split_right: 'Dividir a la derecha', split_down: 'Dividir abajo', open_right: 'Abrir a la derecha', open_down: 'Abrir abajo', close_pane: 'Cerrar este panel', pane_last: 'Es el único panel: cierra la pestaña',
+    about_title: 'De qué va esta consola', about_hide: 'Plegar', about_show: 'De qué va esta consola',
+    about_untitled: 'Sin título', about_empty: 'Sin notas.', about_edit: 'Editar', about_add: 'Agregar nota',
+    about_save: 'Guardar', about_cancel: 'Cancelar', about_ph: 'La tarea en curso, lo que falta, lo que no hay que olvidar…',
+    about_old: 'Esta máquina aún no guarda notas: actualiza su terminal.', about_fail: 'No se pudo guardar la nota.',
     console_gone: 'Esta consola ya no existe en la máquina: se cerró, o el agente se reinició.',
     closed_by_other: (n) => `Otra pantalla cerró la consola ${n}. Esta es otra.`,
     closed_by_other_new: (n) => `Otra pantalla cerró la consola ${n}. Esta es una nueva.`,
@@ -164,6 +168,10 @@ const M = {
     console_other: 'open on another device',
     console_free: 'detached',
     console_local: 'window open on the machine',
+    about_title: 'What this console is about', about_hide: 'Fold', about_show: 'What this console is about',
+    about_untitled: 'Untitled', about_empty: 'No notes.', about_edit: 'Edit', about_add: 'Add a note',
+    about_save: 'Save', about_cancel: 'Cancel', about_ph: 'The task in progress, what is left, what not to forget…',
+    about_old: 'This machine does not keep notes yet: update its terminal.', about_fail: 'Could not save the note.',
     split_right: 'Split right', split_down: 'Split down', open_right: 'Open to the right', open_down: 'Open below', close_pane: 'Close this pane', pane_last: 'The only pane: close the tab instead',
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
     closed_by_other: (n) => `Another screen closed console ${n}. This is another one.`,
@@ -384,8 +392,10 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       <button data-p="right" title="${esc(t('split_right'))}" aria-label="${esc(t('split_right'))}">◫</button>
       <button data-p="down" title="${esc(t('split_down'))}" aria-label="${esc(t('split_down'))}">⊟</button>
       <button data-p="close" title="${esc(t('close_pane'))}" aria-label="${esc(t('close_pane'))}">×</button>
-    </div><div class="term"></div></div>`)
+    </div><aside class="about" data-testid="about" hidden></aside><div class="term"></div></div>`)
     p.view = p.el.querySelector('.term')
+    p.about = p.el.querySelector('.about')
+    wireAbout(s, p)
     p.side = p.el.querySelector('.side')
     p.arrow = p.el.querySelector('.cur-arrow')
     p.side.addEventListener('scroll', () => placeArrow(p), { passive: true })
@@ -522,7 +532,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       if (why?.closedBy === 'other') return closedByOther(s, p, why.id)
       p.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s)
     }
-    p.agent.onMeta = (info) => follow(p, info)
+    p.agent.onMeta = (info) => { p.meta = info; follow(p, info); renderAbout(s, p) }
     p.term.onData((d) => p.agent.input(d))
     // Cambió el espacio del panel (girar el teléfono, redimensionar, aparecer o colapsar el panel
     // de consolas, mover un divisor): se le dice al agente, que lo aplica solo si el tamaño es de
@@ -555,8 +565,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   function rows (c, i, mine) {
     const [first, ...more] = linesOf(c)
     const head = `${c.id === mine ? '● ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
-    return `<span>${head}</span>` + more.map((l) => `<span>${esc(l)}</span>`).join('')
+    return `<span>${head}</span>` + more.map((l) => `<span>${esc(l)}</span>`).join('') + (noteLine(c) ? `<span class="note" data-testid="panel-note">${esc(noteLine(c))}</span>` : '')
   }
+
+  /** La primera línea de la nota de una consola: lo que el panel enseña de «de qué va». */
+  const noteLine = (c) => (c.note || '').split('\n').map((l) => l.trim()).find(Boolean) || ''
 
   /**
    * Una ruta para el panel: lo que importa es la carpeta final, así que se recorta POR LA
@@ -647,7 +660,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c) + (c.note ? '\n\n' + c.note : ''))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
@@ -660,6 +673,89 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         </div>`).join('')}`
     }
     placeArrow(p)
+    renderAbout(s, p)
+  }
+
+  // ---- La tarjeta «de qué va»: el título de la consola y su nota, flotando arriba a la derecha ----
+
+  const SS_ABOUT = 'dotrino-terminal:about-folded'
+  let aboutFolded = (() => { try { return localStorage.getItem(SS_ABOUT) === '1' } catch { return false } })()
+
+  /** La consola del panel, con lo último que dijo el agente de ella (`meta` llega antes que la lista). */
+  function aboutOf (s, p) {
+    const id = p.agent?.consoleId
+    if (!id) return null
+    return p.meta?.id === id ? p.meta : current(s, p)?.c || null
+  }
+
+  function renderAbout (s, p) {
+    const box = p.about
+    if (!box) return
+    const c = aboutOf(s, p)
+    if (!c) { box.hidden = true; p.editing = null; return }
+    // A media edición no se repinta: se llevaría lo que se está escribiendo. Sí si cambió de consola.
+    if (p.editing) { if (p.editing === c.id) return; p.editing = null }
+    box.hidden = false
+    box.classList.toggle('folded', aboutFolded)
+    if (aboutFolded) {
+      box.innerHTML = `<button class="about-btn" data-a="show" data-testid="about-show" title="${esc(t('about_show'))}" aria-label="${esc(t('about_show'))}" aria-expanded="false">i</button>`
+      return
+    }
+    const n = current(s, p)?.n ?? c.n ?? ''
+    const note = c.note || ''
+    box.innerHTML = `
+      <div class="about-head">
+        <b class="about-n">${esc(String(n))}</b>
+        <span class="about-title" data-testid="about-title">${esc(c.title || t('about_untitled'))}</span>
+        <button class="about-btn" data-a="hide" data-testid="about-hide" title="${esc(t('about_hide'))}" aria-label="${esc(t('about_hide'))}" aria-expanded="true">–</button>
+      </div>
+      <div class="about-note${note ? '' : ' empty'}" data-testid="about-note">${esc(note || t('about_empty'))}</div>
+      <div class="about-row"><span class="about-msg" data-testid="about-msg"></span><button class="about-act" data-a="edit" data-testid="about-edit">${esc(t(note ? 'about_edit' : 'about_add'))}</button></div>`
+  }
+
+  function wireAbout (s, p) {
+    const box = p.about
+    const done = () => { p.editing = null; renderAbout(s, p); try { p.term?.focus() } catch {} }
+    const save = async () => {
+      const id = p.editing
+      const text = box.querySelector('textarea').value.replace(/\s+$/, '')
+      const msg = box.querySelector('.about-msg')
+      try {
+        const c = await p.agent.note(id, text)
+        if (p.agent.consoleId === c.id) p.meta = c
+        done(); refresh(s)
+      } catch (e) {
+        // Lo escrito se queda en la caja: un fallo no se lleva la nota.
+        msg.textContent = t(e.code === 'timeout' ? 'about_old' : 'about_fail')
+      }
+    }
+    box.addEventListener('click', (e) => {
+      const a = e.target.closest('button')?.dataset.a; if (!a) return
+      if (a === 'hide' || a === 'show') {
+        aboutFolded = a === 'hide'
+        try { localStorage.setItem(SS_ABOUT, aboutFolded ? '1' : '0') } catch {}
+        for (const x of sessions) for (const q of x.panes) renderAbout(x, q)
+        return
+      }
+      if (a === 'cancel') return done()
+      if (a === 'save') return save()
+      if (a === 'edit') {
+        const c = aboutOf(s, p); if (!c) return
+        p.editing = c.id
+        box.querySelector('.about-note').outerHTML = `<textarea class="about-text" data-testid="about-text" maxlength="4000" aria-label="${esc(t('about_title'))}" placeholder="${esc(t('about_ph'))}"></textarea>`
+        box.querySelector('.about-row').innerHTML = `<span class="about-msg" data-testid="about-msg"></span><button class="about-act" data-a="cancel" data-testid="about-cancel">${esc(t('about_cancel'))}</button><button class="about-act primary" data-a="save" data-testid="about-save">${esc(t('about_save'))}</button>`
+        const ta = box.querySelector('textarea')
+        ta.value = c.note || ''
+        ta.focus()
+      }
+    })
+    // Ctrl+Enter guarda, Esc cancela; lo tecleado en la nota no llega a la consola.
+    box.addEventListener('keydown', (e) => {
+      if (!p.editing) return
+      e.stopPropagation()
+      if (e.key === 'Escape') { e.preventDefault(); done() }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save() }
+    })
   }
 
   async function refresh (s) {

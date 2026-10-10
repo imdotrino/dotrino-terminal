@@ -167,6 +167,12 @@ export class AgentClient {
    */
   async move (id, before = null) { return (await this._ask({ type: 'move', id, before }, 'consoles', 5000)).list }
 
+  /**
+   * La nota de la consola `id` (de qué va): con `text` la cambia, sin él solo la lee. Devuelve la
+   * consola, como en `list` (agente ≥ 0.36; uno anterior no contesta y esto lanza `timeout`).
+   */
+  async note (id, text) { return (await this._ask({ type: 'note', id, ...(typeof text === 'string' ? { text } : {}) }, 'noted', 5000)).console }
+
   /** Suelta la consola (sigue viva en la máquina) y corta la conexión. */
   async disconnect () {
     try { if (this.rc.key && this.consoleId) await this.rc.send({ type: 'detach' }) } catch (_) {}

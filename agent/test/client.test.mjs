@@ -179,3 +179,42 @@ test('`exit` cierra la consola, no la ventana: pasa a otra que nadie mira y, sin
     fs.rmSync(home, { recursive: true, force: true })
   }
 })
+
+test('`dotrino-terminal note` DENTRO de una consola cambia la nota de ESA consola, sin decirle cuál', async () => {
+  const { connectLocal } = await import('../local.js')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dtc-'))
+  const dir = path.join(home, 'terminal-agent/p')
+  fs.mkdirSync(dir, { recursive: true })
+  const env = { ...process.env, DOTRINO_AGENT_HOME: home, DOTRINO_NO_UPDATE_NOTICE: '1', SHELL: '/bin/sh' }
+  delete env.DOTRINO_TERMINAL_CONSOLE; delete env.DOTRINO_TERMINAL_PROFILE_DIR; delete env.DOTRINO_TERMINAL_HOLD
+  const term = pty.spawn(process.execPath, [CLIENT, 'open', '--name', 'p'], { cols: 100, rows: 24, env })
+  let out = ''
+  term.onData((d) => { out += d })
+  const until = async (fn, ms = 10000) => { const t = Date.now() + ms; while (Date.now() < t) { if (await fn()) return true; await sleep(50) } return false }
+  const notes = async () => {
+    const conn = await connectLocal(dir)
+    const list = await new Promise((resolve) => { conn.on('message', (m) => { if (m.type === 'consoles') resolve(m.list) }); conn.send({ type: 'list' }) })
+    conn.close()
+    return list.map((c) => c.note)
+  }
+  const run = `'${process.execPath}' '${CLIENT}'`
+  try {
+    term.write('echo LISTA-$((1+1))\r')
+    assert.ok(await until(() => out.includes('LISTA-2')), 'la consola arranca')
+    term.write(`${run} note migrando el login\r`)
+    assert.ok(await until(async () => (await notes())[0] === 'migrando el login'), 'la nota queda en la consola')
+    term.write(`${run} note --add 'falta: pruebas'\r`)
+    assert.ok(await until(async () => (await notes())[0] === 'migrando el login\nfalta: pruebas'), '--add suma una línea')
+    out = ''
+    term.write(`echo "[$(${run} note | tr '\\n' '|')]"\r`)
+    assert.ok(await until(() => out.includes('[migrando el login|falta: pruebas|]')), 'sin texto, la enseña')
+    term.write(`printf 'desde stdin' | ${run} note -\r`)
+    assert.ok(await until(async () => (await notes())[0] === 'desde stdin'), '«-» la lee de la entrada')
+    term.write(`${run} note --clear\r`)
+    assert.ok(await until(async () => (await notes())[0] === ''), '--clear la borra')
+  } finally {
+    term.kill()
+    try { process.kill(Number(fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8').trim())) } catch (_) {}
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})

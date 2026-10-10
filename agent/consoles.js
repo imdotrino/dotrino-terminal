@@ -43,6 +43,8 @@ const MIN_TASK_MS = 3000   // menos que esto no fue «una tarea»: no se marca c
 // Cerrar una consola: SIGHUP al momento y, si la shell sigue viva, SIGTERM y luego SIGKILL.
 export const KILL_TERM_MS = 1500
 export const KILL_KILL_MS = 3000
+/** Lo más largo que puede ser la nota de una consola. Viaja con cada `info`: tiene que ser corta. */
+export const NOTE_MAX = 4000
 
 /**
  * La carpeta en la que está AHORA el proceso de una consola (la shell), con `~` por la carpeta
@@ -78,6 +80,9 @@ class Console {
     this.pty = pty
     this.origin = origin              // 'local' (una ventana de esta máquina) | 'remote' (otro aparato)
     this.title = ''                   // el que pone la shell (OSC 0/2), para reconocerla en la lista
+    // DE QUÉ VA esta consola: una nota libre que escribe la persona desde cualquier pantalla, o el
+    // programa que corre dentro (`dotrino-terminal note`). En memoria, como todo lo de la consola.
+    this.note = ''
     this.cols = cols
     this.rows = rows
     this.createdAt = Date.now()
@@ -139,7 +144,15 @@ class Console {
     this._meta()
   }
 
-  /** Avisa a todos los que miran de que cambió quién mira o el título. */
+  /** Cambia la nota. Lo ve al momento quien mira la consola; los demás, en la lista. */
+  setNote (text) {
+    const note = String(text ?? '').slice(0, NOTE_MAX)
+    if (note === this.note) return
+    this.note = note
+    this._meta()
+  }
+
+  /** Avisa a todos los que miran de que cambió quién mira, el título o la nota. */
   _meta () {
     const info = this.info()
     for (const v of this.viewers) v.onMeta?.(info)
@@ -250,7 +263,7 @@ class Console {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
     const d = this.holder
     const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null } : null
-    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, note: this.note, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 
@@ -276,8 +289,9 @@ export function isTyped (data) { return String(data).replace(REPORTS, '') !== ''
 /** Las consolas de este agente. */
 export class ConsoleHub {
   /**
-   * @param {{ spawn:(opts:{cols:number,rows:number,cwd:string|null})=>any }} opts
-   *   `spawn` lanza la shell (un PTY con `onData`, `onExit`, `write`, `resize`, `kill`).
+   * @param {{ spawn:(opts:{cols:number,rows:number,cwd:string|null,id:string})=>any }} opts
+   *   `spawn` lanza la shell (un PTY con `onData`, `onExit`, `write`, `resize`, `kill`). `id` es el de
+   *   la consola: va en el entorno de la shell para que lo que corre dentro sepa cuál es la suya.
    */
   constructor ({ spawn, quietMs = QUIET_MS }) {
     this._spawn = spawn
@@ -295,7 +309,7 @@ export class ConsoleHub {
     const used = new Set([...this.consoles.values()].map((c) => c.n))
     let n = 1
     while (used.has(n)) n++
-    const pty = this._spawn({ cols, rows, cwd })
+    const pty = this._spawn({ cols, rows, cwd, id })
     const c = new Console({ id, n, pty, cols, rows, origin, quietMs: this._quietMs })
     pty.onData((d) => c._out(d))
     pty.onExit(({ exitCode }) => {
