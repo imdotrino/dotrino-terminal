@@ -210,6 +210,13 @@ test('`dotrino-terminal note` DENTRO de una consola cambia la nota de ESA consol
     assert.ok(await until(() => out.includes('[migrando el login|falta: pruebas|]')), 'sin texto, la enseña')
     term.write(`printf 'desde stdin' | ${run} note -\r`)
     assert.ok(await until(async () => (await notes())[0] === 'desde stdin'), '«-» la lee de la entrada')
+    // --task: la tarea del programa va arriba, marcada, y lo de la persona no se toca.
+    term.write(`${run} note 'llamar a Ana' && ${run} note --task 'migrando el login'\r`)
+    assert.ok(await until(async () => (await notes())[0] === '▸ migrando el login\nllamar a Ana'), '--task se pone arriba y deja la nota personal')
+    term.write(`printf 'pruebas\\nfalta: desplegar' | ${run} note --task -\r`)
+    assert.ok(await until(async () => (await notes())[0] === '▸ pruebas\n▸ falta: desplegar\nllamar a Ana'), 'otra tarea reemplaza SOLO las líneas marcadas')
+    term.write(`${run} note --task ''\r`)
+    assert.ok(await until(async () => (await notes())[0] === 'llamar a Ana'), "--task '' quita la tarea y deja lo demás")
     term.write(`${run} note --clear\r`)
     assert.ok(await until(async () => (await notes())[0] === ''), '--clear la borra')
   } finally {

@@ -60,6 +60,8 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal note <texto>              la reemplaza («-» la lee de la entrada estándar)
   dotrino-terminal note --add <texto>        le añade una línea
   dotrino-terminal note --clear              la borra
+  dotrino-terminal note --task <texto>       pone la tarea en curso (líneas «▸ », arriba) y NO toca
+                                             lo demás: es la que usa un programa; --task '' la quita
                                              (--id <id> para otra consola; --json para leerla una máquina)
   dotrino-terminal profiles [--json]         los perfiles de esta máquina
   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
@@ -84,6 +86,8 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal note <text>               replace it ("-" reads it from standard input)
   dotrino-terminal note --add <text>         append a line
   dotrino-terminal note --clear              clear it
+  dotrino-terminal note --task <text>        set the task in progress ("▸ " lines, on top) WITHOUT
+                                             touching the rest: the one a program uses; --task '' removes it
                                              (--id <id> for another console; --json for a machine to read)
   dotrino-terminal profiles [--json]         this machine's profiles
   dotrino-terminal link [--name <n>]         link a profile with your vault
@@ -388,12 +392,15 @@ async function list (conn) {
  * agente pone su id en `DOTRINO_TERMINAL_CONSOLE`), que es como la cambia un programa desde dentro.
  * No levanta ningún agente: sin agente no hay consola a la que ponerle nota.
  */
+/** La marca de las líneas que pone un programa con `note --task`. */
+const TASK_MARK = '▸ '
+
 async function note () {
   const id = opt('--id') || process.env.DOTRINO_TERMINAL_CONSOLE
   if (!id) die(t('no sé de qué consola: esta shell no corre dentro de Dotrino Terminal. Usa --id <id> (mira «dotrino-terminal ls»).', 'no console to act on: this shell is not running inside Dotrino Terminal. Use --id <id> (see "dotrino-terminal ls").'))
   // Dentro de una consola, el perfil es el de esa consola, no el `default`.
   const dir = opt('--dir') || (opt('--name') ? dataDir(opt('--name')) : process.env.DOTRINO_TERMINAL_PROFILE_DIR || dataDir())
-  const valued = new Set(['--id', '--dir', '--name', '--add'])
+  const valued = new Set(['--id', '--dir', '--name', '--add', '--task'])
   const words = []
   for (let i = 1; i < args.length; i++) {
     if (valued.has(args[i])) { i++; continue }
@@ -402,6 +409,7 @@ async function note () {
   const stdin = () => fs.readFileSync(0, 'utf8').replace(/\n+$/, '')
   const given = words.length ? (words.length === 1 && words[0] === '-' ? stdin() : words.join(' ')) : null
   const add = opt('--add') === '-' ? stdin() : opt('--add')
+  const task = opt('--task') === '-' ? stdin() : opt('--task')
   let conn
   try { conn = await connectLocal(dir) } catch (e) {
     if (e.code !== 'ENOAGENT') throw e
@@ -415,7 +423,14 @@ async function note () {
     return r.console
   }
   let c
-  if (args.includes('--clear')) c = await ask({ type: 'note', id, text: '' })
+  if (task !== undefined) {
+    // LA TAREA ES DEL PROGRAMA, LO DEMÁS ES DE LA PERSONA. Las líneas de la tarea llevan su marca
+    // y van arriba; cambiar la tarea quita las marcadas de antes y deja el resto TAL CUAL, línea
+    // por línea. Así un agente de IA no puede pisar una nota personal ni por descuido.
+    const kept = ((await ask({ type: 'note', id })).note || '').split('\n').filter((l) => !l.startsWith(TASK_MARK))
+    const mine = task.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => TASK_MARK + l)
+    c = await ask({ type: 'note', id, text: [...mine, ...kept].join('\n').replace(/^\n+|\n+$/g, '') })
+  } else if (args.includes('--clear')) c = await ask({ type: 'note', id, text: '' })
   else if (add !== undefined) {
     const before = (await ask({ type: 'note', id })).note || ''
     c = await ask({ type: 'note', id, text: before ? `${before}\n${add}` : add })

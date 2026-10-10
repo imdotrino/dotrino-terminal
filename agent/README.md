@@ -94,7 +94,11 @@ dotrino-terminal note                 # la enseña
 dotrino-terminal note "texto"         # la reemplaza («-» la lee de la entrada estándar)
 dotrino-terminal note --add "línea"   # le añade una línea
 dotrino-terminal note --clear         # la borra
+dotrino-terminal note --task "tarea"  # la tarea en curso (líneas «▸ », arriba) sin tocar lo demás
 ```
+
+`--task` es la forma que usa un programa: reemplaza solo sus líneas marcadas y deja las notas de
+la persona tal cual.
 
 Sin `--id`, es la consola en la que corre la orden: el agente pone su id en
 `DOTRINO_TERMINAL_CONSOLE`. Vive en memoria, como la consola: se va con ella. Hasta 4000 caracteres.
