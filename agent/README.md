@@ -44,6 +44,8 @@ dotrino-terminal --name casa             # en el agente del perfil «casa»
 dotrino-terminal ls                      # las consolas abiertas: id, origen, título, quién mira
 dotrino-terminal attach <id>             # retomar una
 dotrino-terminal kill <id>
+dotrino-terminal machines [--json]       # las OTRAS máquinas de la cuenta que están encendidas, y sus consolas
+dotrino-terminal --machine <id|nombre>   # abrir / attach / ls / kill, pero en otra máquina (≥ 0.38)
 dotrino-terminal profiles [--json]       # los perfiles (agentes con nombre) de esta máquina
 dotrino-terminal link [--name <n>]       # enlazar un perfil con tu bóveda
 dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para su agente; mismo aparato)
@@ -57,6 +59,16 @@ escritorio lo manda al ganar el foco). `--tag <t>` presenta la ventana en la lis
 título. Sin enlace el agente atiende solo a las ventanas locales; al enlazarlo
 (`dotrino-terminal link`) enciende la parte remota sin reiniciarse. La app de escritorio
 (`desktop/` del repo) es una ventana nativa que corre este mismo cliente.
+
+**Las consolas de las otras máquinas** (`far.js`, ≥ 0.38). El agente de esta máquina hace de
+CLIENTE de los otros agentes de la cuenta, con su propio enlace (`clientLink` de
+`@dotrino/remote-agent`): es un aparato del acta y entra con lo que el acta le reconozca
+(`sign`) y con la clave de la otra máquina si la tiene. Por el socket local se suman tres
+mensajes: `{ type:'machines' }` (qué máquinas hay y sus consolas; contesta de memoria y
+refresca por detrás), `{ type:'via', machine }` como PRIMER mensaje (la conexión pasa a hablar
+con esa máquina, con el mismo protocolo) y `{ type:'far', machine, msg }` (una orden suelta).
+La clave de una máquina se recuerda solo en memoria, cuando una ventana la escribió bien.
+Solo esta máquina necesita la 0.38: las otras atienden como a cualquier aparato.
 
 `dotrino-terminal vscode` escribe el perfil de terminal «Dotrino» en el `settings.json` de VS Code,
 VS Code Insiders, VSCodium y Cursor (los que haya, Linux y macOS) y lo deja por defecto; conserva

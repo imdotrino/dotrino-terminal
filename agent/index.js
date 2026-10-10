@@ -37,6 +37,7 @@ import { dataDir, loadLink, LABEL } from './link.js'
 import { ConsoleHub, REPLAY_CHUNK, isTyped } from './consoles.js'
 import { listenLocal } from './local.js'
 import { makeGate } from './access.js'
+import { makeFar } from './far.js'
 
 const require = createRequire(import.meta.url)
 
@@ -226,6 +227,32 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
 }
 
 /**
+ * Una ventana de ESTA máquina (el socket local). Lo normal es que mire las consolas de aquí
+ * (`serveSession`); con `via` como primer mensaje pasa a mirar las de OTRA máquina de la
+ * cuenta (`far.js`), con el mismo protocolo. `machines` y `far` se atienden siempre: qué
+ * otras máquinas hay, y una orden suelta para una de ellas.
+ * Exportada para las pruebas.
+ */
+export function serveLocal (session, hub, far) {
+  const h = { message: [], close: [] }
+  const inner = { device: null, send: (p) => session.send(p), on (ev, cb) { h[ev]?.push(cb); return this } }
+  const failed = (e) => session.send({ type: 'fail', code: e.code || 'far-error', message: e.message })
+  let mode = null
+  session.on('message', (msg) => {
+    if (!msg || typeof msg !== 'object') return
+    if (mode !== 'far' && msg.type === 'machines') { far.list().then((list) => session.send({ type: 'machines', list })).catch(failed); return }
+    if (mode !== 'far' && msg.type === 'far') { far.send(msg.machine, msg.msg).catch(failed); return }
+    if (!mode) {
+      if (msg.type === 'via') { mode = 'far'; far.via(inner, msg.machine).catch(failed); return }
+      mode = 'hub'
+      serveSession(inner, hub, { origin: 'local' })
+    }
+    for (const cb of h.message) { try { cb(msg) } catch (_) {} }
+  })
+  session.on('close', () => { for (const cb of h.close) { try { cb() } catch (_) {} } })
+}
+
+/**
  * Arranca el agente: las consolas, el socket de las ventanas de esta máquina y, si la
  * máquina está enlazada con la bóveda, la parte remota (`startRemoteAgent`).
  *
@@ -258,7 +285,9 @@ export async function startAgent (opts = {}) {
         .catch((e) => console.error(`[terminal-agent] could not report the incident: ${e.message}`))
     }
   })
-  const local = await listenLocal({ dir, serve: (session) => serveSession(session, hub, { origin: 'local' }) })
+  // Las consolas de las otras máquinas de la cuenta, para las ventanas de esta (far.js).
+  const far = makeFar({ dir, loadLink: () => loadLink(dir), kind: LABEL })
+  const local = await listenLocal({ dir, serve: (session) => serveLocal(session, hub, far) })
   let stopped = false
   const startRemote = () => startRemoteAgent({
     label: LABEL,
@@ -291,7 +320,7 @@ export async function startAgent (opts = {}) {
     socket: local.path,
     get remote () { return remote },
     get machineId () { return remote?.machineId || null },
-    close: () => { stopped = true; if (watcher) clearInterval(watcher); hub.killAll(); local.close(); remote?.close() }
+    close: () => { stopped = true; if (watcher) clearInterval(watcher); hub.killAll(); far.close(); local.close(); remote?.close() }
   }
 }
 

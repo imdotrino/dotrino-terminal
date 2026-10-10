@@ -68,6 +68,13 @@ struct Launch {
 const PANEL_CLIENT: (u32, u32, u32) = (0, 11, 0);
 /// Desde qué versión entiende el cliente Ctrl+] p / u (fijar o soltar el tamaño).
 const PIN_CLIENT: (u32, u32, u32) = (0, 14, 0);
+/// El primer cliente (y agente) que sabe de las OTRAS máquinas de la cuenta (`--machine`, `machines`).
+const FAR_CLIENT: (u32, u32, u32) = (0, 38, 0);
+/// Cada cuántas lecturas del panel se pregunta por las otras máquinas (va a la red: más despacio).
+const FAR_EVERY: u32 = 3;
+/// Un agente que no contesta por las otras máquinas (anterior a la 0.38, aún sin reiniciar) se
+/// vuelve a preguntar solo cada tantas lecturas: cada pregunta sin respuesta para la ventana un instante.
+const FAR_SILENT_EVERY: u32 = 20;
 /// El primer cliente con `dotrino-terminal vscode`.
 const VSCODE_CLIENT: (u32, u32, u32) = (0, 20, 0);
 
@@ -138,6 +145,35 @@ struct ConsoleInfo {
     /// la nota. Aquí se lee y se quita, no se edita (agente ≥ 0.37).
     #[serde(default)]
     task: Option<String>,
+}
+
+/// Otra máquina de la cuenta con Dotrino Terminal encendido, tal como la cuenta el agente de
+/// esta (`machines`, agent/far.js). `consoles` es `None` si pide su clave o no contesta.
+#[derive(Debug, Clone, Deserialize)]
+struct Machine {
+    /// `AB12-CD34`, como sale en `dotrino-vault members`: con eso se la nombra (`--machine`).
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    locked: bool,
+    #[serde(default)]
+    consoles: Option<Vec<ConsoleInfo>>,
+}
+
+impl Machine {
+    fn label(&self) -> String {
+        if self.name.is_empty() { self.id.clone() } else { self.name.clone() }
+    }
+}
+
+/// Bajo qué clave se guardan las consolas que ve una ventana: las del perfil en esta máquina,
+/// o las de ese perfil en OTRA máquina.
+fn scope_key(profile: &str, machine: Option<&str>) -> String {
+    match machine {
+        Some(m) => format!("{profile}\u{1f}{m}"),
+        None => profile.to_string(),
+    }
 }
 
 /// Lo que el panel dice de una consola, cada cosa en SU línea: la máquina (`usuario@máquina`)
@@ -425,6 +461,8 @@ enum Mode {
 struct Win {
     /// `None`: sin perfil, una terminal más.
     profile: Option<String>,
+    /// La ventana mira las consolas de OTRA máquina de la cuenta (su id); `None`: las de esta.
+    machine: Option<String>,
     /// La carpeta donde abre la consola: la de quien lanzó la app (Thunar, «Abrir terminal
     /// aquí») o `--working-directory`. Una ventana nueva hereda la de la que la abrió.
     cwd: PathBuf,
@@ -453,6 +491,13 @@ struct Win {
     note_edit: Option<(String, iced::widget::text_editor::Content)>,
 }
 
+impl Win {
+    /// La clave de las consolas que ve esta ventana (ver `scope_key`).
+    fn scope(&self) -> Option<String> {
+        self.profile.as_deref().map(|p| scope_key(p, self.machine.as_deref()))
+    }
+}
+
 struct App {
     launch: Result<Launch, String>,
     profiles: Vec<Profile>,
@@ -465,8 +510,14 @@ struct App {
     font: iced_term::settings::FontSettings,
     /// Los colores: los de XFCE Terminal si los tiene (ver `terminal_palette`).
     palette: iced_term::ColorPalette,
-    /// Las consolas abiertas, por perfil, leídas del socket de su agente cada poco.
+    /// Las consolas abiertas, por perfil (y máquina, ver `scope_key`), leídas del socket de su agente cada poco.
     consoles: HashMap<String, Vec<ConsoleInfo>>,
+    /// Las otras máquinas de la cuenta, por perfil: lo último que contestó el agente.
+    far: HashMap<String, Vec<Machine>>,
+    /// Lecturas del panel hechas (para preguntar por las otras máquinas solo cada `FAR_EVERY`).
+    polls: u32,
+    /// Perfiles cuyo agente no contestó por las otras máquinas, y cuántas veces seguidas.
+    far_silent: HashMap<String, u32>,
     /// La fila del panel bajo el puntero (ventana, consola): de ahí arranca un arrastre.
     hover: Option<(window::Id, String)>,
     /// La consola que se está arrastrando en el panel para cambiarla de sitio.
@@ -540,6 +591,9 @@ enum Message {
     MouseUp,
     /// Panel lateral (clic derecho): abrir esa consola en una ventana nueva.
     OpenInNewWindow(window::Id, String),
+    /// Panel lateral, «Otras máquinas»: una ventana nueva en esa máquina, enganchada a esa
+    /// consola o (`None`) con una nueva.
+    OpenFar(window::Id, String, Option<String>),
     /// Cerrar la ventana aunque su cliente no haya terminado de soltar la consola.
     ForceClose(window::Id),
     /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
@@ -920,7 +974,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -968,11 +1022,12 @@ impl App {
     }
 
     fn open_window(&mut self, profile: Option<String>, cwd: PathBuf, command: Option<Vec<String>>) -> (window::Id, Task<Message>) {
-        self.open_window_with(profile, cwd, command, None)
+        self.open_window_with(profile, cwd, command, None, None)
     }
 
     /// Abre una ventana; con `attach`, nace enganchada a esa consola (sin abrir otra antes).
-    fn open_window_with(&mut self, profile: Option<String>, cwd: PathBuf, command: Option<Vec<String>>, attach: Option<String>) -> (window::Id, Task<Message>) {
+    /// Con `machine`, la ventana mira las consolas de esa otra máquina de la cuenta.
+    fn open_window_with(&mut self, profile: Option<String>, cwd: PathBuf, command: Option<Vec<String>>, attach: Option<String>, machine: Option<String>) -> (window::Id, Task<Message>) {
         let (id, task) = window::open(window::Settings {
             size: Size::new(960.0, 600.0),
             // El cierre lo hace la app (`Message::Close`): así sabe cuándo se fue la última
@@ -985,7 +1040,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None });
+        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -1033,10 +1088,15 @@ impl App {
                     Mode::Updating { .. } => Vec::new(),   // ya resuelto arriba: no llega aquí
                     // Engancharse a una consola que ya existe (panel lateral) o abrir una nueva.
                     Mode::Console => {
-                        let mut a = match win.attach.take() {
-                            Some(cid) => vec!["attach".to_string(), cid],
-                            None => vec!["--cwd".to_string(), win.cwd.to_string_lossy().into_owned()],
+                        let mut a = match (win.attach.take(), &win.machine) {
+                            (Some(cid), _) => vec!["attach".to_string(), cid],
+                            // En otra máquina la carpeta de aquí no existe: abre en la suya de inicio.
+                            (None, Some(_)) => Vec::new(),
+                            (None, None) => vec!["--cwd".to_string(), win.cwd.to_string_lossy().into_owned()],
                         };
+                        if let Some(m) = &win.machine {
+                            a.extend(["--machine".to_string(), m.clone()]);
+                        }
                         a.extend(["--name".to_string(), win.profile.clone().unwrap_or_default(), "--tag".to_string(), win.tag.clone()]);
                         a
                     }
@@ -1118,7 +1178,7 @@ impl App {
     /// ¿Tiene ESTA ventana fijado el tamaño de la consola que muestra?
     fn pinned_here(&self, id: window::Id) -> bool {
         let (Some(win), Some(cid)) = (self.windows.get(&id), self.mine(id)) else { return false };
-        let Some(c) = win.profile.as_ref().and_then(|p| self.consoles.get(p)).and_then(|l| l.iter().find(|c| c.id == cid)) else { return false };
+        let Some(c) = win.scope().and_then(|s| self.consoles.get(&s)).and_then(|l| l.iter().find(|c| c.id == cid)) else { return false };
         c.size_by.as_ref().is_some_and(|b| b.pinned && b.tag.as_deref() == Some(win.tag.as_str()))
     }
 
@@ -1126,7 +1186,7 @@ impl App {
     /// `None` si lo tiene esta ventana o todavía no se sabe: entonces ocupa toda la ventana.
     fn followed_size(&self, id: window::Id) -> Option<(u32, u32)> {
         let (win, cid) = (self.windows.get(&id)?, self.mine(id)?);
-        let c = win.profile.as_ref().and_then(|p| self.consoles.get(p))?.iter().find(|c| c.id == cid)?;
+        let c = self.consoles.get(&win.scope()?)?.iter().find(|c| c.id == cid)?;
         let b = c.size_by.as_ref()?;
         if b.tag.as_deref() == Some(win.tag.as_str()) || c.cols == 0 || c.rows == 0 {
             return None;
@@ -1170,7 +1230,35 @@ impl App {
 
     /// Abre una ventana enganchada a `attach` (si hay) o con una consola nueva.
     fn open_window_on(&mut self, profile: Option<String>, cwd: PathBuf, attach: Option<String>) -> (window::Id, Task<Message>) {
-        self.open_window_with(profile, cwd, None, attach)
+        self.open_window_with(profile, cwd, None, attach, None)
+    }
+
+    /// ¿Sabe el cliente instalado de las otras máquinas de la cuenta?
+    fn far_ready(&self) -> bool {
+        self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= FAR_CLIENT)
+    }
+
+    /// Una orden para el agente sobre una consola de la ventana: al de aquí o, si la ventana mira
+    /// otra máquina, a aquella (el agente de aquí la reenvía).
+    fn tell(&self, id: window::Id, msg: serde_json::Value) {
+        let Some(win) = self.windows.get(&id) else { return };
+        let Some(dir) = win.profile.as_deref().and_then(|p| self.profile_dir(p)) else { return };
+        let msg = match &win.machine {
+            Some(m) => serde_json::json!({ "type": "far", "machine": m, "msg": msg }),
+            None => msg,
+        };
+        agent_send(&dir, &msg);
+    }
+
+    /// Las consolas que ve la ventana, AHORA. Las de esta máquina se le preguntan al agente en
+    /// el momento; las de otra, lo último que se supo (preguntar sale a la red).
+    fn live_list(&self, id: window::Id) -> Option<Vec<ConsoleInfo>> {
+        let win = self.windows.get(&id)?;
+        if win.machine.is_some() {
+            return self.consoles.get(&win.scope()?).cloned();
+        }
+        let p = win.profile.as_deref()?;
+        self.profile_dir(p).and_then(|d| agent_list(&d)).or_else(|| self.consoles.get(p).cloned())
     }
 
     fn profile_dir(&self, name: &str) -> Option<PathBuf> {
@@ -1186,6 +1274,41 @@ impl App {
             let list = self.profile_dir(&p).and_then(|dir| agent_list(&dir)).unwrap_or_default();
             fresh.insert(p, list);
         }
+        // LAS OTRAS MÁQUINAS de la cuenta: lo sabe el agente de aquí, que les pregunta por detrás.
+        // Va a la red, así que se pregunta más despacio; entre medias vale lo último que dijo.
+        self.polls = self.polls.wrapping_add(1);
+        if self.far_ready() {
+            let profiles: Vec<String> = fresh.keys().cloned().collect();
+            for p in &profiles {
+                let silent = self.far_silent.get(p).copied().unwrap_or(0);
+                let every = if silent >= 2 { FAR_SILENT_EVERY } else { FAR_EVERY };
+                if self.polls % every != 1 % every {
+                    continue;
+                }
+                match self.profile_dir(p).map(|dir| agent_machines(&dir)) {
+                    Some(Far::List(list)) => {
+                        self.far.insert(p.clone(), list);
+                        self.far_silent.remove(p);
+                    }
+                    // Sin enlazar, o el agente dijo por qué no: no hay otras máquinas que enseñar.
+                    Some(Far::No) => {
+                        self.far.remove(p);
+                        self.far_silent.remove(p);
+                    }
+                    // No contestó a tiempo: se deja lo que había (la primera vez tarda, sale a la red).
+                    Some(Far::Silent) => *self.far_silent.entry(p.clone()).or_insert(0) += 1,
+                    None => {}
+                }
+            }
+            self.far.retain(|p, _| profiles.contains(p));
+            for (p, machines) in &self.far {
+                for m in machines {
+                    if let Some(list) = &m.consoles {
+                        fresh.insert(scope_key(p, Some(&m.id)), list.clone());
+                    }
+                }
+            }
+        }
         // Lo que se mandó cerrar no vuelve al panel; y cuando el agente ya no lo tiene, se olvida.
         let alive_now: std::collections::HashSet<String> = fresh.values().flatten().map(|c| c.id.clone()).collect();
         self.dying.retain(|id| alive_now.contains(id));
@@ -1200,11 +1323,15 @@ impl App {
         self.seen.retain(|id, _| alive_now.contains(id));
         self.mark_seen();
         // Lo marcado a mano se suelta en cuanto la lista lo dice (o la consola ya no está).
-        let tags: Vec<(window::Id, String, Option<String>, Option<String>)> =
-            self.windows.iter().map(|(id, w)| (*id, w.tag.clone(), w.profile.clone(), w.showing.clone())).collect();
-        for (id, tag, profile, showing) in tags {
+        let tags: Vec<(window::Id, String, Option<String>, Option<String>, bool)> =
+            self.windows.iter().map(|(id, w)| (*id, w.tag.clone(), w.scope(), w.showing.clone(), w.machine.is_some())).collect();
+        for (id, tag, scope, showing, is_far) in tags {
             let Some(want) = showing else { continue };
-            let list = profile.and_then(|p| self.consoles.get(&p).cloned()).unwrap_or_default();
+            // De otra máquina todavía no se sabe nada (su lista tarda en llegar): se deja marcada.
+            if is_far && !scope.as_ref().is_some_and(|s| self.consoles.contains_key(s)) {
+                continue;
+            }
+            let list = scope.and_then(|p| self.consoles.get(&p).cloned()).unwrap_or_default();
             let confirmed = list.iter().any(|c| c.id == want && c.watchers.iter().any(|w| w.tag.as_deref() == Some(tag.as_str())));
             if confirmed || !list.iter().any(|c| c.id == want) {
                 if let Some(w) = self.windows.get_mut(&id) {
@@ -1236,7 +1363,7 @@ impl App {
         if let Some(s) = &win.showing {
             return Some(s.clone());
         }
-        let list = self.consoles.get(win.profile.as_ref()?)?;
+        let list = self.consoles.get(&win.scope()?)?;
         list.iter().find(|c| c.watchers.iter().any(|w| w.tag.as_deref() == Some(win.tag.as_str()))).map(|c| c.id.clone())
     }
 
@@ -1244,7 +1371,7 @@ impl App {
     fn my_console(&self, id: window::Id) -> Option<&ConsoleInfo> {
         let mine = self.mine(id)?;
         let win = self.windows.get(&id)?;
-        self.consoles.get(win.profile.as_ref()?)?.iter().find(|c| c.id == mine)
+        self.consoles.get(&win.scope()?)?.iter().find(|c| c.id == mine)
     }
 
     /// «De qué va»: una tarjeta translúcida, arriba a la derecha de la consola, con su título y su
@@ -1713,12 +1840,9 @@ impl App {
             }
             Message::TaskClear(id) => {
                 let Some(cid) = self.my_console(id).map(|c| c.id.clone()) else { return Task::none() };
-                let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
-                if let Some(profile) = profile {
-                    if let Some(dir) = self.profile_dir(&profile) {
-                        agent_send(&dir, &serde_json::json!({ "type": "note", "id": cid, "task": "" }));
-                    }
-                    if let Some(c) = self.consoles.get_mut(&profile).and_then(|l| l.iter_mut().find(|c| c.id == cid)) {
+                self.tell(id, serde_json::json!({ "type": "note", "id": cid, "task": "" }));
+                if let Some(scope) = self.windows.get(&id).and_then(|w| w.scope()) {
+                    if let Some(c) = self.consoles.get_mut(&scope).and_then(|l| l.iter_mut().find(|c| c.id == cid)) {
                         c.task = Some(String::new());
                     }
                 }
@@ -1727,13 +1851,10 @@ impl App {
             Message::NoteSave(id) => {
                 let Some((cid, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.take()) else { return Task::none() };
                 let note = content.text().trim_end().to_string();
-                let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
-                if let Some(profile) = profile {
-                    if let Some(dir) = self.profile_dir(&profile) {
-                        agent_send(&dir, &serde_json::json!({ "type": "note", "id": cid, "text": note }));
-                    }
-                    // Se ve ya, sin esperar a la próxima lectura de la lista.
-                    if let Some(c) = self.consoles.get_mut(&profile).and_then(|l| l.iter_mut().find(|c| c.id == cid)) {
+                self.tell(id, serde_json::json!({ "type": "note", "id": cid, "text": note }));
+                // Se ve ya, sin esperar a la próxima lectura de la lista.
+                if let Some(scope) = self.windows.get(&id).and_then(|w| w.scope()) {
+                    if let Some(c) = self.consoles.get_mut(&scope).and_then(|l| l.iter_mut().find(|c| c.id == cid)) {
                         c.note = Some(note);
                     }
                 }
@@ -1764,13 +1885,7 @@ impl App {
                 // El panel puede ir un instante por detrás del agente (se acaba de cerrar esa
                 // consola): se le pregunta AHORA. Si ya no existe, no se cambia a nada: se
                 // refresca el panel y la ventana sigue en la suya.
-                let exists = self
-                    .windows
-                    .get(&id)
-                    .and_then(|w| w.profile.clone())
-                    .and_then(|p| self.profile_dir(&p))
-                    .and_then(|dir| agent_list(&dir))
-                    .is_some_and(|l| l.iter().any(|c| c.id == cid));
+                let exists = self.live_list(id).is_some_and(|l| l.iter().any(|c| c.id == cid));
                 if !exists {
                     log(&format!("show-console: {cid} is gone; panel refreshed"));
                     self.poll_consoles();
@@ -1781,9 +1896,14 @@ impl App {
             Message::NewConsole(id) => self.switch_to(id, Pending::New),
             Message::OpenInNewWindow(id, cid) => {
                 let Some(win) = self.windows.get(&id) else { return Task::none() };
+                let (profile, cwd, machine) = (win.profile.clone(), win.cwd.clone(), win.machine.clone());
+                // La ventana nueva nace ya enganchada a esa consola (de la misma máquina que esta).
+                self.open_window_with(profile, cwd, None, Some(cid), machine).1
+            }
+            Message::OpenFar(id, machine, cid) => {
+                let Some(win) = self.windows.get(&id) else { return Task::none() };
                 let (profile, cwd) = (win.profile.clone(), win.cwd.clone());
-                // La ventana nueva nace ya enganchada a esa consola.
-                self.open_window_on(profile, cwd, Some(cid)).1
+                self.open_window_with(profile, cwd, None, cid, Some(machine)).1
             }
             Message::KillConsole(id, cid) => {
                 // ¿Es la de esta ventana? Se pregunta ANTES de sacarla del panel: «la mía» se
@@ -1802,10 +1922,8 @@ impl App {
                     // La primera que NO esté abierta en otra pantalla; solo si todas lo están, la
                     // primera que haya (la misma regla del cliente cuando se la cierra otra pantalla).
                     // Preguntado al agente en el momento: la lista guardada puede tener 1,5 s.
-                    let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
-                    let list: Vec<ConsoleInfo> = profile
-                        .as_deref()
-                        .and_then(|p| self.profile_dir(p).and_then(|d| agent_list(&d)).or_else(|| self.consoles.get(p).cloned()))
+                    let list: Vec<ConsoleInfo> = self
+                        .live_list(id)
                         .unwrap_or_default()
                         .into_iter()
                         .filter(|c| !self.dying.contains(&c.id))
@@ -1839,23 +1957,19 @@ impl App {
                 // Soltada sobre OTRA fila: toma su sitio. El orden es de la máquina (lo ven igual
                 // las demás ventanas y aparatos); aquí se adelanta para que no salte al releer.
                 let Some(d) = self.drag.take() else { return Task::none() };
-                let Some(profile) = self.windows.get(&d.win).and_then(|w| w.profile.clone()) else { return Task::none() };
-                let Some(list) = self.consoles.get_mut(&profile) else { return Task::none() };
+                let Some(scope) = self.windows.get(&d.win).and_then(|w| w.scope()) else { return Task::none() };
+                let Some(list) = self.consoles.get_mut(&scope) else { return Task::none() };
                 let ids: Vec<&str> = list.iter().map(|c| c.id.as_str()).collect();
                 let Some(before) = drop_target(&ids, &d.id, &d.over) else { return Task::none() };
                 let from = list.iter().position(|c| c.id == d.id).expect("drop_target found it");
                 let moved = list.remove(from);
                 let at = before.as_ref().and_then(|b| list.iter().position(|c| &c.id == b)).unwrap_or(list.len());
                 list.insert(at, moved);
-                if let Some(dir) = self.profile_dir(&profile) {
-                    agent_send(&dir, &serde_json::json!({ "type": "move", "id": d.id, "before": before }));
-                }
+                self.tell(d.win, serde_json::json!({ "type": "move", "id": d.id, "before": before }));
                 Task::none()
             }
             Message::KillNow(id, cid) => {
-                if let Some(dir) = self.windows.get(&id).and_then(|w| w.profile.clone()).and_then(|p| self.profile_dir(&p)) {
-                    agent_send(&dir, &serde_json::json!({ "type": "kill", "id": cid }));
-                }
+                self.tell(id, serde_json::json!({ "type": "kill", "id": cid }));
                 // Fuera del panel YA: el agente tarda un instante en cerrarla, y preguntarle en
                 // este mismo momento la devolvía — quedaba una entrada de una consola muerta.
                 for list in self.consoles.values_mut() {
@@ -2091,7 +2205,10 @@ impl App {
     /// El panel lateral: un botón por cada consola abierta en el perfil de la ventana.
     fn side<'a>(&'a self, id: window::Id, profile: &str) -> Element<'a, Message> {
         let mine = self.mine(id);
-        let list = self.consoles.get(profile).cloned().unwrap_or_default();
+        let here = self.windows.get(&id).and_then(|w| w.machine.clone());
+        let list = self.consoles.get(&scope_key(profile, here.as_deref())).cloned().unwrap_or_default();
+        // Las OTRAS máquinas de la cuenta (todas menos la que ya mira esta ventana).
+        let others: Vec<&Machine> = self.far.get(profile).map(|l| l.iter().filter(|m| here.as_deref() != Some(m.id.as_str())).collect()).unwrap_or_default();
         let my_tag = self.windows.get(&id).map(|w| w.tag.clone()).unwrap_or_default();
         let panel_style = |theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() };
         // Colapsado: una franja estrecha, un botón numerado por consola (el título, al pasar).
@@ -2168,6 +2285,28 @@ impl App {
                 let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(arrowed(draggable(&c.id, tipped, Length::Fixed(24.0)), is_mine));
             }
+            // Las otras máquinas: sus iniciales (clic: consola nueva allí) y un botón por consola.
+            // Todo abre en una ventana NUEVA: esta sigue en su máquina.
+            for m in &others {
+                let label = m.label();
+                let state = if m.locked { t("pide su clave", "asks for its code") } else if m.consoles.is_none() { t("no contesta", "not answering") } else { t("clic: consola nueva allí", "click: new console there") };
+                let head = button(centered(label.chars().take(2).collect::<String>(), 11))
+                    .width(24)
+                    .padding([3, 0])
+                    .style(menu_button)
+                    .on_press_maybe(act(Message::OpenFar(id, m.id.clone(), None)));
+                let head: Element<'_, Message> = iced::widget::tooltip(head, container(text(format!("{label} · {}\n{state}", m.id)).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                strip = strip.push(container(separator()).width(24));
+                strip = strip.push(container(head).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+                for (i, c) in m.consoles.iter().flatten().enumerate() {
+                    let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
+                    let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
+                    let tip = std::iter::once(label.clone()).chain([host, dir, name].into_iter().flatten()).collect::<Vec<_>>().join("\n");
+                    let b = button(centered(format!("{n}"), 12)).width(24).padding([4, 0]).style(console_button(false, c.act())).on_press_maybe(act(Message::OpenFar(id, m.id.clone(), Some(c.id.clone()))));
+                    let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                    strip = strip.push(container(b).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+                }
+            }
             // Lo justo para dos dígitos («00»): 24 px de botón en 30 de franja.
             return with_arrow_gutter(strip.into(), 30.0, iced::Padding { top: 4.0, bottom: 4.0, left: 3.0, right: 0.0 }, term_bg);
         }
@@ -2175,7 +2314,7 @@ impl App {
         let mut items = column![
             row![
                 button(text("«").size(13)).padding([0, 6]).style(menu_button).on_press(Message::CollapseSidebar(id)),
-                text(t("Consolas", "Consoles")).size(13),
+                text(match &here { Some(m) => format!("{} · {}", t("Consolas", "Consoles"), self.machine_label(profile, m)), None => t("Consolas", "Consoles") }).size(13),
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
@@ -2245,6 +2384,44 @@ impl App {
             let entry = container(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill)).padding(iced::Padding { right: 4.0, ..Default::default() });
             items = items.push(arrowed(entry.into(), is_mine));
         }
+        // LAS OTRAS MÁQUINAS de la cuenta: su nombre, «+» (consola nueva allí) y sus consolas.
+        // Todo abre en una ventana NUEVA: esta sigue en su máquina.
+        for m in &others {
+            let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
+            let state = if m.locked { Some(t("pide su clave", "asks for its code")) } else if m.consoles.is_none() { Some(t("no contesta", "not answering")) } else { None };
+            let mut head = column![text(m.label()).size(13)];
+            head = head.push(text(match state { Some(s) => format!("{} · {s}", m.id), None => m.id.clone() }).size(11).style(dim));
+            let far_head = row![
+                head.width(Length::Fill),
+                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::OpenFar(id, m.id.clone(), None))),
+            ]
+            .align_y(iced::Alignment::Center)
+            .padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 });
+            items = items.push(container(separator()).padding(iced::Padding { top: 6.0, right: ARROW_W, ..Default::default() }));
+            items = items.push(far_head);
+            for (i, c) in m.consoles.iter().flatten().enumerate() {
+                let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
+                let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
+                let mut lines = [host, dir, name].into_iter().flatten();
+                let first = lines.next().map(|l| format!("{n} · {l}")).unwrap_or_else(|| format!("{} {}", t("Consola", "Console"), n));
+                let mut label = column![text(first).size(12)];
+                for l in lines {
+                    label = label.push(text(l).size(12));
+                }
+                if let Some(line) = [c.task.as_deref(), c.note.as_deref()].into_iter().flatten().flat_map(str::lines).map(str::trim).find(|l| !l.is_empty()) {
+                    label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) }));
+                }
+                let where_ = if c.watchers.is_empty() { t("suelta", "detached") } else { t("abierta", "open") };
+                let where_ = match c.act() {
+                    Act::Busy => format!("{where_} · {}", t("trabajando", "working")),
+                    Act::Done => format!("{where_} · {}", t("terminó", "finished")),
+                    Act::Idle => where_,
+                };
+                let label = label.push(text(where_).size(11).style(dim));
+                let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(false, c.act())).on_press_maybe(act(Message::OpenFar(id, m.id.clone(), Some(c.id.clone()))));
+                items = items.push(container(pick).padding(iced::Padding { right: 4.0 + ARROW_W, ..Default::default() }));
+            }
+        }
         with_arrow_gutter(items.into(), 210.0, iced::Padding { top: 4.0, bottom: 4.0, left: 4.0, right: 0.0 }, term_bg)
     }
 
@@ -2256,10 +2433,16 @@ impl App {
             Mode::Console if win.title.is_empty() => "Dotrino Terminal".to_string(),
             Mode::Console => win.title.clone(),
         };
-        match &win.profile {
-            Some(p) => format!("{what} — {p}"),
-            None => format!("{what} — {}", t("sin perfil", "no profile")),
+        match (&win.profile, &win.machine) {
+            (Some(p), Some(m)) => format!("{what} — {} — {p}", self.machine_label(p, m)),
+            (Some(p), None) => format!("{what} — {p}"),
+            (None, _) => format!("{what} — {}", t("sin perfil", "no profile")),
         }
+    }
+
+    /// El nombre de otra máquina (el que le puso el dueño al enlazarla), o su id si no se sabe.
+    fn machine_label(&self, profile: &str, machine: &str) -> String {
+        self.far.get(profile).and_then(|l| l.iter().find(|m| m.id == machine)).map(Machine::label).unwrap_or_else(|| machine.to_string())
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -2347,6 +2530,42 @@ fn agent_list(dir: &Path) -> Option<Vec<ConsoleInfo>> {
         let v: serde_json::Value = serde_json::from_str(&line).ok()?;
         if v["type"] == "consoles" {
             return serde_json::from_value(v["list"].clone()).ok();
+        }
+    }
+}
+
+/// Lo que contestó el agente al preguntarle por las otras máquinas de la cuenta.
+enum Far {
+    List(Vec<Machine>),
+    /// Dijo que no (sin enlazar con la bóveda, p. ej.): no hay nada que enseñar.
+    No,
+    /// No contestó a tiempo: aún está preguntando a la red, o es anterior a la 0.38.
+    Silent,
+}
+
+/// Las otras máquinas de la cuenta, según el agente de este perfil. Contesta de memoria (él les
+/// pregunta por detrás), así que se le espera poco: si aún no lo sabe, la próxima vez.
+#[cfg(unix)]
+fn agent_machines(dir: &Path) -> Far {
+    use std::io::{BufRead, BufReader, Write};
+    let Ok(mut sock) = std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")) else { return Far::Silent };
+    if sock.set_read_timeout(Some(std::time::Duration::from_millis(250))).is_err() || sock.write_all(b"{\"type\":\"machines\"}\n").is_err() {
+        return Far::Silent;
+    }
+    let mut reader = BufReader::new(sock);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(n) if n > 0 => {}
+            _ => return Far::Silent,
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { return Far::Silent };
+        if v["type"] == "machines" {
+            return serde_json::from_value(v["list"].clone()).map(Far::List).unwrap_or(Far::Silent);
+        }
+        if v["type"] == "fail" {
+            return Far::No;
         }
     }
 }

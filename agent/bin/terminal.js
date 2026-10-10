@@ -6,6 +6,8 @@
  *   dotrino-terminal attach <id> [--name <n>]  se engancha a una consola que ya existe
  *   dotrino-terminal ls [--name <n>] [--json]  las consolas abiertas en el agente
  *   dotrino-terminal kill <id> [--name <n>]    cierra una consola
+ *   dotrino-terminal machines [--json]         tus OTRAS máquinas encendidas y sus consolas
+ *   dotrino-terminal … --machine <id|nombre>   lo mismo (abrir, attach, ls, kill) en otra máquina
  *   dotrino-terminal note [texto]              la nota de esta consola (de qué va): la lee o la cambia
  *   dotrino-terminal profiles [--json]         los perfiles de esta máquina (enlazados o no)
  *   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
@@ -56,6 +58,9 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal attach <id> [--name <n>]  se engancha a una consola abierta
   dotrino-terminal ls [--name <n>] [--json]  las consolas abiertas
   dotrino-terminal kill <id> [--name <n>]    cierra una consola
+  dotrino-terminal machines [--json]         tus otras máquinas encendidas y sus consolas
+  dotrino-terminal … --machine <id|nombre>   abrir, attach, ls y kill, pero en otra máquina tuya
+                                             (su id o su nombre salen en «machines»)
   dotrino-terminal note                      enseña la nota de esta consola (de qué va)
   dotrino-terminal note <texto>              la reemplaza («-» la lee de la entrada estándar)
   dotrino-terminal note --add <texto>        le añade una línea
@@ -82,6 +87,9 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal attach <id> [--name <n>]  attach to an open console
   dotrino-terminal ls [--name <n>] [--json]  list open consoles
   dotrino-terminal kill <id> [--name <n>]    close a console
+  dotrino-terminal machines [--json]         your other machines that are on, and their consoles
+  dotrino-terminal … --machine <id|name>     open, attach, ls and kill, but on another machine of yours
+                                             (its id or name show up in "machines")
   dotrino-terminal note                      show this console's note (what it is about)
   dotrino-terminal note <text>               replace it ("-" reads it from standard input)
   dotrino-terminal note --add <text>         append a line
@@ -371,6 +379,57 @@ function request (conn, msg, type) {
   })
 }
 
+/** Lo que se espera a que el agente conteste por otra máquina (descubrirla y saludarla). */
+const FAR_WAIT_MS = 40_000
+/** Una pregunta sobre las otras máquinas. Un agente anterior a la 0.38 no la entiende y calla: se dice. */
+async function farRequest (conn, msg, type) {
+  const r = await Promise.race([request(conn, msg, type), new Promise((resolve) => setTimeout(() => resolve(null), FAR_WAIT_MS))])
+  if (!r) die(t('el agente de esta máquina no contestó. Si es anterior a la 0.38 no sabe de otras máquinas: actualízalo y reinícialo.', 'this machine\'s agent did not answer. If it predates 0.38 it knows nothing about other machines: update and restart it.'))
+  return r
+}
+const farMessage = (r) => ({
+  'not-linked': t('esta máquina no está enlazada con tu bóveda, así que no ve tus otras máquinas. Enlázala con: dotrino-terminal link', 'this machine is not linked to your vault, so it cannot see your other machines. Link it with: dotrino-terminal link'),
+  'no-machine': t('no hay ninguna máquina encendida con ese id o nombre (mira «dotrino-terminal machines»).', 'no machine with that id or name is on (see "dotrino-terminal machines").'),
+  'ambiguous-machine': t('hay más de una máquina con ese nombre: usa su id (mira «dotrino-terminal machines»).', 'more than one machine has that name: use its id (see "dotrino-terminal machines").')
+}[r.code] || `${r.message} (${r.code})`)
+
+/** `dotrino-terminal machines`: las otras máquinas de la cuenta que están encendidas, y sus consolas. */
+async function machines (conn) {
+  const r = await farRequest(conn, { type: 'machines' }, 'machines')
+  if (r.type === 'fail') die(`dotrino-terminal: ${farMessage(r)}`)
+  if (args.includes('--json')) { console.log(JSON.stringify(r.list, null, 2)); return }
+  if (!r.list.length) { console.log(t('No hay otras máquinas encendidas con Dotrino Terminal.', 'No other machines are on with Dotrino Terminal.')); return }
+  for (const m of r.list) {
+    const state = m.locked ? t('pide su clave', 'asks for its code') : m.error ? t('no contesta', 'not answering') : `${m.consoles.length} ${t('consolas', 'consoles')}`
+    console.log(`${m.id}  ${m.name || ''}  ·  ${state}`)
+    for (const c of m.consoles || []) console.log(`  ${c.id}  ${age(Date.now() - c.createdAt).padStart(4)}  ${c.viewers} ${t('mirando', 'watching')}  ${c.title || ''}`)
+  }
+}
+
+/**
+ * `--machine <id|nombre>`: esta conexión pasa a hablar con OTRA máquina de la cuenta (el agente
+ * de aquí hace de puente, `far.js`). A partir de ahí todo es igual que en local. Si la otra
+ * máquina tiene clave, se pide aquí, antes de seguir.
+ */
+async function goVia (conn, ref) {
+  const r = await farRequest(conn, { type: 'via', machine: ref }, 'via')
+  if (r.type === 'fail') die(`dotrino-terminal: ${farMessage(r)}`)
+  let probe = await farRequest(conn, { type: 'list' }, 'consoles')
+  const name = r.machine.name || r.machine.id
+  while (probe.type === 'fail' && ['locked', 'bad-code', 'wait'].includes(probe.code)) {
+    if (probe.code === 'bad-code') console.error(t('Clave incorrecta.', 'Wrong code.'))
+    if (probe.code === 'wait') console.error(t(`Demasiados intentos: espera ${Math.ceil((probe.retryMs || 0) / 1000)} s.`, `Too many tries: wait ${Math.ceil((probe.retryMs || 0) / 1000)} s.`))
+    // Lo tecleado aquí es la clave, no entrada para la consola.
+    process.stdin.off('data', earlyTap)
+    early.length = 0
+    const code = await askHidden(t(`Clave de ${name}: `, `Code for ${name}: `))
+    if (!code) die(t('sin clave no se entra.', 'no code, no entry.'))
+    probe = await farRequest(conn, { type: 'unlock', code }, 'unlocked')
+    if (probe.type === 'unlocked') break
+  }
+  if (probe.type === 'fail') die(`dotrino-terminal: ${probe.message} (${probe.code})`)
+}
+
 const age = (ms) => {
   const s = Math.round(ms / 1000)
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`
@@ -469,7 +528,14 @@ function interactive (conn, first, dir) {
   const onInfo = (info) => {
     if (!info) return
     shellTitle = info.title || ''
-    const now = new Set(info.watchers.filter((w) => w.origin === 'remote').map((w) => w.device || '?'))
+    // En otra máquina (`--machine`) esta ventana es, para aquella, «otro aparato»: no se cuenta
+    // a sí misma (se reconoce por su etiqueta; sin etiqueta, es una de las que salen).
+    let far = info.watchers.filter((w) => w.origin === 'remote')
+    if (opt('--machine')) {
+      const mine = opt('--tag') ? far.findIndex((w) => w.tag === opt('--tag')) : 0
+      if (mine >= 0) far = far.filter((_, i) => i !== mine)
+    }
+    const now = new Set(far.map((w, i) => (opt('--machine') ? `${w.device || '?'}#${w.tag || i}` : w.device || '?')))
     const arrived = [...now].some((d) => !remote.has(d))
     remote = now
     if (arrived) out.write('\x07')                 // la campana: alguien entró desde fuera
@@ -627,6 +693,9 @@ try {
   const dir = opt('--dir') || dataDir(opt('--name'))
   if (cmd === 'open' || cmd === 'attach') captureEarly()
   const conn = await agent(dir)
+  const machine = opt('--machine')
+  if (cmd === 'machines') { await machines(conn); conn.close(); process.exit(0) }
+  if (machine) await goVia(conn, machine)
   if (cmd === 'ls' || cmd === 'list') { await list(conn); conn.close() } else if (cmd === 'kill') {
     if (!args[1]) die(t('falta el id: dotrino-terminal kill <id>', 'missing id: dotrino-terminal kill <id>'))
     conn.send({ type: 'kill', id: args[1] })
@@ -638,7 +707,9 @@ try {
     interactive(conn, { type: 'attach', id: args[1], ...tag() }, dir)
   } else if (cmd === 'open') {
     // Como cualquier terminal: la consola abre en la carpeta donde estás (o en `--cwd`).
-    interactive(conn, { type: 'open', cwd: path.resolve(opt('--cwd') || process.cwd()), ...tag() }, dir)
+    // En otra máquina, la carpeta de aquí no existe: abre en su carpeta de inicio, salvo `--cwd`.
+    const cwd = machine ? (opt('--cwd') ? { cwd: opt('--cwd') } : {}) : { cwd: path.resolve(opt('--cwd') || process.cwd()) }
+    interactive(conn, { type: 'open', ...cwd, ...tag() }, dir)
   } else die(t(`orden desconocida: ${cmd} (mira --help)`, `unknown command: ${cmd} (see --help)`))
 } catch (e) {
   if (e !== HOLD) { try { die(`dotrino-terminal: ${e.message}`) } catch (_) {} }

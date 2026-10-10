@@ -59,6 +59,8 @@ cierra una consola, tampoco la que esa ventana abrió (agente ≥ 0.31.0): al ir
 
 La PWA recuerda sus pestañas en `sessionStorage` y al recargar se vuelve a enganchar.
 
+Las ventanas de una máquina (la app de escritorio, `dotrino-terminal --machine`) también ven y abren las consolas de las OTRAS máquinas de la cuenta: el agente local hace de cliente de los demás (`agent/far.js`, agente ≥ 0.38).
+
 Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las que contestan `kind: terminal-agent`, con el nombre que les puso el dueño en el acta.
 
 ## Estructura
