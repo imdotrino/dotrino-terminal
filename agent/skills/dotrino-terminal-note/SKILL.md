@@ -42,6 +42,10 @@ No reescribas, ordenes, corrijas ni resumas lo que él escribió. Tampoco lo cop
    - quedas **esperando** algo (una compilación, CI, una prueba larga, su respuesta): dilo.
 4. **Al terminar**: dilo en la primera línea (`Terminado: …`) y deja lo que quede pendiente.
 
+**Una tarjeta vieja es peor que una vacía.** Nunca termines un turno dejando un `Ahora:` que ya no
+ocurre: lo último que haces antes de responder, si en el turno hiciste algo, es poner la tarea
+como queda (`Terminado: …`, o qué esperas). Si ya no hay tarea, quítala (`--task ''`).
+
 En una tarea larga eso son varias actualizaciones; es lo esperado. Una orden cada vez, sin
 anunciarlo ni comentarlo en la respuesta.
 
