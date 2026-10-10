@@ -70,4 +70,36 @@ final class ConsolesUITests: XCTestCase {
         let row3 = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '3 ·'")).firstMatch
         XCTAssertLessThan(row3.frame.minY, row1.frame.minY, "the last row dropped on the first takes its place in the panel")
     }
+
+    /// «What it is about»: folded it is one line (the task); open, the title, the task (removed
+    /// with ×, never edited) and the person's note, edited in a sheet.
+    func testAboutCard() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-compose", "0", "-aboutFolded", "YES"]
+        app.launch()
+        let show = app.buttons["about-show"]
+        XCTAssertTrue(show.waitForExistence(timeout: 10), "folded, the card is one line")
+        shot("6-about-folded")
+        show.tap()
+        XCTAssertTrue(app.staticTexts["about-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["about-task"].exists, "the task the program set shows")
+        shot("7-about-open")
+
+        app.buttons["about-edit"].tap()
+        let box = app.textViews["about-text"]
+        XCTAssertTrue(box.waitForExistence(timeout: 5))
+        XCTAssertFalse((box.value as? String ?? "").contains("Mejorando"), "the editor holds the person's note only, not the task")
+        box.tap(); box.typeText(" HOY")
+        shot("8-about-edit")
+        app.buttons["about-save"].tap()
+        let note = app.staticTexts["about-note"]
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        XCTAssertTrue(note.label.contains("HOY"), "the note is saved: \(note.label)")
+        XCTAssertTrue(app.staticTexts["about-task"].exists, "saving the note leaves the task")
+
+        app.buttons["about-task-del"].tap()
+        XCTAssertTrue(app.staticTexts["about-task"].waitForNonExistence(timeout: 5), "× removes the task")
+        XCTAssertTrue(note.label.contains("HOY"), "and leaves the note")
+        shot("9-about-no-task")
+    }
 }
