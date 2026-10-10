@@ -71,12 +71,11 @@ const M = {
     consoles: 'Consolas',
     panel_open: 'Abrir el panel',
     panel_close: 'Colapsar el panel',
-    pin_here: 'Esta pantalla manda en el tamaño',
-    pin_title: (n, on) => on ? `Soltar: la consola ${n} deja de usar el tamaño de esta pantalla` : `Usar el tamaño de esta pantalla en la consola ${n}`,
+    pin_here: 'Usar el tamaño de esta pantalla',
+    pin_title: (n) => `Usar el tamaño de esta pantalla en la consola ${n}`,
     act_busy: 'trabajando',
     act_done: 'terminó',
     pinned_now: (n, cols, rows) => `Consola ${n}: usa el tamaño de esta pantalla (${cols}×${rows}). Las demás la ven a ese tamaño.`,
-    unpinned_now: (n) => `Consola ${n}: ya no usa el tamaño de esta pantalla. Lo tiene la última pantalla que la abre.`,
     size_label: 'tamaño',
     size_here: 'esta pantalla',
     size_device: 'otro aparato',
@@ -151,12 +150,11 @@ const M = {
     consoles: 'Consoles',
     panel_open: 'Open the panel',
     panel_close: 'Collapse the panel',
-    pin_here: 'This screen sets the size',
-    pin_title: (n, on) => on ? `Release: console ${n} stops using this screen's size` : `Use this screen's size for console ${n}`,
+    pin_here: "Use this screen's size",
+    pin_title: (n) => `Use this screen's size for console ${n}`,
     act_busy: 'working',
     act_done: 'finished',
     pinned_now: (n, cols, rows) => `Console ${n}: uses this screen's size (${cols}×${rows}). Other screens show it at that size.`,
-    unpinned_now: (n) => `Console ${n}: no longer uses this screen's size. The last screen that opens it sets it.`,
     size_label: 'size',
     size_here: 'this screen',
     size_device: 'another device',
@@ -585,20 +583,15 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     if ((c.watchers || []).some((v) => v.origin === 'local')) w = t('console_local')
     else if (others > 0) w = t('console_other')
     else if (inPane) w = t('console_here')
-    // Quién tiene el tamaño, si se comparte o se eligió a propósito.
+    // Quién puso el tamaño, si la miran varias pantallas.
     const b = c.sizeBy
-    if (b && c.id !== p.agent?.consoleId && ((c.watchers || []).length > 1 || b.pinned)) {
+    if (b && c.id !== p.agent?.consoleId && (c.watchers || []).length > 1) {
       const who = sizeWho(b)
       w += ` · ${t('size_label')}: ${who}`
     }
     return w
   }
 
-  /** ¿Usa la consola del panel `p`, a propósito, el tamaño de esta pantalla? */
-  function pinnedHere (s, p) {
-    const c = (s.list || []).find((x) => x.id === p.agent?.consoleId)
-    return !!(c?.sizeBy?.pinned && c.sizeBy.device && c.sizeBy.device === myDevice())
-  }
 
   /** La consola del panel `p` (con su número), tal como la cuenta el agente. */
   function current (s, p) {
@@ -644,8 +637,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     if (p.drag?.on) return             // a media arrastrada no se repinta: se llevaría lo que se arrastra
     const list = s.list || []
     const cur = current(s, p)
-    const pinOn = pinnedHere(s, p)
-    const pinTitle = cur ? t('pin_title', cur.n, pinOn) : t('pin_here')
+    const pinTitle = cur ? t('pin_title', cur.n) : t('pin_here')
     const mine = p.agent?.consoleId
     const inPane = (c) => c.id !== mine && s.panes.some((x) => x.agent?.consoleId === c.id) ? ' here' : ''
     const side = p.side
@@ -654,13 +646,13 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       side.innerHTML = `
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
-        <button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
+        <button class="sbtn pin" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
         ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
         <div class="srow"><span class="grow">${t('new_console')}</span><button class="sbtn" data-act="new">+</button></div>
-        ${cur ? `<div class="srow"><span class="grow" data-testid="panel-size">${cur.c.cols}×${cur.c.rows}</span><button class="sbtn pin${pinOn ? ' on' : ''}" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" aria-pressed="${pinOn}">${ICON_SIZE}</button></div>` : ''}
+        ${cur ? `<div class="srow"><span class="grow" data-testid="panel-size">${cur.c.cols}×${cur.c.rows}</span><button class="sbtn pin" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}">${ICON_SIZE}</button></div>` : ''}
         ${list.map((c, i) => `<div class="srow item${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}">
           <span class="grip" aria-hidden="true">⠿</span>
           <button class="pick" data-id="${esc(c.id)}" title="${esc(c.title || '')}">${rows(c, i, mine)}<small>${esc(where(s, c, p) + actText(c))}</small></button>
@@ -731,22 +723,18 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
   /**
-   * ⤢ «Esta pantalla manda en el tamaño»: la consola toma el tamaño de esta pestaña y lo sigue
-   * (girar el teléfono…) hasta que se suelte, o lo fije otra pantalla. Sin fijar, lo tiene el
-   * último que se enganchó.
+   * ⤢ «Usar el tamaño de esta pantalla»: la consola lo toma ahora. No queda fijado: lo cambia la
+   * siguiente pantalla que la abra, se cambie a ella, pulse ⤢ o teclee.
    */
-  function togglePin (s, p) {
+  function takeSize (s, p) {
     const cur = current(s, p)
     if (!cur) return
-    const on = !pinnedHere(s, p)
     const { cols, rows } = fitted(p)
-    if (on) {
-      try { p.term.resize(cols, rows) } catch {}
-      p.agent.resize(cols, rows)
-    }
-    p.agent.pin(on)
+    try { p.term.resize(cols, rows) } catch {}
+    p.agent.resize(cols, rows)
+    p.agent.take()
     // Dicho en la línea de estado: si esta pantalla ya tenía el tamaño, no se ve otro cambio.
-    hint.textContent = on ? t('pinned_now', cur.n, cols, rows) : t('unpinned_now', cur.n)
+    hint.textContent = t('pinned_now', cur.n, cols, rows)
     setTimeout(() => refresh(s), 200)
     p.term.focus()
   }
@@ -779,7 +767,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       const b = e.target.closest('button'); if (!b) return
       if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { p.collapsed = !p.collapsed; renderPaneSide(s, p); return }
       if (b.dataset.act === 'new') return switchTo(s, null, p)
-      if (b.dataset.act === 'pin') return togglePin(s, p)
+      if (b.dataset.act === 'pin') return takeSize(s, p)
       if (b.dataset.kill) return killConsole(s, b.dataset.kill)
       if (b.dataset.id) return switchTo(s, b.dataset.id, p)
     })
@@ -846,10 +834,10 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * máquina se quedó sin ninguna (dueño, 2026-10-07: vale para todo cliente remoto; antes aquí se
    * abría siempre una nueva y la máquina acababa con consolas de más).
    */
-  async function attachOrOpen (s, p, target) {
+  async function attachOrOpen (s, p, target, { keep = false } = {}) {
     const { cols, rows } = fitted(p)
     try {
-      const r = target ? await p.agent.attach(target, cols, rows) : await p.agent.open(cols, rows)
+      const r = target ? await p.agent.attach(target, cols, rows, { keep }) : await p.agent.open(cols, rows)
       follow(p, r.console)
     } catch (e) {
       if (e.code !== 'no-console') throw e
@@ -873,7 +861,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
     // a la misma consola si sigue viva, o a otra diciéndolo.
     p.agent.onResumed = () => {
-      attachOrOpen(s, p, p.agent.consoleId).then(() => {
+      attachOrOpen(s, p, p.agent.consoleId, { keep: true }).then(() => {
         persist()
         s.status = 'conectado'; setTabState(s, 'ok')
         if (active === s) hint.textContent = t('connected', s.alias)

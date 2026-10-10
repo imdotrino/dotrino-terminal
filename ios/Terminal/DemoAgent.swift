@@ -25,7 +25,7 @@ final class DemoAgent: Channel {
     private var listeners: [UUID: (JSON) -> Void] = [:]
     private var consoles = [
         C("c1", 1, "seyacat@loca: ~", 80, 24, false, nil, nil),
-        C("c2", 2, "seyacat@loca: ~/proyectos/dotrino", 120, 40, true, "window", "window"),
+        C("c2", 2, "seyacat@loca: ~/proyectos/dotrino", 120, 40, true, nil, "window"),
         C("c3", 3, "seyacat@loca: /mnt/sda1/Dotrino/dotrino-terminal/desktop/vendor", 80, 24, false, nil, nil),
     ]
     private var current: C?
@@ -39,7 +39,7 @@ final class DemoAgent: Channel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { for l in self.listeners.values { l(m) } }
     }
 
-    private func decider(_ c: C) -> String? { c.chosenBy ?? c.holder }
+    private func decider(_ c: C) -> String? { c.holder }
 
     private func info(_ c: C) -> JSON {
         var watchers: [JSON] = []
@@ -49,19 +49,20 @@ final class DemoAgent: Channel {
                                  "cols": .int(Int64(c.cols)), "rows": .int(Int64(c.rows)), "lastActive": .int(nowMs()),
                                  "viewers": .int(Int64(watchers.count)), "watchers": .array(watchers)]
         if let who = decider(c) {
-            o["sizeBy"] = who == "phone" ? ["origin": "remote", "device": .string(Self.me), "pinned": .bool(c.chosenBy == who)]
-                                         : ["origin": "local", "tag": "desktop-1", "pinned": .bool(c.chosenBy == who)]
+            o["sizeBy"] = who == "phone" ? ["origin": "remote", "device": .string(Self.me)]
+                                         : ["origin": "local", "tag": "desktop-1"]
         }
         return .object(o)
     }
 
     private func list() { reply(["type": "consoles", "list": .array(consoles.map(info))]) }
     private func meta(_ c: C) { reply(["type": "meta", "console": info(c)]) }
-    /// The phone's size applies only if the phone decides.
+    /// The phone's size applies only if the phone is the one that set it.
     private func applySize(_ c: C) { if decider(c) == "phone" { c.cols = cols; c.rows = rows } }
 
     private func attach(_ c: C) {
-        if let prev = current, prev.holder == "phone" { prev.holder = prev.window ? "window" : nil; if prev.window { prev.cols = 120; prev.rows = 40 } }
+        // Leaving a console does not change its size.
+        if let prev = current, prev.holder == "phone" { prev.holder = nil }
         current = c; c.holder = "phone"; applySize(c)
         reply(["type": "attached", "id": .string(c.id), "console": info(c)])
         reply(["type": "replay", "data": .string(sample(c))])
@@ -89,11 +90,8 @@ final class DemoAgent: Channel {
         case "resize":
             cols = int("cols") ?? cols; rows = int("rows") ?? rows
             if let c = current { let b = (c.cols, c.rows); applySize(c); if b != (c.cols, c.rows) { meta(c) } }
-        case "pin":
-            if let c = current {
-                if p["on"]?.bool == true { c.chosenBy = "phone" } else if c.chosenBy == "phone" { c.chosenBy = nil }
-                applySize(c); meta(c)
-            }
+        case "take":
+            if let c = current { c.holder = "phone"; applySize(c); meta(c) }
         case "input": reply(["type": "out", "data": .string((p["data"]?.string ?? "").replacingOccurrences(of: "\r", with: "\r\n$ "))])
         case "kill": consoles.removeAll { $0.id == p["id"]?.string }; list()
         // The panel's order, as the agent keeps it: `id` goes right before `before` (or last).

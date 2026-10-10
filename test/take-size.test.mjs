@@ -28,25 +28,32 @@ function wire (hub, device) {
 }
 const tick = () => new Promise((r) => setTimeout(r, 30))
 
-test('al engancharse, la consola queda fijada al tamaño de esta pantalla y otra que solo mira no lo cambia', async () => {
+test('el tamaño lo toma quien abre, se cambia, pulsa ⤢ o teclea; reconectarse no, y nada queda fijado', async () => {
   const h = makeHub(loadPty(), { shell: '/bin/sh' })
   const phone = wire(h, 'telefono'); await phone.connect()
   const tablet = wire(h, 'tablet'); await tablet.connect()
+  const size = async () => { await tick(); const c = (await phone.list())[0]; return [c.cols, c.rows, c.sizeBy?.device] }
+
+  // 1) Abrir.
   const { id } = await phone.open(40, 20)
-  await tick()
-  let c = (await phone.list())[0]
-  assert.deepEqual([c.cols, c.rows, c.sizeBy.device, c.sizeBy.pinned], [40, 20, 'telefono', true])
+  assert.deepEqual(await size(), [40, 20, 'telefono'])
 
-  // La tablet pasa a esa consola: ahora manda ella.
+  // 2) Cambiarse a la consola.
   await tablet.attach(id, 100, 30)
-  await tick()
-  c = (await phone.list())[0]
-  assert.deepEqual([c.cols, c.rows, c.sizeBy.device, c.sizeBy.pinned], [100, 30, 'tablet', true])
+  assert.deepEqual(await size(), [100, 30, 'tablet'])
 
-  // El teléfono gira: solo mira, no cambia el tamaño.
+  // Girar el teléfono, que no puso el tamaño, no lo cambia.
   await phone.resize(20, 40)
-  await tick()
-  c = (await phone.list())[0]
-  assert.deepEqual([c.cols, c.rows], [100, 30])
+  assert.deepEqual(await size(), [100, 30, 'tablet'])
+
+  // 3) ⤢, y no queda fijado: 4) la tablet teclea y lo toma.
+  await phone.take()
+  assert.deepEqual(await size(), [20, 40, 'telefono'])
+  await tablet.input('a')
+  assert.deepEqual(await size(), [100, 30, 'tablet'])
+
+  // Volver a engancharse tras una reconexión no lo toca.
+  await phone.attach(id, 20, 40, { keep: true })
+  assert.deepEqual(await size(), [100, 30, 'tablet'])
   h.killAll()
 })

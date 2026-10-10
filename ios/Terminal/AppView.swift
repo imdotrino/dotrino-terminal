@@ -352,28 +352,27 @@ private struct ConsoleScreen: View {
         .background(Palette.panel)
     }
 
-    /// `fill`: the background when it is off (the strip's subtle one); on, the accent fills the WHOLE area.
+    /// ⤢: the console takes this screen's size when pressed. `fill`: its background.
     private func sizeButton(_ size: CGFloat, height: CGFloat? = nil, fill: Color = .clear) -> some View {
-        let on = tab.sizeHere, n = tab.number
-        return Button { toggleSize() } label: {
-            SizeIcon().stroke(on ? Palette.accent : Palette.muted, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+        let n = tab.number
+        return Button { takeSize() } label: {
+            SizeIcon().stroke(Palette.muted, style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
                 .frame(width: 16, height: 16).padding(7)
                 .opacity(n == nil ? 0.3 : 1)
                 .frame(width: size, height: height ?? size)
-                .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.accentSoft : fill))
+                .background(RoundedRectangle(cornerRadius: 6).fill(fill))
         }
         .disabled(n == nil)
-        .accessibilityLabel(n.map { on ? t("size.release", ("n", $0)) : t("size.use", ("n", $0)) } ?? t("size.use", ("n", "")))
+        .accessibilityLabel(t("size.use", ("n", n.map { "\($0)" } ?? "")))
         .accessibilityIdentifier("size")
         .frame(width: size, height: height ?? size)
     }
 
-    private func toggleSize() {
+    private func takeSize() {
         guard let n = tab.number else { return }
-        let on = !tab.sizeHere
-        tab.useMySize(on)
+        tab.useMySize()
         // Said out loud: if this screen already had the size, nothing else changes on screen.
-        show(on ? t("size.usedNow", ("n", n), ("cols", tab.screenCols), ("rows", tab.screenRows)) : t("size.releasedNow", ("n", n)))
+        show(t("size.usedNow", ("n", n), ("cols", tab.screenCols), ("rows", tab.screenRows)))
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { tab.list() }
     }
 
@@ -431,7 +430,7 @@ private struct ConsoleScreen: View {
         let mine = c.id == tab.consoleId
         let others = c.watchers - (mine ? 1 : 0)
         var w = c.watchedLocally ? t("where.local") : others > 0 ? t("where.other") : mine ? t("where.here") : t("where.free")
-        if !mine, let by = c.sizeBy, c.watchers > 1 || by.pinned { w += " · \(t("size.label")): \(sizeWho(c))" }
+        if !mine, c.sizeBy != nil, c.watchers > 1 { w += " · \(t("size.label")): \(sizeWho(c))" }
         switch c.activity { case .busy: w += " · " + t("act.busy"); case .done: w += " · " + t("act.done"); case .idle: break }
         return w
     }

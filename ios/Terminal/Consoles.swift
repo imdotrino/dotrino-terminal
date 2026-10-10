@@ -11,9 +11,9 @@ struct Machine: Hashable, Identifiable {
     var keyId: String { (try? Delegation.keyLabel(pubkey)) ?? "" }
 }
 
-/// Who has a console's size: the screen that chose it with ⤢, or else the last one that attached.
+/// Who set a console's size: the last screen that opened it, switched to it, pressed ⤢ or typed.
 struct SizeBy: Equatable {
-    let origin: String?, device: String?, tag: String?, pinned: Bool
+    let origin: String?, device: String?, tag: String?
 }
 
 /// A console open on a machine (the agent's `consoles` list): the same fields the PWA reads.
@@ -56,7 +56,7 @@ extension RemoteAgent.Session: Channel {
 /// Reads one console of the agent's list (or of `attached` / `meta`).
 func consoleOf(_ o: JSON) -> ConsoleInfo? {
     guard let id = o["id"]?.string else { return nil }
-    let by = o["sizeBy"]?.objectValue.map { SizeBy(origin: $0["origin"]?.string, device: $0["device"]?.string, tag: $0["tag"]?.string, pinned: $0["pinned"]?.bool == true) }
+    let by = o["sizeBy"]?.objectValue.map { SizeBy(origin: $0["origin"]?.string, device: $0["device"]?.string, tag: $0["tag"]?.string) }
     let watchers = o["watchers"]?.array ?? []
     func int(_ k: String) -> Int { Int(o[k]?.int ?? 0) }
     return ConsoleInfo(id: id, n: int("n"), title: o["title"]?.string ?? "", origin: o["origin"]?.string, cols: int("cols"), rows: int("rows"),
@@ -315,14 +315,16 @@ final class Tab: ObservableObject, Identifiable {
         offs.append(ch.onError { [weak self] e in
             DispatchQueue.main.async { if let s = self, s.state == .open || s.state == .connecting { s.lostWith("\(e)", retry: true) } }
         })
-        if let resume { send("attach", resume) } else { choosing = true; list() }
+        // Coming back over a new session is not opening the console: it keeps the size it has.
+        if let resume { send("attach", resume, keep: true) } else { choosing = true; list() }
     }
 
-    private func send(_ type: String, _ id: String?) {
+    private func send(_ type: String, _ id: String?, keep: Bool = false) {
         fresh = true
         saidCols = screenCols; saidRows = screenRows
         var o: [String: JSON] = ["type": .string(type), "cols": .int(Int64(screenCols)), "rows": .int(Int64(screenRows))]
         if let id { o["id"] = .string(id) }
+        if keep { o["keep"] = .bool(true) }
         try? channel?.send(.object(o))
     }
 
@@ -350,10 +352,9 @@ final class Tab: ObservableObject, Identifiable {
             consoleId = m["id"]?.string
             if let c = m["console"].flatMap(consoleOf) { upsert(c); follow(c) }
             state = .open; note = nil
-            // Every console put on screen takes THIS screen's size, as ⤢ does (owner, 2026-10-09):
-            // the size said now (it may have changed while attaching), and chosen on purpose.
+            // The size went in the `attach`; it may have changed while attaching. The agent follows
+            // it only if this screen is the one that set the size.
             sayScreen()
-            try? channel?.send(["type": "pin", "on": .bool(true)])
             if !pendingInput.isEmpty { let t = pendingInput; pendingInput = ""; input(t) }
             list()
         case "meta":
@@ -366,7 +367,7 @@ final class Tab: ObservableObject, Identifiable {
             if let c = trying { Self.codes[machine.pubkey] = c }
             trying = nil; triedKept = false; codeProblem = nil; codeWaitMs = 0
             state = .connecting
-            if let id = consoleId { send("attach", id) } else { choosing = true; list() }
+            if let id = consoleId { send("attach", id, keep: true) } else { choosing = true; list() }
         case "fail":
             let code = m["code"]?.string
             // The machine asks for its code. The one typed before (if any) is tried once by itself;
@@ -442,17 +443,14 @@ final class Tab: ObservableObject, Identifiable {
         send(id != nil ? "attach" : "open", id)
     }
 
-    /// ⤢ Does the console on screen use THIS screen's size, on purpose?
-    var sizeHere: Bool { current?.sizeBy.map { $0.pinned && Delegation.samePubkey($0.device, myDevice) } ?? false }
-
-    /// Does this screen have the console's size now (chosen, or because it arrived last)?
+    /// Is this screen the one that set the console's size?
     func sizeIsMine(_ c: ConsoleInfo?) -> Bool { c?.sizeBy.map { Delegation.samePubkey($0.device, myDevice) } ?? false }
 
-    /// ⤢: the console on screen uses this screen's size (on), or stops (off).
-    func useMySize(_ on: Bool) {
+    /// ⤢: the console on screen takes this screen's size NOW. Nothing stays chosen.
+    func useMySize() {
         guard state == .open else { return }
-        if on { try? channel?.send(["type": "resize", "cols": .int(Int64(screenCols)), "rows": .int(Int64(screenRows))]) }
-        try? channel?.send(["type": "pin", "on": .bool(on)])
+        try? channel?.send(["type": "resize", "cols": .int(Int64(screenCols)), "rows": .int(Int64(screenRows))])
+        try? channel?.send(["type": "take"])
     }
 
     /// Close a console on the machine. If it is the one on screen, first move to another free one (or a new one).

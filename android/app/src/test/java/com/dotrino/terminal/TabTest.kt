@@ -35,10 +35,10 @@ class TabTest {
         fun types() = sent.map { (it["type"] as JsonPrimitive).content }
     }
 
-    private fun console(id: String, n: Int, cols: Int, rows: Int, watchers: Int = 0, by: String? = null, pinned: Boolean = false, title: String = "", watcher: String? = null) = buildJsonObject {
+    private fun console(id: String, n: Int, cols: Int, rows: Int, watchers: Int = 0, by: String? = null, title: String = "", watcher: String? = null) = buildJsonObject {
         put("id", id); put("n", n); put("title", title); put("cols", cols); put("rows", rows); put("viewers", watchers)
         putJsonArray("watchers") { repeat(watchers) { add(buildJsonObject { put("origin", "remote"); if (watcher != null) put("device", watcher) }) } }
-        if (by != null) putJsonObject("sizeBy") { put("origin", "remote"); put("device", by); put("pinned", pinned) }
+        if (by != null) putJsonObject("sizeBy") { put("origin", "remote"); put("device", by) }
     }
 
     private fun consoles(vararg list: JsonObject) = buildJsonObject { put("type", "consoles"); put("list", buildJsonArray { list.forEach { add(it) } }) }
@@ -68,18 +68,19 @@ class TabTest {
         assertTrue("the machine has none: a new one", ch3.types().contains("open"))
     }
 
-    @Test fun everyConsolePutOnScreenTakesThisScreensSize() {
+    @Test fun aConsolePutOnScreenSaysItsSizeAndNothingIsChosen() {
         val (t, ch) = tab()
         ch.agent(consoles(console("a", 1, 80, 24), console("b", 2, 80, 24)))
+        assertNull("opening or switching takes the size: no `keep`", ch.last("attach")!!["keep"])
         ch.agent(attached(console("a", 1, 50, 20, watchers = 1, by = me)))
-        assertEquals("as ⤢: the size, then chosen on purpose", listOf("resize", "pin"), ch.types().takeLast(3).take(2))
+        assertFalse("nothing is chosen on purpose", ch.types().contains("take"))
         t.switchTo("b")
+        assertNull(ch.last("attach")!!["keep"])
         ch.sent.clear()
         t.screen(50, 11)                                   // the keyboard came up before the agent answered
         assertNull("nothing is said while attaching", ch.last("resize"))
         ch.agent(attached(console("b", 2, 50, 20, watchers = 1, by = me)))
         assertEquals("the size it has NOW", 11, (ch.last("resize")!!["rows"] as JsonPrimitive).content.toInt())
-        assertEquals("true", (ch.last("pin")!!["on"] as JsonPrimitive).content)
     }
 
     @Test fun theEmulatorFollowsTheConsoleSizeNotTheScreen() {
@@ -112,18 +113,15 @@ class TabTest {
         assertTrue("the screen of b only", t.terminal.text(0).startsWith("BBB"))
     }
 
-    @Test fun sizeHereOnlyWhenThisDeviceChoseIt() {
+    @Test fun theSizeButtonTakesTheSizeNow() {
         val (t, ch) = tab()
         ch.agent(consoles())
-        ch.agent(attached(console("a", 1, 50, 20, watchers = 2, by = me)))
-        assertFalse("it has the size, but did not choose it", t.sizeHere)
+        ch.agent(attached(console("a", 1, 50, 20, watchers = 2, by = other)))
+        assertFalse(t.sizeIsMine(t.current))
+        t.useMySize()
+        assertEquals("the size first, then take it", listOf("resize", "take"), ch.types().takeLast(2))
+        ch.agent(buildJsonObject { put("type", "meta"); put("console", console("a", 1, 50, 20, watchers = 2, by = me)) })
         assertTrue(t.sizeIsMine(t.current))
-        t.useMySize(true)
-        assertEquals("resize first, then pin", listOf("resize", "pin"), ch.types().takeLast(2))
-        ch.agent(buildJsonObject { put("type", "meta"); put("console", console("a", 1, 50, 20, watchers = 2, by = me, pinned = true)) })
-        assertTrue(t.sizeHere)
-        ch.agent(buildJsonObject { put("type", "meta"); put("console", console("a", 1, 50, 20, watchers = 2, by = other, pinned = true)) })
-        assertFalse("another device chose it", t.sizeHere)
     }
 
     @Test fun closingTheConsoleOnScreenFirstMovesToAnother() {

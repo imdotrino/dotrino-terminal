@@ -137,36 +137,29 @@ export class AgentClient {
   /** Las consolas vivas en la máquina: `[{ id, n, title, origin, cols, rows, viewers, watchers… }]`. */
   async list () { return (await this._ask({ type: 'list' }, 'consoles')).list }
 
-  /** Abre una consola nueva y se engancha. Devuelve `{ id, console }`. */
+  /** Abre una consola nueva y se engancha: toma el tamaño de esta pantalla. Devuelve `{ id, console }`. */
   async open (cols, rows) {
     const p = await this._ask({ type: 'open', cols, rows }, 'attached')
     this.consoleId = p.id
-    this._take()
     return p
   }
 
   /**
    * Se engancha a una consola existente (también para CAMBIAR de consola en la misma conexión:
    * el agente suelta la anterior). Su pantalla llega por `onData`. Lanza `no-console`.
+   * La consola toma el tamaño de esta pantalla, salvo con `keep`: volver a engancharse tras una
+   * reconexión no es abrirla ni cambiarse a ella, y no toca el tamaño.
    */
-  async attach (id, cols, rows) {
-    const p = await this._ask({ type: 'attach', id, cols, rows }, 'attached')
+  async attach (id, cols, rows, { keep = false } = {}) {
+    const p = await this._ask({ type: 'attach', id, cols, rows, ...(keep ? { keep: true } : {}) }, 'attached')
     this.consoleId = p.id
-    this._take()
     return p
   }
 
-  /**
-   * Toda consola que se pone en pantalla toma el tamaño de ESTA pantalla, como hace ⤢ (dueño,
-   * 2026-10-09; las apps nativas ya lo hacían). El tamaño va en el `open`/`attach`; aquí se fija.
-   * Si no sale, se dice: la consola queda con el tamaño de otra pantalla.
-   */
-  _take () { Promise.resolve(this.pin(true)).catch((e) => this.onError(e)) }
-
   input (data) { return this.rc.send({ type: 'input', data }) }
   resize (cols, rows) { return this.rc.send({ type: 'resize', cols, rows }) }
-  /** ⤢ Usar (o soltar) el tamaño de esta pantalla en la consola (agente ≥ 0.14). */
-  pin (on) { return this.rc.send({ type: 'pin', on: !!on }) }
+  /** ⤢ La consola toma AHORA el tamaño de esta pantalla. No queda fijado (agente ≥ 0.35). */
+  take () { return this.rc.send({ type: 'take' }) }
   kill (id) { return this.rc.send({ type: 'kill', id }) }
   /**
    * El orden del panel: `id` pasa justo antes de `before` (o al final, sin él). Es de la máquina:

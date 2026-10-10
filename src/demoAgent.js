@@ -18,15 +18,15 @@ const machine = {
 }
 
 function mk (id, n, title, cwd, cols, rows, { window = false } = {}) {
-  return { id, n, title, cwd, cols, rows, window, pinnedBy: window ? 'window' : null, lines: [] }
+  return { id, n, title, cwd, cols, rows, window, holder: window ? 'window' : null, lines: [] }
 }
 
 function info (c) {
   const watchers = []
   if (c.window) watchers.push({ origin: 'local', tag: 'desktop-1' })
   for (const k of machine.clients) if (k.consoleId === c.id) watchers.push({ origin: 'remote', device: 'demo-phone', tag: `pane-${k.n}` })
-  const sizeBy = c.pinnedBy === 'window' ? { origin: 'local', device: null, tag: 'desktop-1', pinned: true }
-    : c.holder ? { origin: 'remote', device: 'demo-phone', tag: c.holder, pinned: c.pinnedBy === c.holder } : null
+  const sizeBy = c.holder === 'window' ? { origin: 'local', device: null, tag: 'desktop-1' }
+    : c.holder ? { origin: 'remote', device: 'demo-phone', tag: c.holder } : null
   return { id: c.id, n: c.n, title: c.title, cwd: c.cwd, host: 'seyacat@loca', origin: 'local', cols: c.cols, rows: c.rows, activity: c.n === 2 ? 'busy' : 'idle', doneAt: c.n === 3 ? Date.now() : null, sizeBy, viewers: watchers.length, watchers, lastActive: Date.now() }
 }
 
@@ -52,10 +52,11 @@ export class DemoAgentClient {
     this.onData(`\x1b[2J\x1b[H\x1b[32mseyacat@loca\x1b[0m:\x1b[34m${c.cwd}\x1b[0m$ ls\r\n\x1b[34msrc  docs\x1b[0m  run.sh  README.md\r\nConsola ${c.n} · ${c.cols}×${c.rows}\r\n$ `)
   }
 
-  _size (c, cols, rows) {
-    if (c.pinnedBy === 'window') return
+  // Como el agente: abrir, cambiarse, ⤢ o teclear toman el tamaño; cambiar la pantalla solo lo
+  // sigue quien lo puso.
+  _take (c, cols, rows) {
     c.holder = `pane-${this.n}`
-    if (c.cols !== cols || c.rows !== rows) { c.cols = cols; c.rows = rows }
+    if (cols && rows) { c.cols = cols; c.rows = rows; this.size = { cols, rows } }
   }
 
   async open (cols, rows) {
@@ -64,28 +65,32 @@ export class DemoAgentClient {
     return this.attach(c.id, cols, rows)
   }
 
-  async attach (id, cols, rows) {
+  async attach (id, cols, rows, { keep = false } = {}) {
     const c = machine.consoles.find((x) => x.id === id)
     if (!c) { const e = new Error('that console no longer exists'); e.code = 'no-console'; throw e }
     this.consoleId = c.id
-    this._size(c, cols, rows)
+    this.size = { cols, rows }
+    if (!keep) this._take(c, cols, rows)
     setTimeout(() => { this._screen(c); broadcast() }, 30)
     return { id: c.id, console: info(c) }
   }
 
   input (data) {
     const c = machine.consoles.find((x) => x.id === this.consoleId); if (!c) return
+    if (c.holder !== `pane-${this.n}`) { this._take(c, this.size?.cols, this.size?.rows); broadcast() }
     for (const k of machine.clients) if (k.consoleId === c.id) k.onData(data.replace(/\r/g, '\r\n$ '))
   }
 
   resize (cols, rows) {
     const c = machine.consoles.find((x) => x.id === this.consoleId); if (!c) return
-    this._size(c, cols, rows); broadcast()
+    this.size = { cols, rows }
+    if (c.holder === `pane-${this.n}`) { c.cols = cols; c.rows = rows }
+    broadcast()
   }
 
-  pin (on) {
-    const c = machine.consoles.find((x) => x.id === this.consoleId); if (!c || c.pinnedBy === 'window') return
-    c.pinnedBy = on ? `pane-${this.n}` : null; c.holder = `pane-${this.n}`; broadcast()
+  take () {
+    const c = machine.consoles.find((x) => x.id === this.consoleId); if (!c) return
+    this._take(c, this.size?.cols, this.size?.rows); broadcast()
   }
 
   kill (id) {

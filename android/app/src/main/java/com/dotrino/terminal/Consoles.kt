@@ -34,7 +34,7 @@ data class Machine(val pubkey: String, val label: String) {
 }
 
 /** Who has a console's size: the screen that chose it with ⤢, or else the last one that attached. */
-data class SizeBy(val origin: String?, val device: String?, val tag: String?, val pinned: Boolean)
+data class SizeBy(val origin: String?, val device: String?, val tag: String?)
 
 /** A console open on a machine (the agent's `consoles` list): the same fields the PWA reads. */
 data class ConsoleInfo(
@@ -79,7 +79,7 @@ fun consoleOf(o: JsonObject): ConsoleInfo? {
     fun int(k: String) = (o[k] as? JsonPrimitive)?.intOrNull ?: 0
     val id = str("id") ?: return null
     val by = (o["sizeBy"] as? JsonObject)?.let {
-        SizeBy(str("origin", it), str("device", it), str("tag", it), (it["pinned"] as? JsonPrimitive)?.booleanOrNull == true)
+        SizeBy(str("origin", it), str("device", it), str("tag", it))
     }
     return ConsoleInfo(
         id, int("n"), str("title").orEmpty(), str("origin"), int("cols"), int("rows"), int("viewers"),
@@ -394,16 +394,18 @@ object Consoles {
             off = ch.onMessage { m -> post { handle(m) } }
             offError = ch.onError { e -> post { if (state == State.OPEN || state == State.CONNECTING) lostWith(e.message) } }
             resuming = resume != null
-            if (resume != null) send("attach", resume)
+            // Coming back over a new session is not opening the console: it keeps the size it has.
+            if (resume != null) send("attach", resume, keep = true)
             else { choosing = true; list() }                          // a free console if there is one
         }
 
-        private fun send(type: String, id: String?) {
+        private fun send(type: String, id: String?, keep: Boolean = false) {
             fresh = true
             saidCols = screenCols; saidRows = screenRows
             channel?.send(buildJsonObject {
                 put("type", type); if (id != null) put("id", id)
                 put("cols", screenCols); put("rows", screenRows)
+                if (keep) put("keep", true)
             })
         }
 
@@ -438,10 +440,9 @@ object Consoles {
                     consoleId = (m["id"] as? JsonPrimitive)?.content
                     (m["console"] as? JsonObject)?.let(::consoleOf)?.let { upsert(it); follow(it) }
                     state = State.OPEN; note = null; resuming = false
-                    // Every console put on screen takes THIS screen's size, as ⤢ does (owner, 2026-10-09):
-                    // the size said now (it may have changed while attaching), and chosen on purpose.
+                    // The size went in the `attach`; it may have changed while attaching. The agent
+                    // follows it only if this screen is the one that set the size.
                     sayScreen()
-                    try { channel?.send(buildJsonObject { put("type", "pin"); put("on", true) }) } catch (_: Exception) {}
                     if (pendingInput.isNotEmpty()) { val t = pendingInput.toString(); pendingInput.clear(); input(t) }
                     list(); onChange()
                 }
@@ -457,7 +458,7 @@ object Consoles {
                     trying?.let { codes[machine.pubkey] = it }
                     trying = null; triedKept = false; codeProblem = null; codeWaitMs = 0
                     state = State.CONNECTING
-                    if (consoleId != null) { resuming = true; send("attach", consoleId) } else { choosing = true; list() }
+                    if (consoleId != null) { resuming = true; send("attach", consoleId, keep = true) } else { choosing = true; list() }
                     onChange()
                 }
                 "fail" -> {
@@ -533,18 +534,15 @@ object Consoles {
             onChange()
         }
 
-        /** ⤢ Does the console on screen use THIS screen's size, on purpose? */
-        val sizeHere: Boolean get() = current?.sizeBy?.let { it.pinned && Delegation.samePubkey(it.device, myDevice) } == true
-
-        /** Does this screen have the console's size now (chosen or because it arrived last)? */
+        /** Is this screen the one that set the console's size? */
         fun sizeIsMine(c: ConsoleInfo?): Boolean = c?.sizeBy?.let { Delegation.samePubkey(it.device, myDevice) } == true
 
-        /** ⤢: the console on screen uses this screen's size (on), or stops (off). */
-        fun useMySize(on: Boolean) {
+        /** ⤢: the console on screen takes this screen's size NOW. Nothing stays chosen. */
+        fun useMySize() {
             if (state != State.OPEN) return
             try {
-                if (on) channel?.send(buildJsonObject { put("type", "resize"); put("cols", screenCols); put("rows", screenRows) })
-                channel?.send(buildJsonObject { put("type", "pin"); put("on", on) })
+                channel?.send(buildJsonObject { put("type", "resize"); put("cols", screenCols); put("rows", screenRows) })
+                channel?.send(buildJsonObject { put("type", "take") })
             } catch (_: Exception) {}
         }
 

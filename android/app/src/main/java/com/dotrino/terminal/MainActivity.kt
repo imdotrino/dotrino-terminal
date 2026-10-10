@@ -341,32 +341,29 @@ class MainActivity : Activity() {
             mine -> t("where.here")
             else -> t("where.free")
         }
-        if (!mine && c.sizeBy != null && (c.watchers > 1 || c.sizeBy.pinned)) w += " · ${t("size.label")}: ${sizeWho(tab, c)}"
+        if (!mine && c.sizeBy != null && c.watchers > 1) w += " · ${t("size.label")}: ${sizeWho(tab, c)}"
         return w
     }
 
-    /** ⤢ as a small button: dim when off; lit, with the accent, when this screen chose the size. */
+    /** ⤢ as a small button: the console takes this screen's size when pressed. */
     private fun sizeButton(tab: Consoles.Tab): View {
-        val on = tab.sizeHere
         val n = tab.number
         return android.widget.ImageView(this).apply {
             tag = "size"; setImageResource(R.drawable.ic_size)
-            setColorFilter(col(if (on) R.color.t_accent else R.color.t_muted))
+            setColorFilter(col(R.color.t_muted))
             imageAlpha = if (n == null) 70 else 255
-            background = if (on) rounded(col(R.color.t_accent_soft), px(6)) else null
             setPadding(px(7), px(7), px(7), px(7)); scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
-            contentDescription = if (n == null) t("size.use", "n" to "") else if (on) t("size.release", "n" to n) else t("size.use", "n" to n)
+            contentDescription = t("size.use", "n" to (n ?: ""))
             isEnabled = n != null
-            setOnClickListener { toggleSize(tab) }
+            setOnClickListener { takeSize(tab) }
         }
     }
 
-    private fun toggleSize(tab: Consoles.Tab) {
+    private fun takeSize(tab: Consoles.Tab) {
         val n = tab.number ?: return
-        val on = !tab.sizeHere
-        tab.useMySize(on)
+        tab.useMySize()
         // Said out loud: if this screen already had the size, nothing else changes on screen.
-        toast(if (on) t("size.usedNow", "n" to n, "cols" to tab.screenCols, "rows" to tab.screenRows) else t("size.releasedNow", "n" to n))
+        toast(t("size.usedNow", "n" to n, "cols" to tab.screenCols, "rows" to tab.screenRows))
         scope.launch { kotlinx.coroutines.delay(300); tab.list() }
     }
 

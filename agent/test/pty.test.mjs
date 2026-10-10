@@ -160,7 +160,7 @@ test('el ORDEN del panel: por número hasta que alguien mueve una; es de la máq
   } finally { h.killAll() }
 })
 
-test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (⤢) o el último que llegó; escribir no lo cambia', async () => {
+test('el TAMAÑO con tres aparatos: lo toma quien abre, se cambia, pulsa ⤢ o teclea; nada queda fijado', async () => {
   const h = hub()
   try {
     const sizeOf = (id) => `${h.get(id).cols}x${h.get(id).rows}`
@@ -193,40 +193,38 @@ test('el TAMAÑO con tres aparatos: lo tiene quien lo fija (⤢) o el último qu
     const tab = fakeSession(); tab.device = 'TAB'; serveSession(tab, h, { origin: 'remote' })
     tab.deliver({ type: 'attach', id, cols: 80, rows: 30 })
     await until(() => sizeOf(id) === '80x30')
-    assert.equal(h.get(id).info().sizeBy.pinned, false, 'el último que llegó, sin fijar')
-
-    tel.deliver({ type: 'pin', on: true })
+    // ⤢: se ajusta en ese instante, y nada queda fijado.
+    tel.deliver({ type: 'take' })
     await until(() => sizeOf(id) === '40x20')
     tab.deliver({ type: 'resize', cols: 90, rows: 30 })
     await new Promise((r) => setTimeout(r, 100))
-    assert.equal(sizeOf(id), '40x20', 'con el teléfono fijado, la tablet no lo cambia')
-    // Teclear gana también a una pantalla fijada, que deja de estarlo.
+    assert.equal(sizeOf(id), '40x20', 'cambiar la pantalla de quien NO puso el tamaño no lo cambia')
+    tel.deliver({ type: 'resize', cols: 20, rows: 40 })
+    await until(() => sizeOf(id) === '20x40')  // girar el teléfono que lo puso: se sigue
+    // ⤢ no fija nada: la tablet teclea y se lo lleva.
     tab.deliver({ type: 'input', data: 'a' })
     await until(() => sizeOf(id) === '90x30')
-    assert.equal(h.get(id).info().sizeBy.pinned, false, 'teclear suelta lo que otro había fijado')
-    tel.deliver({ type: 'pin', on: true })
-    await until(() => sizeOf(id) === '40x20')
-    tel.deliver({ type: 'resize', cols: 20, rows: 40 })
-    await until(() => sizeOf(id) === '20x40')  // girar el teléfono fijado: se sigue
-
-    pc.deliver({ type: 'pin', on: true })
+    pc.deliver({ type: 'take' })
     await until(() => sizeOf(id) === '130x40')
-    assert.equal(h.get(id).info().sizeBy.pinned, true, 'el último que fija se lo queda')
 
+    // Irse no cambia el tamaño ni se lo pasa a otra pantalla.
     pc.deliver({ type: 'detach' })
-    await until(() => sizeOf(id) === '90x30')  // se fue el fijado: vuelve al último que llegó (la tablet)
-
-    tab.deliver({ type: 'detach' })
-    await until(() => sizeOf(id) === '20x40')  // y si se va también, al que queda
-
-    // La elección es de la PANTALLA, no de la conexión: el PC pasa a otra consola y vuelve, y la
-    // recupera aunque el teléfono haya llegado después.
-    pc.deliver({ type: 'attach', id, cols: 130, rows: 40 })
-    await until(() => sizeOf(id) === '130x40')
-    assert.equal(h.get(id).info().sizeBy.pinned, true, 'al volver, sigue siendo la que eligió')
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(sizeOf(id), '130x40', 'se fue quien lo puso: se queda como estaba')
+    assert.equal(h.get(id).info().sizeBy, null)
     tel.deliver({ type: 'resize', cols: 30, rows: 40 })
     await new Promise((r) => setTimeout(r, 100))
-    assert.equal(sizeOf(id), '130x40', 'y el teléfono no se lo quita')
+    assert.equal(sizeOf(id), '130x40', 'y cambiar la pantalla de otro tampoco lo toma')
+
+    // Volver a engancharse tras una reconexión (`keep`) no es abrir ni cambiarse: no lo toca.
+    const tel2 = fakeSession(); tel2.device = 'TEL'; serveSession(tel2, h, { origin: 'remote' })
+    tel2.deliver({ type: 'attach', id, cols: 30, rows: 40, keep: true })
+    await until(() => tel2.sent.some((p) => p.type === 'attached'))
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(sizeOf(id), '130x40', 'reconectarse no toma el tamaño')
+    // Cambiarse a la consola sí.
+    pc.deliver({ type: 'attach', id, cols: 100, rows: 30 })
+    await until(() => sizeOf(id) === '100x30')
   } finally { h.killAll() }
 })
 

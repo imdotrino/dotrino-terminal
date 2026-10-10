@@ -11,8 +11,8 @@
  *
  * Payloads de dominio (van cifrados dentro de la sesión, el proxio no los ve):
  *   cliente → agente: { type:'list' } · { type:'open', cols, rows, cwd?, tag? } ·
- *                     { type:'attach', id, cols, rows } · { type:'detach' } ·
- *                     { type:'input', data } · { type:'resize', cols, rows } · { type:'pin', on } ·
+ *                     { type:'attach', id, cols, rows, keep? } · { type:'detach' } ·
+ *                     { type:'input', data } · { type:'resize', cols, rows } · { type:'take' } ·
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id } ·
  *                     { type:'move', id, before? } (el orden del panel; contesta con `consoles`) ·
  *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js)
@@ -120,7 +120,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
   // La etiqueta con la que se presenta quien mira (una ventana de la app de escritorio).
   const takeTag = (msg) => { if (typeof msg.tag === 'string') viewer.tag = msg.tag.slice(0, 64) }
 
-  async function attachTo (c, { fresh }) {
+  async function attachTo (c, { fresh, keep = false }) {
     release()
     current = c
     // SI EL CANAL DIRECTO AÚN NO ABRIÓ, PRIMERO SOLO LA PANTALLA. La foto con su historial
@@ -133,7 +133,8 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
     // suya. Quedarse enganchado dejaba un mirón FANTASMA (la consola salía «abierta en otro
     // aparato» sin nadie mirando, y nadie la elegía como libre).
     if (current !== c) { c.detach(viewer); return }
-    c.sizeFrom(viewer, { attaching: true })
+    // Volver a engancharse tras una reconexión (`keep`) no es abrir ni cambiarse: no toca el tamaño.
+    if (!keep) c.take(viewer)
     // La pantalla va en trozos: el proxio corta los mensajes a 1 MB.
     for (let i = 0; i < snapshot.length || i === 0; i += REPLAY_CHUNK) {
       await session.send({ type: 'replay', id: c.id, data: snapshot.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= snapshot.length })
@@ -185,21 +186,21 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       if (!c) return fail('no-console', 'that console no longer exists')
       takeSize(msg)
       takeTag(msg)
-      attachTo(c, { fresh: false })
+      attachTo(c, { fresh: false, keep: msg.keep === true })
       return
     }
     if (msg.type === 'detach') { release(); return }
     if (msg.type === 'input') {
       if (!current) return
       const data = String(msg.data ?? '')
-      // Quien teclea gana el tamaño. Lo que la terminal contesta sola no cuenta.
-      if (isTyped(data)) current.typed(viewer)
+      // Quien teclea toma el tamaño. Lo que la terminal contesta sola no cuenta.
+      if (isTyped(data) && current.holder !== viewer) current.take(viewer)
       current.write(data)
       return
     }
     if (msg.type === 'resize') { takeSize(msg); current?.sizeFrom(viewer); return }
-    // ⤢ «Esta pantalla manda en el tamaño» (on) o soltarlo (off).
-    if (msg.type === 'pin') { current?.pin(viewer, !!msg.on); return }
+    // ⤢ «Usar el tamaño de esta pantalla»: se ajusta ahora, sin dejar nada fijado.
+    if (msg.type === 'take') { current?.take(viewer); return }
     if (msg.type === 'close') { if (current) hub.kill(current.id, viewer); return }
     if (msg.type === 'kill') { if (!hub.kill(msg.id, viewer)) fail('no-console', 'that console no longer exists'); return }
     // El orden del panel: es de la máquina, así que lo ve igual cualquier pantalla.

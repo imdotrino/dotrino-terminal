@@ -83,12 +83,11 @@ class Console {
     this.createdAt = Date.now()
     this.lastActive = Date.now()
     this.viewers = new Set()          // sesiones mirando: { onOut(data), onExit(code), onMeta?(info), origin, device?, tag?, size? }
-    // QUIÉN MANDA EN EL TAMAÑO. `pinKey`: la pantalla que lo eligió a propósito (⤢ en la app o el teléfono);
-    // si nadie, `holder`: el último que se enganchó. Solo ese lo cambia, y se sigue su pantalla
-    // (redimensionar la ventana, girar el teléfono). Escribir o dar foco no cambia nada.
-    // `pinKey` recuerda QUÉ PANTALLA lo eligió (ventana o aparato), no su conexión: si esa pantalla
-    // pasa a otra consola y vuelve, lo recupera. Mientras no está, manda el último que llegó.
-    this.pinKey = null
+    // QUIÉN PUSO EL TAMAÑO. Lo gana una pantalla en cuatro momentos y solo en esos: al abrir la
+    // consola, al cambiarse a ella, al pulsar ⤢ y al teclear. Se ajusta en ese instante y nada
+    // queda fijado: la siguiente pantalla que haga una de las cuatro cosas lo cambia. `holder` es la última que lo
+    // hizo; solo a ella se le sigue la pantalla (redimensionar la ventana, girar el teléfono).
+    // Volver a conectarse o que otra pantalla se vaya no cambia el tamaño.
     this.holder = null
     this.exited = false
     this.screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
@@ -222,56 +221,24 @@ class Console {
 
   detach (viewer) {
     if (!this.viewers.has(viewer)) return
-    // Quién decidía, ANTES de quitarlo: si era él, hay que pasar el tamaño a otro.
-    const before = this.decider()
     this.viewers.delete(viewer)
-    // Si se fue el último que llegó, lo es el último de los que quedan.
-    if (this.holder === viewer) this.holder = [...this.viewers].filter((v) => v.size).pop() || null
-    // Si cambió quién decide (se fue el que lo tenía, fijado o no), manda su tamaño.
-    const d = this.decider()
-    if (d !== before && d?.size) this.resize(d.size.cols, d.size.rows)
+    // Irse no cambia el tamaño ni se lo pasa a otra pantalla: se queda como está hasta que
+    // alguien abra la consola, se cambie a ella, pulse ⤢ o teclee.
+    if (this.holder === viewer) this.holder = null
     this._meta()
   }
 
-  /** Quién decide el tamaño ahora. */
-  decider () { return this.pinnedViewer() || this.holder }
-
-  /** La pantalla que eligió el tamaño, si está mirando ahora. */
-  pinnedViewer () {
-    if (!this.pinKey) return null
-    return [...this.viewers].filter((v) => viewerKey(v) === this.pinKey).pop() || null
-  }
-
-  /**
-   * `viewer` dice su tamaño (al engancharse, `attaching`, o porque cambió su pantalla). Se aplica
-   * solo si es quien decide; engancharse lo hace decidir si nadie lo tiene fijado.
-   */
-  sizeFrom (viewer, { attaching = false } = {}) {
-    if (attaching) this.holder = viewer
-    if (this.decider() === viewer && viewer.size) this.resize(viewer.size.cols, viewer.size.rows)
-    else this._meta()
-  }
-
-  /**
-   * `viewer` tecleó: pasa a decidir el tamaño, también sobre una pantalla que lo tenía fijado
-   * (deja de estarlo). Es la única forma de ganarlo que tiene quien no puede fijarlo, como la
-   * terminal embebida de un editor.
-   */
-  typed (viewer) {
-    if (!this.viewers.has(viewer) || this.decider() === viewer) return
+  /** `viewer` toma el tamaño AHORA: abrió la consola, se cambió a ella, pulsó ⤢ o tecleó. */
+  take (viewer) {
+    if (!this.viewers.has(viewer)) return
     this.holder = viewer
-    if (this.pinKey !== viewerKey(viewer)) this.pinKey = null
     if (viewer.size) this.resize(viewer.size.cols, viewer.size.rows)
     else this._meta()
   }
 
-  /** ⤢: `viewer` fija (o suelta) el tamaño a su pantalla. */
-  pin (viewer, on) {
-    if (on) this.pinKey = viewerKey(viewer)
-    else if (this.pinKey === viewerKey(viewer)) this.pinKey = null
-    const d = this.decider()
-    if (d?.size) this.resize(d.size.cols, d.size.rows)
-    this._meta()
+  /** Cambió la pantalla de `viewer` (ventana, giro). Solo se sigue a quien puso el tamaño. */
+  sizeFrom (viewer) {
+    if (this.holder === viewer && viewer.size) this.resize(viewer.size.cols, viewer.size.rows)
   }
 
   /**
@@ -281,8 +248,8 @@ class Console {
    */
   info () {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
-    const d = this.decider()
-    const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null, pinned: !!d && d === this.pinnedViewer() } : null
+    const d = this.holder
+    const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null } : null
     return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
@@ -305,7 +272,6 @@ const REPORTS = new RegExp([
 /** ¿Hay algo TECLEADO en `data`, o es solo lo que la terminal contesta por su cuenta? */
 export function isTyped (data) { return String(data).replace(REPORTS, '') !== '' }
 
-function viewerKey (v) { return `${v.origin || ''}|${v.device || ''}|${v.tag || ''}` }
 
 /** Las consolas de este agente. */
 export class ConsoleHub {

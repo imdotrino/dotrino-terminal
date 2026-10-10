@@ -23,10 +23,10 @@ final class TabTests: XCTestCase {
         var types: [String] { sent.compactMap { $0["type"]?.string } }
     }
 
-    private func console(_ id: String, _ n: Int, _ cols: Int, _ rows: Int, watchers: Int = 0, by: String? = nil, pinned: Bool = false) -> JSON {
+    private func console(_ id: String, _ n: Int, _ cols: Int, _ rows: Int, watchers: Int = 0, by: String? = nil) -> JSON {
         var o: [String: JSON] = ["id": .string(id), "n": .int(Int64(n)), "title": "", "cols": .int(Int64(cols)), "rows": .int(Int64(rows)),
                                  "viewers": .int(Int64(watchers)), "watchers": .array(Array(repeating: ["origin": "remote"], count: watchers))]
-        if let by { o["sizeBy"] = ["origin": "remote", "device": .string(by), "pinned": .bool(pinned)] }
+        if let by { o["sizeBy"] = ["origin": "remote", "device": .string(by)] }
         return .object(o)
     }
     private func consoles(_ list: JSON...) -> JSON { ["type": "consoles", "list": .array(list)] }
@@ -55,18 +55,19 @@ final class TabTests: XCTestCase {
         XCTAssertTrue(ch3.types.contains("open"))                  // the machine has none: a new one
     }
 
-    func testEveryConsolePutOnScreenTakesThisScreensSize() {
+    func testAConsolePutOnScreenSaysItsSizeAndNothingIsChosen() {
         let (t, ch) = tab()
         t.handle(consoles(console("a", 1, 80, 24), console("b", 2, 80, 24)))
+        XCTAssertNil(ch.last("attach")?["keep"], "opening or switching takes the size: no `keep`")
         t.handle(attached(console("a", 1, 50, 20, watchers: 1, by: me)))
-        XCTAssertEqual(Array(ch.types.suffix(3).prefix(2)), ["resize", "pin"], "as ⤢: the size, then chosen on purpose")
+        XCTAssertFalse(ch.types.contains("take"), "nothing is chosen on purpose")
         t.switchTo("b")
+        XCTAssertNil(ch.last("attach")?["keep"])
         ch.sent.removeAll()
         t.screen(50, 11)                                   // the keyboard came up before the agent answered
         XCTAssertNil(ch.last("resize"), "nothing is said while attaching")
         t.handle(attached(console("b", 2, 50, 20, watchers: 1, by: me)))
         XCTAssertEqual(ch.last("resize")?["rows"]?.int, 11, "the size it has NOW")
-        XCTAssertEqual(ch.last("pin")?["on"], .bool(true))
     }
 
     func testTheEmulatorFollowsTheConsoleSizeNotTheScreen() {
@@ -95,17 +96,15 @@ final class TabTests: XCTestCase {
         XCTAssertTrue(t.terminal.text(0).hasPrefix("BBB"))
     }
 
-    func testSizeHereOnlyWhenThisDeviceChoseIt() {
+    func testTheSizeButtonTakesTheSizeNow() {
         let (t, ch) = tab()
         t.handle(consoles())
-        t.handle(attached(console("a", 1, 50, 20, watchers: 2, by: me)))
-        XCTAssertFalse(t.sizeHere); XCTAssertTrue(t.sizeIsMine(t.current))
-        t.useMySize(true)
-        XCTAssertEqual(Array(ch.types.suffix(2)), ["resize", "pin"])
-        t.handle(meta(console("a", 1, 50, 20, watchers: 2, by: me, pinned: true)))
-        XCTAssertTrue(t.sizeHere)
-        t.handle(meta(console("a", 1, 50, 20, watchers: 2, by: other, pinned: true)))
-        XCTAssertFalse(t.sizeHere)
+        t.handle(attached(console("a", 1, 50, 20, watchers: 2, by: other)))
+        XCTAssertFalse(t.sizeIsMine(t.current))
+        t.useMySize()
+        XCTAssertEqual(Array(ch.types.suffix(2)), ["resize", "take"])
+        t.handle(meta(console("a", 1, 50, 20, watchers: 2, by: me)))
+        XCTAssertTrue(t.sizeIsMine(t.current))
     }
 
     func testClosingTheConsoleOnScreenFirstMovesToAnother() {
