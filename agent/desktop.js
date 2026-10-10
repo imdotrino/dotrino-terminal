@@ -29,6 +29,7 @@ export const DESKTOP_TAG = 'desktop-v'
 export const BINARY = 'dotrino-terminal-desktop'
 const PRODUCT = 'dotrino-terminal-desktop'
 
+/** @returns {any} */
 const fail = (code, reason, extra = {}) => ({ ok: false, code, reason, ...extra })
 
 /** La última release del escritorio. `{ ok:false }` si no se pudo mirar, que NO es «al día». */
@@ -40,7 +41,8 @@ export const latestDesktop = (opts = {}) =>
  * y cómo se pone. Se le pregunta al gestor de paquetes por ESE archivo: mirar solo qué
  * gestor hay se equivoca con un tarball en una máquina con `dpkg`.
  *
- * @returns {{ok:true, kind:'deb'|'rpm'|'tar'|'mac', app?:string} | {ok:false, code:string, reason:string}}
+ * @param {any} [o]
+ * @returns {any} `{ ok:true, kind:'deb'|'rpm'|'tar'|'mac', app? }` o `{ ok:false, code, reason }`
  */
 export function installKind ({ exe, platform = process.platform, arch = process.arch, run = execFileSync, writable = canWrite } = {}) {
   if (!exe) return fail('no-exe', 'the desktop app was not found')
@@ -83,6 +85,11 @@ function asRoot (cmd, args, { run, uid }) {
 /**
  * Pone el archivo ya verificado. Devuelve `{ ok:true }` o por qué no se pudo; si el archivo
  * quedó bajado y sirve para instalarlo a mano, va en `file`.
+ *
+ * @param {string} file
+ * @param {any} how
+ * @param {any} [o]
+ * @returns {any}
  */
 export function install (file, how, { exe, run = execFileSync, uid = process.getuid?.() } = {}) {
   try {
@@ -131,7 +138,8 @@ export function install (file, how, { exe, run = execFileSync, uid = process.get
  * Todo el camino: mirar, bajar, verificar, instalar. `say(step, data)` va contando por dónde
  * va, para que quien lo enseñe lo diga en su idioma.
  *
- * @returns {Promise<{ok:true, version:string, updated:boolean, kind?:string} | {ok:false, code:string, reason:string, file?:string}>}
+ * @param {any} [o]
+ * @returns {Promise<any>} `{ ok:true, version, updated, newer?, kind? }` o `{ ok:false, code, reason, file? }`
  */
 export async function updateDesktop ({ exe, current, check = false, say = () => {}, latest = latestDesktop, fetchVerifiedImpl = fetchVerified, kindOf = installKind, installImpl = install } = {}) {
   const r = await latest({ version: current })

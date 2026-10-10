@@ -17,6 +17,8 @@
  *   dotrino-terminal vscode [--name <n>]       la terminal embebida de VS Code abre consolas de aquí
  *   dotrino-terminal vscode --off              lo deshace
  *   dotrino-terminal desktop update [--check]  actualiza la app de escritorio (la ventana)
+ *   dotrino-terminal service install|uninstall|status [--name <n>]
+ *                                              el agente como servicio: arranca solo con la máquina
  *
  * Un PERFIL es un agente con nombre (`~/.dotrino/agent/terminal-agent/<nombre>/`), enlazado a
  * una bóveda o solo local. Cada consola vive en el agente de un perfil.
@@ -29,6 +31,7 @@
  * cierra saliendo de su shell (`exit`) o desde el panel.
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -82,6 +85,10 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal desktop update            actualiza la app de escritorio (la ventana): baja la
                                              versión nueva, comprueba su firma y la instala
                                              (--check solo mira si hay una)
+  dotrino-terminal service install [--name <n>]   deja el agente como servicio de tu usuario: arranca
+                                             solo al encender la máquina, sin abrir ninguna ventana
+  dotrino-terminal service uninstall [--name <n>] lo quita (para el agente: cierra sus consolas)
+  dotrino-terminal service status [--name <n>]    dice si está puesto y si está corriendo
 
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla; Ctrl+] n abre otra
 (y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola; Ctrl+] p fija el tamaño de la
@@ -114,6 +121,10 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal desktop update            update the desktop app (the window): downloads the
                                              new version, checks its signature and installs it
                                              (--check only looks for one)
+  dotrino-terminal service install [--name <n>]   run the agent as a service of your user: it starts
+                                             by itself when the machine boots, with no window open
+  dotrino-terminal service uninstall [--name <n>] remove it (stops the agent: closes its consoles)
+  dotrino-terminal service status [--name <n>]    say whether it is installed and running
 
 Inside a console: Ctrl+] then d detaches without closing it; Ctrl+] n opens another
 (detaching the current one); Ctrl+] a <id> Enter switches to that console; Ctrl+] p pins the
@@ -169,13 +180,18 @@ async function agent (dir) {
   }
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const log = path.join(dir, 'agent.log')
-  const fd = fs.openSync(log, 'a', 0o600)
-  const cli = fileURLToPath(new URL('./cli.js', import.meta.url))
-  const extra = opt('--name') ? ['--name', opt('--name')] : []
-  // Sin TTY: si la máquina no está enlazada, el agente atiende solo a las ventanas locales.
-  const child = spawn(process.execPath, [cli, ...extra], { detached: true, stdio: ['ignore', fd, fd], env: process.env })
-  child.unref()
-  fs.closeSync(fd)
+  // Si este perfil tiene servicio (`dotrino-terminal service install`), el agente es el del
+  // sistema: se arranca ese, no uno propio al lado. `--dir` fuerza una carpeta sin perfil.
+  const { startService } = await import('../service.js')
+  if (!(!opt('--dir') && !process.env.DOTRINO_TERMINAL_DIR && startService({ name: path.basename(dir) }))) {
+    const fd = fs.openSync(log, 'a', 0o600)
+    const cli = fileURLToPath(new URL('./cli.js', import.meta.url))
+    const extra = opt('--name') ? ['--name', opt('--name')] : []
+    // Sin TTY: si la máquina no está enlazada, el agente atiende solo a las ventanas locales.
+    const child = spawn(process.execPath, [cli, ...extra], { detached: true, stdio: ['ignore', fd, fd], env: process.env })
+    child.unref()
+    fs.closeSync(fd)
+  }
   const t0 = Date.now()
   while (Date.now() - t0 < 10000) {
     await new Promise((r) => setTimeout(r, 100))
@@ -263,6 +279,77 @@ async function desktop () {
   if (r.updated) console.log(t(`\nInstalada la ${r.version}. Las ventanas abiertas siguen con la anterior: cierra Dotrino Terminal y vuelve a abrirla. Tus consolas no se cierran.`, `\nInstalled ${r.version}. Open windows keep the old one: quit Dotrino Terminal and open it again. Your consoles stay open.`))
   else if (r.newer) console.log(t('Hay versión nueva. Tráela con: dotrino-terminal desktop update', 'There is a new version. Get it with: dotrino-terminal desktop update'))
   else console.log(t(`La app está al día (${current}).`, `The app is up to date (${current}).`))
+}
+
+/** Cuántas consolas tiene abiertas el agente de esa carpeta (0 si no hay agente). */
+async function openConsoles (dir) {
+  let conn
+  try { conn = await connectLocal(dir) } catch (e) { if (e.code === 'ENOAGENT') return 0; throw e }
+  const r = await request(conn, { type: 'list' }, 'consoles')
+  conn.close()
+  if (r.type === 'fail') throw new Error(`${r.message} (${r.code})`)
+  return r.list.length
+}
+
+/** El agente como servicio del usuario (systemd en Linux, launchd en macOS). */
+async function service () {
+  const action = args[1]
+  if (!['install', 'uninstall', 'status'].includes(action)) die(t('uso: dotrino-terminal service install|uninstall|status [--name <perfil>]', 'usage: dotrino-terminal service install|uninstall|status [--name <profile>]'))
+  const asked = opt('--name')
+  if (asked !== undefined && !isValidName(asked)) die(t(`nombre de perfil no válido: ${asked}`, `invalid profile name: ${asked}`))
+  const { dir } = resolveInstance(LABEL, asked)
+  const name = path.basename(dir)
+  const { installService, uninstallService, serviceStatus } = await import('../service.js')
+  const explain = (e) => {
+    if (e.code === 'no-user-systemd') die(t('esta sesión no tiene systemd de usuario, que es donde se pone el servicio. No se instaló nada.', 'this session has no systemd user manager, which is where the service goes. Nothing was installed.'))
+    if (e.code === 'unsupported-platform') die(t('esto solo está para Linux y macOS.', 'this is only available on Linux and macOS.'))
+    throw e
+  }
+  let st
+  try { st = serviceStatus({ name }) } catch (e) { explain(e) }
+  const pid = Number((() => { try { return fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8') } catch (_) { return '' } })())
+  const running = !!pid && alive(pid)
+
+  if (action === 'status') {
+    if (!st.installed) console.log(t(`El perfil «${name}» no tiene servicio: su agente arranca cuando abres una ventana. Para ponerlo: dotrino-terminal service install --name ${name}`, `Profile "${name}" has no service: its agent starts when you open a window. To add it: dotrino-terminal service install --name ${name}`))
+    else if (st.active) console.log(t(`Servicio puesto y corriendo (${st.file}).`, `Service installed and running (${st.file}).`))
+    else if (running) console.log(t(`Servicio puesto (${st.file}). Ahora corre un agente que levantó una ventana; el servicio toma el relevo cuando ese termine o al próximo arranque.`, `Service installed (${st.file}). Right now an agent started by a window is running; the service takes over when it ends or at the next start.`))
+    else console.log(t(`Servicio puesto pero parado (${st.file}). Arranca al abrir una ventana; si falló, mira por qué: journalctl --user -u dotrino-terminal-agent-${name}`, `Service installed but stopped (${st.file}). It starts when you open a window; if it failed, see why: journalctl --user -u dotrino-terminal-agent-${name}`))
+    return
+  }
+
+  if (action === 'install') {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const cli = fs.realpathSync(fileURLToPath(new URL('./cli.js', import.meta.url)))
+    // Un agente que corre por su cuenta no se para: cerraría sus consolas.
+    const own = running && !st.active
+    let r
+    try { r = installService({ name, cli, dir, running: own }) } catch (e) { explain(e) }
+    console.log(t(`Servicio del perfil «${name}» puesto: ${r.file}`, `Service for profile "${name}" installed: ${r.file}`))
+    if (r.started) console.log(t('El agente ya corre como servicio.', 'The agent now runs as a service.'))
+    else console.log(t('Ahora mismo corre un agente que levantó una ventana, y no se toca para no cerrar sus consolas. El servicio toma el relevo cuando ese termine o al próximo arranque.', 'Right now an agent started by a window is running, and it is left alone so its consoles stay open. The service takes over when it ends or at the next start.'))
+    if (r.kind === 'launchd') console.log(t('Arranca solo cuando inicias sesión en esta Mac.', 'It starts by itself when you log in to this Mac.'))
+    else if (r.boot) console.log(t('Arranca solo al encender la máquina, sin que nadie inicie sesión.', 'It starts by itself when the machine boots, with nobody logged in.'))
+    else console.log(t(`Arranca solo cuando inicias sesión. Para que arranque al encender, sin iniciar sesión: sudo loginctl enable-linger ${os.userInfo().username}`, `It starts by itself when you log in. To start at boot, with nobody logged in: sudo loginctl enable-linger ${os.userInfo().username}`))
+    if (!loadLink(dir)) console.log(t(`Este perfil no está enlazado: el servicio atiende solo a las ventanas de esta máquina. Para abrir sus consolas desde otros aparatos: dotrino-terminal link --name ${name}`, `This profile is not linked: the service only serves this machine's windows. To open its consoles from other devices: dotrino-terminal link --name ${name}`))
+    console.log(t('Si cambias de versión de Node, vuelve a correr esta orden.', 'If you switch Node versions, run this command again.'))
+    return
+  }
+
+  if (!st.installed) { console.log(t(`El perfil «${name}» no tiene servicio.`, `Profile "${name}" has no service.`)); return }
+  // Quitarlo para el agente que corre bajo el servicio, y con él sus consolas.
+  if (st.active && !args.includes('--yes')) {
+    const inside = !!process.env.DOTRINO_TERMINAL_PROFILE_DIR && samePath(process.env.DOTRINO_TERMINAL_PROFILE_DIR, dir)
+    if (inside) die(t('esta consola es de ese mismo servicio: quitarlo la cerraría a mitad de la orden. Hazlo desde una terminal normal, o con --yes si eso es lo que quieres.', 'this console belongs to that very service: removing it would close it mid-command. Do it from a plain terminal, or with --yes if that is what you want.'))
+    const open = await openConsoles(dir)
+    if (open > 0) {
+      const ok = await ask(t(`El perfil «${name}» tiene ${open} consola(s) abierta(s); quitar el servicio las cierra. ¿Seguir? [s/N] `, `Profile "${name}" has ${open} open console(s); removing the service closes them. Continue? [y/N] `))
+      if (!/^[sy]/i.test(ok)) die(t('No se quitó.', 'Not removed.'))
+    }
+  }
+  let r
+  try { r = uninstallService({ name }) } catch (e) { explain(e) }
+  console.log(t(`Servicio del perfil «${name}» quitado (${r.file}). El perfil y su enlace siguen igual: el agente vuelve a arrancar cuando abras una ventana.`, `Service for profile "${name}" removed (${r.file}). The profile and its link are untouched: the agent starts again when you open a window.`))
 }
 
 /** Enlaza un perfil. Sin `--name`, lo pregunta. Uno ya enlazado no se pisa: eso es `enroll`. */
@@ -740,6 +827,7 @@ try {
   if (cmd === 'lock') { await lock(); process.exit(0) }
   if (cmd === 'vscode') { vscode(); process.exit(0) }
   if (cmd === 'desktop') { await desktop(); process.exit(0) }
+  if (cmd === 'service') { await service(); process.exit(0) }
   if (cmd === 'note') { await note(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))
   if (cmd === 'open' || cmd === 'attach') captureEarly()

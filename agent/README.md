@@ -51,6 +51,7 @@ dotrino-terminal link [--name <n>]       # enlazar un perfil con tu bóveda
 dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para su agente; mismo aparato)
 dotrino-terminal vscode [--name <n>]     # la terminal embebida de VS Code abre consolas de aquí (--off lo deshace)
 dotrino-terminal desktop update [--check] # actualiza la app de escritorio: baja, verifica la firma e instala
+dotrino-terminal service install|uninstall|status [--name <n>]  # el agente como servicio del usuario
 ```
 
 Cerrar la ventana no cierra la consola: sigue viva en el agente y se retoma después (se cierra
@@ -149,3 +150,15 @@ En la app de escritorio: menú **Perfil → Poner o cambiar la clave… / Quitar
   nunca la clave. Viaja dentro de la sesión cifrada: el proxio no la ve.
 - Hace falta agente ≥ 0.19.0, y web ≥ 0.8.9 o las apps ≥ 0.8.9 para poder escribirla. Un
   cliente más viejo ve el error `locked` y no entra.
+
+## Como servicio (arrancar al encender)
+
+`dotrino-terminal service install [--name <n>]` escribe una unidad de systemd **del usuario**
+(`~/.config/systemd/user/dotrino-terminal-agent-<perfil>.service`, `Restart=always`, con el `PATH`
+de quien instala) y pide `loginctl enable-linger` para que arranque sin sesión; en macOS, un
+LaunchAgent (`~/Library/LaunchAgents/com.dotrino.terminal-agent.<perfil>.plist`). Es de usuario
+para que el agente se siga actualizando solo (§15): con quien lo levante ya puede reiniciarse.
+Un agente que ya corre por su cuenta no se para (cerraría sus consolas): el servicio queda
+habilitado, y `dotrino-terminal`, cuando no encuentra agente, arranca el servicio en vez de
+levantar uno propio. Código en `service.js`; probado con systemd en un contenedor de Fedora,
+macOS solo con pruebas unitarias.
