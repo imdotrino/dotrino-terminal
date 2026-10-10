@@ -148,7 +148,7 @@ class MainActivity : Activity() {
         }
         val a = active
         if (a != null && a !in Consoles.tabs) { active = Consoles.tabs.lastOrNull(); render(); return }
-        if (a != null) { renderTabs(); renderNote(); renderPanel() } else if (Consoles.profile != null && problem == null) renderMachines()
+        if (a != null) { renderTabs(); renderNote(); renderPanel(); renderAbout() } else if (Consoles.profile != null && problem == null) renderMachines()
     }
 
     private fun render() {
@@ -262,8 +262,12 @@ class MainActivity : Activity() {
         // (on a phone, pushing the console aside would change its size).
         val side = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(5), px(4), 0, px(4)) }
         panel = side
+        // «What it is about»: a translucent card floating at the top right of the console.
+        val about = LinearLayout(this).apply { tag = "about"; orientation = LinearLayout.VERTICAL; visibility = View.GONE; elevation = px(4).toFloat() }
+        aboutCard = about
         val stage = FrameLayout(this).apply {
             addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(about, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { topMargin = px(6); marginEnd = px(6); marginStart = px(40) })
             addView(note, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { marginStart = px(24); marginEnd = px(24) })
         }
         // The strip scrolls with the finger: nothing is sorted here (owner, 2026-10-07; sorting is the
@@ -287,7 +291,7 @@ class MainActivity : Activity() {
             addView(extraKeys())
         })
         drawer = null
-        renderTabs(); renderNote(); renderPanel()
+        renderTabs(); renderNote(); renderPanel(); renderAbout()
         if (composing) composeInput?.let { it.requestFocus(); ime().showSoftInput(it, 0) } else tv.showKeyboard()
         // The panel says what happens on the machine (other screens, titles): ask every 2 s while on screen.
         poll?.cancel()
@@ -554,6 +558,7 @@ class MainActivity : Activity() {
                     }
                     lines.dir?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_text))) }
                     lines.name?.let { addView(oneLine(it, "drawer-title", col(R.color.t_text))) }
+                    c.aboutLine?.let { addView(oneLine(it, "drawer-about", col(R.color.t_accent)).apply { ellipsize = android.text.TextUtils.TruncateAt.END }) }
                     addView(label(where(tab, c) + actText(c), 11f, col(R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }
@@ -574,6 +579,98 @@ class MainActivity : Activity() {
         if (c.id != tab.consoleId) body.add(pill(t("console.openHere"), filled = true) { dialog.dismiss(); tab.switchTo(c.id) }.apply { tag = "open-here" }, top = 8)
         body.add(pill(t("console.kill")) { dialog.dismiss(); tab.killConsole(c.id) }.apply { tag = "kill" }, top = 10)
         dialog.show()
+    }
+
+    // ---------- what the console is about ----------
+    //
+    // The same card as the PWA and the desktop: the console's title, the task the program inside
+    // set (read and removed here, never edited) and the person's note (edited in a sheet). On a
+    // phone it starts FOLDED to one line — the task — because open it covers what is being read;
+    // on a wide screen it starts open. Folding is remembered.
+
+    private var aboutCard: LinearLayout? = null
+    private var aboutFolded: Boolean
+        get() = prefs.getBoolean("aboutFolded", resources.configuration.smallestScreenWidthDp < 600)
+        set(v) { prefs.edit().putBoolean("aboutFolded", v).apply() }
+
+    private fun renderAbout() {
+        val box = aboutCard ?: return
+        val tab = active ?: return
+        val c = tab.current
+        box.removeAllViews()
+        if (c == null || tab.state != Consoles.Tab.State.OPEN) { box.visibility = View.GONE; return }
+        box.visibility = View.VISIBLE
+        val glass = (0xC8 shl 24) or (col(R.color.t_panel2) and 0xFFFFFF)
+        if (aboutFolded) {
+            // One line: what it is about (or just «i» when nothing is written).
+            box.background = rounded(glass, px(14), px(1), col(R.color.t_line))
+            box.setPadding(px(10), px(5), px(10), px(5))
+            box.addView(label(c.aboutLine ?: "i", 12f, col(R.color.t_text), bold = c.aboutLine == null).apply {
+                tag = "about-show"; contentDescription = t("about.show")
+                isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END; maxWidth = px(190)
+            })
+            box.setOnClickListener { aboutFolded = false; renderAbout() }
+            return
+        }
+        box.setOnClickListener(null); box.isClickable = true      // a touch on the card does not reach the console
+        box.background = rounded(glass, px(14), px(1), col(R.color.t_accent_soft))
+        box.setPadding(px(10), px(8), px(10), px(8))
+        val width = px(minOf(260, resources.configuration.screenWidthDp - 110))
+        fun line() = View(this).apply { setBackgroundColor(col(R.color.t_line)) }
+        box.addView(LinearLayout(this).apply {
+            isBaselineAligned = false
+            addView(label("${c.n}", 12f, col(R.color.t_on_accent), bold = true).apply { background = rounded(col(R.color.t_accent), px(5)); setPadding(px(6), 0, px(6), 0) })
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(px(7), 0, px(4), 0)
+                addView(label(c.title.ifBlank { t("about.untitled") }, 12f, bold = true).apply { tag = "about-title"; maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END })
+                addView(label(where(tab, c), 11f, col(R.color.t_muted)).apply { tag = "about-where" })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(label("–", 15f, col(R.color.t_muted)).apply {
+                tag = "about-hide"; contentDescription = t("about.hide"); gravity = Gravity.CENTER
+                setPadding(px(10), 0, px(6), px(4)); setOnClickListener { aboutFolded = true; renderAbout() }
+            })
+        }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
+        c.task?.takeIf { it.isNotBlank() }?.let { task ->
+            box.addView(line(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(1)).apply { topMargin = px(6); bottomMargin = px(6) })
+            box.addView(LinearLayout(this).apply {
+                isBaselineAligned = false
+                addView(label(task, 12f).apply { tag = "about-task"; maxLines = 8; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(label("×", 16f, col(R.color.t_muted)).apply {
+                    tag = "about-task-del"; contentDescription = t("about.taskDel")
+                    setPadding(px(10), 0, px(6), px(4)); setOnClickListener { tab.clearTask() }
+                })
+            }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        box.addView(line(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(1)).apply { topMargin = px(6); bottomMargin = px(6) })
+        val note = c.note
+        box.addView(label(when { note == null -> t("about.old"); note.isEmpty() -> t("about.empty"); else -> note }, 12f, col(if (note.isNullOrEmpty()) R.color.t_muted else R.color.t_text)).apply {
+            tag = "about-note"; maxLines = 10; ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // A machine that keeps no notes: the button shows, off (the line above says why).
+        box.addView(label(t(if (note.isNullOrEmpty()) "about.add" else "about.edit"), 12f, col(R.color.t_text), bold = true).apply {
+            tag = "about-edit"; gravity = Gravity.CENTER
+            background = rounded(0, px(12), px(1), col(R.color.t_line)); setPadding(px(12), px(4), px(12), px(4))
+            isEnabled = note != null; alpha = if (note != null) 1f else .4f
+            setOnClickListener { editNote(tab, c) }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; topMargin = px(6) })
+    }
+
+    /** The person's note, edited in a sheet: only theirs — the task is not in the box. */
+    private fun editNote(tab: Consoles.Tab, c: ConsoleInfo) {
+        val (dialog, body) = sheet(t("about.notes", "n" to c.n))
+        val input = android.widget.EditText(this).apply {
+            tag = "about-text"; hint = t("about.hint"); setText(c.note.orEmpty()); setSelection(text.length)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 4; maxLines = 10; gravity = Gravity.TOP
+            filters = arrayOf(android.text.InputFilter.LengthFilter(4000))
+            setTextColor(col(R.color.t_text)); setHintTextColor(col(R.color.t_muted))
+            background = rounded(col(R.color.t_panel), px(12), px(1), col(R.color.t_line))
+            setPadding(px(14), px(12), px(14), px(12))
+        }
+        body.add(input, top = 8)
+        body.add(pill(t("about.save"), filled = true) { dialog.dismiss(); tab.setNote(input.text.toString().trimEnd()) }.apply { tag = "about-save" }, top = 12)
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        dialog.show(); input.requestFocus()
     }
 
     /** What the active tab has to say when it is not simply open. */

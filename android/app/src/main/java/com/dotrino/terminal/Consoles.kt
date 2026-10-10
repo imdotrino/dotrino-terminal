@@ -53,7 +53,14 @@ data class ConsoleInfo(
     val cwd: String? = null,
     /** `user@host` of the machine it runs on, as a shell's prompt says it (agent ≥ 0.24). */
     val host: String? = null,
+    /** What it is about, written by the person (agent ≥ 0.36); null when the machine keeps no notes. */
+    val note: String? = null,
+    /** The task in progress, set by the program running inside (agent ≥ 0.37): read and removed here, never edited. */
+    val task: String? = null,
 ) {
+    /** What the panel says of «what it is about»: the first line of the task, or of the note. */
+    val aboutLine: String? get() = listOfNotNull(task, note).flatMap { it.lines() }.map { it.trim() }.firstOrNull { it.isNotEmpty() }
+
     enum class Activity { IDLE, BUSY, DONE }
     val activity: Activity get() = if (busy) Activity.BUSY else if (doneAt != null) Activity.DONE else Activity.IDLE
 }
@@ -90,6 +97,8 @@ fun consoleOf(o: JsonObject): ConsoleInfo? {
         (o["watchers"] as? JsonArray).orEmpty().map { w -> (w as? JsonObject)?.let { str("device", it) } },
         str("cwd"),
         str("host"),
+        str("note"),
+        str("task"),
     )
 }
 
@@ -446,6 +455,8 @@ object Consoles {
                     if (pendingInput.isNotEmpty()) { val t = pendingInput.toString(); pendingInput.clear(); input(t) }
                     list(); onChange()
                 }
+                // The note (or the task) was changed: the console as the machine has it now.
+                "noted" -> { (m["console"] as? JsonObject)?.let(::consoleOf)?.let(::upsert); onChange() }
                 "meta" -> {
                     val info = (m["console"] as? JsonObject)?.let(::consoleOf) ?: return
                     upsert(info)
@@ -551,6 +562,22 @@ object Consoles {
             if (id == consoleId) switchTo(pick(id)?.id)
             try { channel?.send(buildJsonObject { put("type", "kill"); put("id", id) }) } catch (_: Exception) {}
             list()
+        }
+
+        /** The person's note of the console on screen. Shown at once; the machine's answer confirms it. */
+        fun setNote(text: String) {
+            val c = current ?: return
+            upsert(c.copy(note = text))
+            try { channel?.send(buildJsonObject { put("type", "note"); put("id", c.id); put("text", text) }) } catch (_: Exception) {}
+            onChange()
+        }
+
+        /** Removes the task the program set on the console on screen (it is not edited here, only removed). */
+        fun clearTask() {
+            val c = current ?: return
+            upsert(c.copy(task = ""))
+            try { channel?.send(buildJsonObject { put("type", "note"); put("id", c.id); put("task", "") }) } catch (_: Exception) {}
+            onChange()
         }
 
         /**

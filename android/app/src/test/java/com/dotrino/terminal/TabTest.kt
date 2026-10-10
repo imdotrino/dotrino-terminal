@@ -284,4 +284,34 @@ class TabTest {
         t.move("b", "b")
         assertEquals("on itself nothing is asked", sent, ch.sent.size)
     }
+
+    @Test fun theNoteIsThePersonsAndTheTaskIsTheProgramsEachInItsField() {
+        val (t, ch) = tab()
+        val c = buildJsonObject { console("a", 1, 80, 24).forEach { (k, v) -> put(k, v) }; put("note", "llamar a Ana"); put("task", "migrando\nfalta: probar") }
+        ch.agent(consoles(c)); ch.agent(attached(c))
+        assertEquals("llamar a Ana", t.current!!.note)
+        assertEquals("the panel shows the task's first line", "migrando", t.current!!.aboutLine)
+
+        t.setNote("llamar a Luis")
+        assertEquals("only the note travels", "llamar a Luis", (ch.last("note")!!["text"] as JsonPrimitive).content)
+        assertNull("the task is not sent with it", ch.last("note")!!["task"])
+        assertEquals("shown at once", "llamar a Luis", t.current!!.note)
+        assertEquals("and the task stays", "migrando\nfalta: probar", t.current!!.task)
+
+        t.clearTask()
+        assertEquals("", (ch.last("note")!!["task"] as JsonPrimitive).content)
+        assertNull("removing the task does not send the note", ch.last("note")!!["text"])
+        assertEquals("with no task, the panel shows the note", "llamar a Luis", t.current!!.aboutLine)
+
+        // The machine's answer is what stays.
+        ch.agent(buildJsonObject { put("type", "noted"); put("console", buildJsonObject { console("a", 1, 80, 24).forEach { (k, v) -> put(k, v) }; put("note", "de la máquina"); put("task", "") }) })
+        assertEquals("de la máquina", t.current!!.note)
+    }
+
+    @Test fun aMachineThatKeepsNoNotesSaysNothingOfThem() {
+        val (t, ch) = tab()
+        val c = console("a", 1, 80, 24)
+        ch.agent(consoles(c)); ch.agent(attached(c))
+        assertNull(t.current!!.note); assertNull(t.current!!.task); assertNull(t.current!!.aboutLine)
+    }
 }

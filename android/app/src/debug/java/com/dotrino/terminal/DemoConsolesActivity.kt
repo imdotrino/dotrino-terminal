@@ -38,12 +38,12 @@ class DemoConsolesActivity : Activity() {
     }
 
     private class DemoAgent : Channel {
-        private class C(val id: String, val n: Int, val title: String, var cols: Int, var rows: Int, val window: Boolean, var chosenBy: String?, var holder: String?)
+        private class C(val id: String, val n: Int, val title: String, var cols: Int, var rows: Int, val window: Boolean, var chosenBy: String?, var holder: String?, var note: String = "", var task: String = "")
 
         private val ui = Handler(Looper.getMainLooper())
         private val listeners = ArrayList<(JsonObject) -> Unit>()
         private val consoles = mutableListOf(
-            C("c1", 1, "✳ Sefjr improvement", 80, 24, false, null, null),   // a program that names its session, not its folder
+            C("c1", 1, "✳ Sefjr improvement", 80, 24, false, null, null, "Llamar a Ana antes de desplegar.", "Mejorando el panel de consolas\nFalta: probar en el teléfono"),   // a program that names its session, not its folder
             C("c2", 2, "seyacat@loca: ~/proyectos/dotrino", 120, 40, true, "window", "window"),
             C("c3", 3, "seyacat@loca: /mnt/sda1/Dotrino/dotrino-terminal/desktop/vendor", 80, 24, false, null, null),
         )
@@ -63,6 +63,7 @@ class DemoConsolesActivity : Activity() {
             put("id", c.id); put("n", c.n); put("title", c.title); put("origin", "local"); put("host", "seyacat@loca")
             put("cwd", if (c.id == "c1") "/mnt/sda1/Dotrino/dotrino-terminal/android/app/src/main" else c.title.substringAfter(": "))
             put("cols", c.cols); put("rows", c.rows); put("lastActive", System.currentTimeMillis())
+            put("note", c.note); put("task", c.task)
             // 2 is working and 3 finished without anyone looking, to see the panel's colours.
             if (c.n == 2) put("activity", "busy") else put("activity", "idle")
             if (c.n == 3 && current !== c) put("doneAt", System.currentTimeMillis())
@@ -134,6 +135,11 @@ class DemoConsolesActivity : Activity() {
                     list()
                 }
                 "close" -> { current?.let { consoles.remove(it) }; current = null }
+                "note" -> consoles.firstOrNull { it.id == (payload["id"] as? JsonPrimitive)?.content }?.let { c ->
+                    (payload["text"] as? JsonPrimitive)?.content?.let { c.note = it }
+                    (payload["task"] as? JsonPrimitive)?.content?.let { c.task = it }
+                    reply(buildJsonObject { put("type", "noted"); put("console", info(c)) })
+                }
             }
         }
     }
