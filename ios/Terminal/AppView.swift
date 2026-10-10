@@ -508,7 +508,7 @@ private struct ConsoleScreen: View {
             // A bigger area to touch, the same size to look at (owner, 2026-10-10: folding it on a
             // phone was hard): the card's top corner folds it and its bottom corner edits the note,
             // well beyond what «–» and «Editar» show.
-            .overlay(alignment: .topTrailing) { touch(width: 64, height: 54) { aboutFolded = true } }
+            .overlay(alignment: .topTrailing) { touch(width: 64, height: 44) { aboutFolded = true } }
             .overlay(alignment: .bottomTrailing) { if c.note != nil { touch(width: 130, height: 46) { noteDraft = c.note ?? ""; editing = c } } }
         }
     }
