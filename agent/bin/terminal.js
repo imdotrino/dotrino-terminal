@@ -60,8 +60,8 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal note <texto>              la reemplaza («-» la lee de la entrada estándar)
   dotrino-terminal note --add <texto>        le añade una línea
   dotrino-terminal note --clear              la borra
-  dotrino-terminal note --task <texto>       pone la tarea en curso (líneas «▸ », arriba) y NO toca
-                                             lo demás: es la que usa un programa; --task '' la quita
+  dotrino-terminal note --task <texto>       pone la TAREA en curso, que va aparte de la nota: es
+                                             lo que usa un programa; --task '' la quita
                                              (--id <id> para otra consola; --json para leerla una máquina)
   dotrino-terminal profiles [--json]         los perfiles de esta máquina
   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
@@ -86,8 +86,8 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal note <text>               replace it ("-" reads it from standard input)
   dotrino-terminal note --add <text>         append a line
   dotrino-terminal note --clear              clear it
-  dotrino-terminal note --task <text>        set the task in progress ("▸ " lines, on top) WITHOUT
-                                             touching the rest: the one a program uses; --task '' removes it
+  dotrino-terminal note --task <text>        set the TASK in progress, kept apart from the note: what
+                                             a program uses; --task '' removes it
                                              (--id <id> for another console; --json for a machine to read)
   dotrino-terminal profiles [--json]         this machine's profiles
   dotrino-terminal link [--name <n>]         link a profile with your vault
@@ -392,7 +392,7 @@ async function list (conn) {
  * agente pone su id en `DOTRINO_TERMINAL_CONSOLE`), que es como la cambia un programa desde dentro.
  * No levanta ningún agente: sin agente no hay consola a la que ponerle nota.
  */
-/** La marca de las líneas que pone un programa con `note --task`. */
+/** Cómo se enseñan, al leer la nota, las líneas de la tarea (la que pone un programa con `note --task`). */
 const TASK_MARK = '▸ '
 
 async function note () {
@@ -424,12 +424,11 @@ async function note () {
   }
   let c
   if (task !== undefined) {
-    // LA TAREA ES DEL PROGRAMA, LO DEMÁS ES DE LA PERSONA. Las líneas de la tarea llevan su marca
-    // y van arriba; cambiar la tarea quita las marcadas de antes y deja el resto TAL CUAL, línea
-    // por línea. Así un agente de IA no puede pisar una nota personal ni por descuido.
-    const kept = ((await ask({ type: 'note', id })).note || '').split('\n').filter((l) => !l.startsWith(TASK_MARK))
-    const mine = task.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => TASK_MARK + l)
-    c = await ask({ type: 'note', id, text: [...mine, ...kept].join('\n').replace(/^\n+|\n+$/g, '') })
+    // LA TAREA ES DEL PROGRAMA, LA NOTA ES DE LA PERSONA: dos campos. Esta orden solo escribe el
+    // primero, así un agente de IA no puede pisar una nota personal ni por descuido.
+    c = await ask({ type: 'note', id, task: task.split('\n').map((l) => l.trim()).filter(Boolean).join('\n') })
+    // Un agente anterior a la 0.37 contesta, pero no guarda tareas: se dice, no se da por hecha.
+    if (c.task === undefined) die(t('el agente que corre es anterior a la 0.37.0 y no guarda tareas. Reinícialo con la versión nueva (cierra sus consolas).', 'the running agent predates 0.37.0 and keeps no tasks. Restart it with the new version (closes its consoles).'))
   } else if (args.includes('--clear')) c = await ask({ type: 'note', id, text: '' })
   else if (add !== undefined) {
     const before = (await ask({ type: 'note', id })).note || ''
@@ -437,8 +436,12 @@ async function note () {
   } else if (given !== null) c = await ask({ type: 'note', id, text: given })
   else c = await ask({ type: 'note', id })
   conn.close()
-  if (args.includes('--json')) console.log(JSON.stringify({ id: c.id, n: c.n, title: c.title, note: c.note }, null, 2))
-  else if (c.note) console.log(c.note)
+  if (args.includes('--json')) console.log(JSON.stringify({ id: c.id, n: c.n, title: c.title, task: c.task || '', note: c.note }, null, 2))
+  else {
+    // La tarea, marcada; debajo, la nota de la persona.
+    const lines = [...(c.task ? c.task.split('\n').map((l) => TASK_MARK + l) : []), ...(c.note ? [c.note] : [])]
+    if (lines.length) console.log(lines.join('\n'))
+  }
 }
 
 /** La ventana: la TTY enganchada a una consola del agente. */

@@ -15,8 +15,9 @@
  *                     { type:'input', data } · { type:'resize', cols, rows } · { type:'take' } ·
  *                     { type:'close' } (mata la consola enganchada) · { type:'kill', id } ·
  *                     { type:'move', id, before? } (el orden del panel; contesta con `consoles`) ·
- *                     { type:'note', id?, text? } (la nota de una consola: sin `id`, la enganchada;
- *                       sin `text`, solo la lee; contesta con `noted`) ·
+ *                     { type:'note', id?, text?, task? } (de qué va una consola: `text` es la nota de
+ *                       la persona y `task` la tarea que pone el programa; sin `id`, la enganchada;
+ *                       sin ninguno de los dos, solo lee; contesta con `noted`) ·
  *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
@@ -211,6 +212,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       const c = msg.id == null ? current : hub.get(String(msg.id))
       if (!c) return fail('no-console', 'that console no longer exists')
       if (typeof msg.text === 'string') c.setNote(msg.text)
+      if (typeof msg.task === 'string') c.setTask(msg.task)
       session.send({ type: 'noted', console: c.info() })
       return
     }

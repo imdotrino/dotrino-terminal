@@ -88,7 +88,7 @@ const M = {
     split_right: 'Dividir a la derecha', split_down: 'Dividir abajo', open_right: 'Abrir a la derecha', open_down: 'Abrir abajo', close_pane: 'Cerrar este panel', pane_last: 'Es el único panel: cierra la pestaña',
     about_title: 'De qué va esta consola', about_hide: 'Plegar', about_show: 'De qué va esta consola',
     about_untitled: 'Sin título', about_empty: 'Sin notas.', about_edit: 'Editar', about_add: 'Agregar nota',
-    about_save: 'Guardar', about_cancel: 'Cancelar', about_ph: 'La tarea en curso, lo que falta, lo que no hay que olvidar…',
+    about_save: 'Guardar', about_cancel: 'Cancelar', about_ph: 'Tus notas sobre esta consola…', about_task: 'Tarea en curso', about_task_del: 'Quitar la tarea',
     about_old: 'Esta máquina aún no guarda notas: actualiza su terminal.', about_fail: 'No se pudo guardar la nota.',
     console_gone: 'Esta consola ya no existe en la máquina: se cerró, o el agente se reinició.',
     closed_by_other: (n) => `Otra pantalla cerró la consola ${n}. Esta es otra.`,
@@ -170,7 +170,7 @@ const M = {
     console_local: 'window open on the machine',
     about_title: 'What this console is about', about_hide: 'Fold', about_show: 'What this console is about',
     about_untitled: 'Untitled', about_empty: 'No notes.', about_edit: 'Edit', about_add: 'Add a note',
-    about_save: 'Save', about_cancel: 'Cancel', about_ph: 'The task in progress, what is left, what not to forget…',
+    about_save: 'Save', about_cancel: 'Cancel', about_ph: 'Your notes about this console…', about_task: 'Task in progress', about_task_del: 'Remove the task',
     about_old: 'This machine does not keep notes yet: update its terminal.', about_fail: 'Could not save the note.',
     split_right: 'Split right', split_down: 'Split down', open_right: 'Open to the right', open_down: 'Open below', close_pane: 'Close this pane', pane_last: 'The only pane: close the tab instead',
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
@@ -569,7 +569,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
   /** La primera línea de la nota de una consola: lo que el panel enseña de «de qué va». */
-  const noteLine = (c) => (c.note || '').split('\n').map((l) => l.trim()).find(Boolean) || ''
+  const noteLine = (c) => [c.task, c.note].join('\n').split('\n').map((l) => l.trim()).find(Boolean) || ''
 
   /**
    * Una ruta para el panel: lo que importa es la carpeta final, así que se recorta POR LA
@@ -660,7 +660,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c) + (c.note ? '\n\n' + c.note : ''))}">${numOf(c, i)}</button>`).join('')}`
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c) + ([c.task, c.note].filter(Boolean).length ? '\n\n' + [c.task, c.note].filter(Boolean).join('\n') : ''))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
@@ -703,12 +703,16 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     }
     const n = current(s, p)?.n ?? c.n ?? ''
     const note = c.note || ''
+    const task = c.task || ''
+    // La tarea la pone el programa de dentro: aquí se lee y se quita, no se edita. La nota es de la persona.
+    const taskBox = task ? `<div class="about-task" data-testid="about-task"><span>${esc(task)}</span><button class="about-btn" data-a="task-del" data-testid="about-task-del" title="${esc(t('about_task_del'))}" aria-label="${esc(t('about_task_del'))}">×</button></div>` : ''
     box.innerHTML = `
       <div class="about-head">
         <b class="about-n">${esc(String(n))}</b>
         <span class="about-title" data-testid="about-title">${esc(c.title || t('about_untitled'))}</span>
         <button class="about-btn" data-a="hide" data-testid="about-hide" title="${esc(t('about_hide'))}" aria-label="${esc(t('about_hide'))}" aria-expanded="true">–</button>
       </div>
+      ${taskBox}
       <div class="about-note${note ? '' : ' empty'}" data-testid="about-note">${esc(note || t('about_empty'))}</div>
       <div class="about-row"><span class="about-msg" data-testid="about-msg"></span><button class="about-act" data-a="edit" data-testid="about-edit">${esc(t(note ? 'about_edit' : 'about_add'))}</button></div>`
   }
@@ -721,7 +725,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       const text = box.querySelector('textarea').value.replace(/\s+$/, '')
       const msg = box.querySelector('.about-msg')
       try {
-        const c = await p.agent.note(id, text)
+        const c = await p.agent.note(id, { text })
         if (p.agent.consoleId === c.id) p.meta = c
         done(); refresh(s)
       } catch (e) {
@@ -735,6 +739,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         aboutFolded = a === 'hide'
         try { localStorage.setItem(SS_ABOUT, aboutFolded ? '1' : '0') } catch {}
         for (const x of sessions) for (const q of x.panes) renderAbout(x, q)
+        return
+      }
+      if (a === 'task-del') {
+        const c = aboutOf(s, p); if (!c) return
+        p.agent.note(c.id, { task: '' }).then((r) => { if (p.agent.consoleId === r.id) p.meta = r; renderAbout(s, p); refresh(s) })
+          .catch((e) => { const m = box.querySelector('.about-msg'); if (m) m.textContent = t(e.code === 'timeout' ? 'about_old' : 'about_fail') })
         return
       }
       if (a === 'cancel') return done()

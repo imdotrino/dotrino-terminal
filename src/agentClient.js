@@ -168,10 +168,15 @@ export class AgentClient {
   async move (id, before = null) { return (await this._ask({ type: 'move', id, before }, 'consoles', 5000)).list }
 
   /**
-   * La nota de la consola `id` (de qué va): con `text` la cambia, sin él solo la lee. Devuelve la
-   * consola, como en `list` (agente ≥ 0.36; uno anterior no contesta y esto lanza `timeout`).
+   * De qué va la consola `id`: `text` cambia la nota de la persona y `task` la tarea que puso el
+   * programa (aquí solo se quita, con ''); sin ninguno, solo lee. Devuelve la consola, como en
+   * `list` (agente ≥ 0.37; uno anterior a la 0.36 no contesta y esto lanza `timeout`).
+   * @param {string} id
+   * @param {{ text?: string, task?: string }} [patch]
    */
-  async note (id, text) { return (await this._ask({ type: 'note', id, ...(typeof text === 'string' ? { text } : {}) }, 'noted', 5000)).console }
+  async note (id, { text, task } = {}) {
+    return (await this._ask({ type: 'note', id, ...(typeof text === 'string' ? { text } : {}), ...(typeof task === 'string' ? { task } : {}) }, 'noted', 5000)).console
+  }
 
   /** Suelta la consola (sigue viva en la máquina) y corta la conexión. */
   async disconnect () {

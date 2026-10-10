@@ -18,7 +18,7 @@ const machine = {
 }
 
 function mk (id, n, title, cwd, cols, rows, { window = false } = {}) {
-  return { id, n, title, cwd, cols, rows, window, note: n === 1 ? 'Mejorando el panel de consolas.\nFalta: probar en el teléfono.' : '', holder: window ? 'window' : null, lines: [] }
+  return { id, n, title, cwd, cols, rows, window, task: n === 1 ? 'Mejorando el panel de consolas\nFalta: probar en el teléfono' : '', note: n === 1 ? 'Llamar a Ana antes de desplegar.' : '', holder: window ? 'window' : null, lines: [] }
 }
 
 function info (c) {
@@ -27,7 +27,7 @@ function info (c) {
   for (const k of machine.clients) if (k.consoleId === c.id) watchers.push({ origin: 'remote', device: 'demo-phone', tag: `pane-${k.n}` })
   const sizeBy = c.holder === 'window' ? { origin: 'local', device: null, tag: 'desktop-1' }
     : c.holder ? { origin: 'remote', device: 'demo-phone', tag: c.holder } : null
-  return { id: c.id, n: c.n, title: c.title, note: c.note, cwd: c.cwd, host: 'seyacat@loca', origin: 'local', cols: c.cols, rows: c.rows, activity: c.n === 2 ? 'busy' : 'idle', doneAt: c.n === 3 ? Date.now() : null, sizeBy, viewers: watchers.length, watchers, lastActive: Date.now() }
+  return { id: c.id, n: c.n, title: c.title, note: c.note, task: c.task, cwd: c.cwd, host: 'seyacat@loca', origin: 'local', cols: c.cols, rows: c.rows, activity: c.n === 2 ? 'busy' : 'idle', doneAt: c.n === 3 ? Date.now() : null, sizeBy, viewers: watchers.length, watchers, lastActive: Date.now() }
 }
 
 const list = () => machine.consoles.map(info)
@@ -100,10 +100,12 @@ export class DemoAgentClient {
     broadcast()
   }
 
-  async note (id, text) {
+  async note (id, { text, task } = {}) {
     const c = machine.consoles.find((x) => x.id === id)
     if (!c) { const e = new Error('that console no longer exists'); e.code = 'no-console'; throw e }
-    if (typeof text === 'string') { c.note = text.slice(0, 4000); broadcast() }
+    if (typeof text === 'string') c.note = text.slice(0, 4000)
+    if (typeof task === 'string') c.task = task.slice(0, 4000)
+    broadcast()
     return info(c)
   }
 

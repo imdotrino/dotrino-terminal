@@ -134,6 +134,10 @@ struct ConsoleInfo {
     /// (`dotrino-terminal note`). `None`: el agente es anterior a la 0.36 y no las tiene.
     #[serde(default)]
     note: Option<String>,
+    /// La tarea en curso, que pone el programa de dentro (`dotrino-terminal note --task`): aparte de
+    /// la nota. Aquí se lee y se quita, no se edita (agente ≥ 0.37).
+    #[serde(default)]
+    task: Option<String>,
 }
 
 /// Lo que el panel dice de una consola, cada cosa en SU línea: la máquina (`usuario@máquina`)
@@ -517,6 +521,8 @@ enum Message {
     NoteAction(window::Id, iced::widget::text_editor::Action),
     NoteSave(window::Id),
     NoteCancel(window::Id),
+    /// Quitar la tarea que puso el programa en la consola de la ventana.
+    TaskClear(window::Id),
     Terminal(iced_term::Event),
 }
 
@@ -1180,12 +1186,22 @@ impl App {
         let act = |label: String, msg: Option<Message>| button(text(label).size(12)).padding([2, 10]).style(round).on_press_maybe(msg);
         let editing = win.note_edit.as_ref().filter(|(cid, _)| *cid == c.id);
         let mut card = column![head, rule::horizontal(1)].spacing(6);
+        // La tarea: del programa. Se ve y se quita; no entra en el editor.
+        if let Some(task) = c.task.as_deref().filter(|t| !t.is_empty()) {
+            let del = iced::widget::tooltip(
+                button(text("×").size(12)).padding([0, 7]).style(round).on_press(Message::TaskClear(id)),
+                container(text(t("Quitar la tarea", "Remove the task")).size(12)).padding(6).style(container::rounded_box),
+                iced::widget::tooltip::Position::Left,
+            );
+            let body = text(task.to_string()).size(12).width(Length::Fill).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) });
+            card = card.push(row![container(iced::widget::scrollable(body)).max_height(160).width(Length::Fill), del].spacing(6)).push(rule::horizontal(1));
+        }
         if let Some((_, content)) = editing {
             let editor = iced::widget::text_editor(content)
                 .id(note_editor_id(id))
                 .size(12)
                 .height(120)
-                .placeholder(t("La tarea en curso, lo que falta…", "The task in progress, what is left…"))
+                .placeholder(t("Tus notas sobre esta consola…", "Your notes about this console…"))
                 .on_action(move |a| Message::NoteAction(id, a))
                 // Ctrl+Enter guarda, Esc cancela; lo demás, lo de siempre.
                 .key_binding(move |k| {
@@ -1589,6 +1605,19 @@ impl App {
                     w.note_edit = None;
                 }
                 self.focus(id)
+            }
+            Message::TaskClear(id) => {
+                let Some(cid) = self.my_console(id).map(|c| c.id.clone()) else { return Task::none() };
+                let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
+                if let Some(profile) = profile {
+                    if let Some(dir) = self.profile_dir(&profile) {
+                        agent_send(&dir, &serde_json::json!({ "type": "note", "id": cid, "task": "" }));
+                    }
+                    if let Some(c) = self.consoles.get_mut(&profile).and_then(|l| l.iter_mut().find(|c| c.id == cid)) {
+                        c.task = Some(String::new());
+                    }
+                }
+                Task::batch([later(300, Message::Poll), self.focus(id)])
             }
             Message::NoteSave(id) => {
                 let Some((cid, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.take()) else { return Task::none() };
@@ -2100,7 +2129,7 @@ impl App {
                 label = label.push(text(l).size(12));
             }
             // De qué va: la primera línea de su nota.
-            if let Some(line) = c.note.as_deref().and_then(|n| n.lines().map(str::trim).find(|l| !l.is_empty())) {
+            if let Some(line) = [c.task.as_deref(), c.note.as_deref()].into_iter().flatten().flat_map(str::lines).map(str::trim).find(|l| !l.is_empty()) {
                 label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) }));
             }
             let label = label.push(text(where_).size(11).style(dim));

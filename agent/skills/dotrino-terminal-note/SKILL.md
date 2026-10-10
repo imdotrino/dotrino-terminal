@@ -9,21 +9,21 @@ Cada consola de Dotrino Terminal tiene una **nota** que sale en una tarjeta flot
 consola y, su primera línea, en la lista de consolas. Existe para que el dueño, con varias consolas
 abiertas, sepa **de qué va la tarea en curso de cada una** sin entrar a leerla.
 
-En la nota conviven dos cosas:
+La tarjeta tiene dos partes, y son dos campos distintos:
 
-- **La tarea** (líneas que empiezan por `▸ `, arriba): es TUYA. La pones con `--task`.
-- **Todo lo demás**: son **notas personales del dueño**. No son tuyas.
+- **La tarea**: es TUYA. La pones con `--task`. El dueño la ve y puede quitarla, no la edita.
+- **Las notas**: son **personales del dueño**. Las escribe él desde la tarjeta. No son tuyas.
 
 ## Regla dura: las notas personales no se tocan
 
-**Usa SOLO `dotrino-terminal note --task`.** Esa orden reemplaza tus líneas `▸ ` y deja el resto
-tal cual, así que no puedes pisar nada del dueño.
+**Usa SOLO `dotrino-terminal note --task`.** Esa orden escribe la tarea y no puede tocar las notas
+del dueño.
 
 **Prohibido**, salvo que el usuario te lo pida con esas palabras en ese momento:
 
-- `dotrino-terminal note "texto"` y `dotrino-terminal note -` (reemplazan la nota ENTERA)
-- `dotrino-terminal note --add …` (escribe una línea como si fuera suya)
-- `dotrino-terminal note --clear` (la borra entera)
+- `dotrino-terminal note "texto"` y `dotrino-terminal note -` (reemplazan SUS notas)
+- `dotrino-terminal note --add …` (escribe en sus notas como si fueras él)
+- `dotrino-terminal note --clear` (borra sus notas)
 
 No reescribas, ordenes, corrijas ni resumas lo que él escribió. Tampoco lo copies a tus líneas.
 
@@ -48,7 +48,7 @@ Falta: probar con firma real
 EOF_TASK
 
 dotrino-terminal note --task ''                # quita tu tarea (lo del dueño se queda)
-dotrino-terminal note                          # solo LEER la nota entera
+dotrino-terminal note                          # solo LEER: tu tarea (con «▸ ») y debajo sus notas
 ```
 
 No hace falta decir qué consola: es la tuya.
@@ -66,8 +66,7 @@ No hace falta decir qué consola: es la tuya.
 ## Si falla
 
 - «no sé de qué consola» / `no console to act on`: no corres dentro de Dotrino Terminal. Sigue sin nota.
-- `--task` no hace nada o cambia la nota entera: el `dotrino-terminal` instalado es anterior a la
-  0.36.1. **No uses las otras formas como sustituto**: díselo al usuario una vez
-  (`npm i -g @dotrino/terminal-agent@latest`) y sigue sin nota.
-- «el agente no contestó: es anterior a la 0.36.0»: díselo al usuario una vez y no lo reintentes.
+- «el agente que corre es anterior a la 0.37.0 y no guarda tareas», o «el agente no contestó»:
+  el agente de esta máquina es viejo. **No uses las otras formas como sustituto**: díselo al
+  usuario una vez (`npm i -g @dotrino/terminal-agent@latest` y reiniciarlo él) y sigue sin tarea.
 - **Nunca reinicies el agente tú**: corres dentro de él y reiniciarlo cierra esta consola.

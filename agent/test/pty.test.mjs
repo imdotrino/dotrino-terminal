@@ -457,6 +457,15 @@ test('la nota de una consola: la pone una pantalla, la ve la otra y sale en la l
   await until(() => a.sent.some((p) => p.type === 'noted'))
   assert.equal(a.sent.find((p) => p.type === 'noted').console.note, 'arreglando el login')
 
+  // La tarea es otro campo: ponerla no toca la nota, y cambiar la nota no toca la tarea.
+  b.deliver({ type: 'note', id, task: 'migrando' })
+  await until(() => h.list()[0].task === 'migrando')
+  assert.equal(h.list()[0].note, 'arreglando el login')
+  b.deliver({ type: 'note', id, text: 'otra nota' })
+  await until(() => h.list()[0].note === 'otra nota')
+  assert.equal(h.list()[0].task, 'migrando')
+  b.sent.length = 0
+
   b.deliver({ type: 'note', id: 'nope', text: 'x' })
   await until(() => b.sent.some((p) => p.type === 'fail'))
   assert.equal(b.sent.find((p) => p.type === 'fail').code, 'no-console')

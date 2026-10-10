@@ -83,6 +83,10 @@ class Console {
     // DE QUÉ VA esta consola: una nota libre que escribe la persona desde cualquier pantalla, o el
     // programa que corre dentro (`dotrino-terminal note`). En memoria, como todo lo de la consola.
     this.note = ''
+    // LA TAREA EN CURSO, aparte de la nota: la pone el programa que corre dentro
+    // (`dotrino-terminal note --task`). Son dos campos para que un agente de IA no pueda pisar lo
+    // que escribió la persona, ni la persona tenga que editar lo del agente: solo lo quita.
+    this.task = ''
     this.cols = cols
     this.rows = rows
     this.createdAt = Date.now()
@@ -149,6 +153,14 @@ class Console {
     const note = String(text ?? '').slice(0, NOTE_MAX)
     if (note === this.note) return
     this.note = note
+    this._meta()
+  }
+
+  /** Cambia la tarea en curso (la del programa). No toca la nota de la persona. */
+  setTask (text) {
+    const task = String(text ?? '').slice(0, NOTE_MAX)
+    if (task === this.task) return
+    this.task = task
     this._meta()
   }
 
@@ -263,7 +275,7 @@ class Console {
     const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
     const d = this.holder
     const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null } : null
-    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, note: this.note, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
+    return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.title, note: this.note, task: this.task, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
   }
 }
 

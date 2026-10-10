@@ -185,6 +185,8 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .about-btn { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 50%; font-size: 12px; line-height: 1; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
 .about.folded .about-btn { font-style: italic; font-weight: 700; font-family: Georgia, serif; opacity: .7; }
 .about-btn:hover { color: var(--text); border-color: var(--brand); opacity: 1 !important; }
+.about-task { display: flex; align-items: flex-start; gap: 6px; border-top: 1px solid rgba(255, 255, 255, .1); padding-top: 6px; color: var(--brand); }
+.about-task span { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .about-note { white-space: pre-wrap; overflow-wrap: anywhere; border-top: 1px solid rgba(255, 255, 255, .1); padding-top: 6px; }
 .about-note.empty { color: var(--muted); }
 .about-text { min-height: 110px; margin: 0; padding: 8px; font: inherit; font-family: inherit; resize: vertical; background: var(--bg); border-radius: 8px; }

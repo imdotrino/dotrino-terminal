@@ -195,8 +195,10 @@ test('`dotrino-terminal note` DENTRO de una consola cambia la nota de ESA consol
     const conn = await connectLocal(dir)
     const list = await new Promise((resolve) => { conn.on('message', (m) => { if (m.type === 'consoles') resolve(m.list) }); conn.send({ type: 'list' }) })
     conn.close()
-    return list.map((c) => c.note)
+    return list.map((c) => fmt(c))
   }
+  let fmt = (c) => c.note
+  const both = async () => { fmt = (c) => `${c.task}|${c.note}`; try { return await notes() } finally { fmt = (c) => c.note } }
   const run = `'${process.execPath}' '${CLIENT}'`
   try {
     term.write('echo LISTA-$((1+1))\r')
@@ -210,13 +212,18 @@ test('`dotrino-terminal note` DENTRO de una consola cambia la nota de ESA consol
     assert.ok(await until(() => out.includes('[migrando el login|falta: pruebas|]')), 'sin texto, la enseña')
     term.write(`printf 'desde stdin' | ${run} note -\r`)
     assert.ok(await until(async () => (await notes())[0] === 'desde stdin'), '«-» la lee de la entrada')
-    // --task: la tarea del programa va arriba, marcada, y lo de la persona no se toca.
+    // --task: la tarea del programa va en SU campo; la nota de la persona no se toca, y al revés.
     term.write(`${run} note 'llamar a Ana' && ${run} note --task 'migrando el login'\r`)
-    assert.ok(await until(async () => (await notes())[0] === '▸ migrando el login\nllamar a Ana'), '--task se pone arriba y deja la nota personal')
+    assert.ok(await until(async () => (await both())[0] === 'migrando el login|llamar a Ana'), '--task no toca la nota personal')
     term.write(`printf 'pruebas\\nfalta: desplegar' | ${run} note --task -\r`)
-    assert.ok(await until(async () => (await notes())[0] === '▸ pruebas\n▸ falta: desplegar\nllamar a Ana'), 'otra tarea reemplaza SOLO las líneas marcadas')
+    assert.ok(await until(async () => (await both())[0] === 'pruebas\nfalta: desplegar|llamar a Ana'), 'otra tarea reemplaza solo la tarea')
+    term.write(`${run} note 'llamar a Luis'\r`)
+    assert.ok(await until(async () => (await both())[0] === 'pruebas\nfalta: desplegar|llamar a Luis'), 'cambiar la nota no toca la tarea')
+    out = ''
+    term.write(`echo "[$(${run} note | tr '\n' '|')]"\r`)
+    assert.ok(await until(() => out.includes('[▸ pruebas|▸ falta: desplegar|llamar a Luis|]')), 'al leer, la tarea sale marcada y arriba')
     term.write(`${run} note --task ''\r`)
-    assert.ok(await until(async () => (await notes())[0] === 'llamar a Ana'), "--task '' quita la tarea y deja lo demás")
+    assert.ok(await until(async () => (await both())[0] === '|llamar a Luis'), "--task '' quita la tarea y deja la nota")
     term.write(`${run} note --clear\r`)
     assert.ok(await until(async () => (await notes())[0] === ''), '--clear la borra')
   } finally {
