@@ -446,6 +446,10 @@ enum Pending {
     /// Actualizar el cliente en esta misma ventana: la consola se suelta (sigue viva en el
     /// agente), corre `script` en una TTY nueva, y al acabar la ventana vuelve a `back`.
     Update { script: String, back: Option<String>, what: String },
+    /// Pasar a una consola de OTRA máquina (o volver a esta, `machine: None`) en esta misma
+    /// ventana: el cliente habla con una sola máquina, así que suelta la consola, sale, y la
+    /// ventana arranca otro contra `machine`, enganchado a `attach` (o con una consola nueva).
+    Far { machine: Option<String>, attach: Option<String> },
 }
 
 /// Qué corre en la TTY de la ventana.
@@ -596,9 +600,11 @@ enum Message {
     MouseUp,
     /// Panel lateral (clic derecho): abrir esa consola en una ventana nueva.
     OpenInNewWindow(window::Id, String),
-    /// Panel lateral, «Otras máquinas»: una ventana nueva en esa máquina, enganchada a esa
-    /// consola o (`None`) con una nueva.
-    OpenFar(window::Id, String, Option<String>),
+    /// Panel lateral: ir a una consola (o abrir una nueva, `None`) de una máquina (`None`: esta),
+    /// en esta misma ventana.
+    Go(window::Id, Option<String>, Option<String>),
+    /// Panel lateral: cerrar una consola de una máquina (`None`: esta).
+    KillAt(window::Id, Option<String>, String),
     /// Cerrar la ventana aunque su cliente no haya terminado de soltar la consola.
     ForceClose(window::Id),
     /// Cerrarla ya (tras haber pasado la ventana a otra, si era la suya).
@@ -1529,14 +1535,21 @@ impl App {
         let keys = match &next {
             Pending::Attach(cid) => format!("\x1da{cid}\r"),
             Pending::New => "\x1dn".to_string(),
-            Pending::Close | Pending::Update { .. } => "\x1dd".to_string(),
+            Pending::Close | Pending::Update { .. } | Pending::Far { .. } => "\x1dd".to_string(),
         };
         win.showing = match &next {
             Pending::Attach(cid) => Some(cid.clone()),
+            Pending::Far { attach, .. } => attach.clone(),
             Pending::New | Pending::Close | Pending::Update { .. } => None,
         };
         match win.term.as_mut() {
-            Some(term) => term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(keys.into_bytes()))),
+            Some(term) => {
+                // Cambiar de máquina hace salir al cliente: lo que toca después lo recoge `ended`.
+                if matches!(next, Pending::Far { .. }) {
+                    win.pending = Some(next);
+                }
+                term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(keys.into_bytes())))
+            }
             // Sin TTY (un error a la vista): se arranca directamente.
             None => {
                 win.pending = Some(next);
@@ -1600,6 +1613,12 @@ impl App {
                         return self.focus(id);
                     }
                     Some(Pending::Attach(cid)) => win.attach = Some(cid),
+                    // La consola de aquí ya está suelta: la ventana pasa a la otra máquina.
+                    Some(Pending::Far { machine, attach }) => {
+                        win.machine = machine;
+                        win.showing = attach.clone();
+                        win.attach = attach;
+                    }
                     _ => win.attach = None,
                 }
                 self.start(id, Mode::Console);
@@ -1958,10 +1977,39 @@ impl App {
                 // La ventana nueva nace ya enganchada a esa consola (de la misma máquina que esta).
                 self.open_window_with(profile, cwd, None, Some(cid), machine).1
             }
-            Message::OpenFar(id, machine, cid) => {
+            // El panel: ir a una consola (`cid`) o abrir una nueva (`None`) en `machine` (`None`:
+            // esta máquina), SIEMPRE en esta ventana. En la máquina que la ventana ya mira es el
+            // cambio de siempre; en otra, la ventana suelta su consola y pasa a aquella.
+            Message::Go(id, machine, cid) => {
                 let Some(win) = self.windows.get(&id) else { return Task::none() };
-                let (profile, cwd) = (win.profile.clone(), win.cwd.clone());
-                self.open_window_with(profile, cwd, None, cid, Some(machine)).1
+                if win.machine == machine {
+                    return match cid {
+                        Some(cid) => self.update(Message::ShowConsole(id, cid)),
+                        None => self.update(Message::NewConsole(id)),
+                    };
+                }
+                self.switch_to(id, Pending::Far { machine, attach: cid })
+            }
+            // Cerrar desde el panel una consola de `machine` (`None`: esta máquina).
+            Message::KillAt(id, machine, cid) => {
+                let Some(win) = self.windows.get(&id) else { return Task::none() };
+                if win.machine == machine {
+                    return self.update(Message::KillConsole(id, cid));
+                }
+                // No es la máquina que mira la ventana: la orden va directa, sin tocar su consola.
+                let Some(dir) = win.profile.as_deref().and_then(|p| self.profile_dir(p)) else { return Task::none() };
+                let kill = serde_json::json!({ "type": "kill", "id": cid });
+                let msg = match &machine {
+                    Some(m) => serde_json::json!({ "type": "far", "machine": m, "msg": kill }),
+                    None => kill,
+                };
+                agent_send(&dir, &msg);
+                if let Some(key) = win.profile.as_deref().map(|p| scope_key(p, machine.as_deref())) {
+                    if let Some(list) = self.consoles.get_mut(&key) {
+                        list.retain(|c| c.id != cid);
+                    }
+                }
+                Task::batch([later(300, Message::Poll), later(1500, Message::Poll), self.focus(id)])
             }
             Message::KillConsole(id, cid) => {
                 // ¿Es la de esta ventana? Se pregunta ANTES de sacarla del panel: «la mía» se
@@ -2270,9 +2318,15 @@ impl App {
     fn side<'a>(&'a self, id: window::Id, profile: &str) -> Element<'a, Message> {
         let mine = self.mine(id);
         let here = self.windows.get(&id).and_then(|w| w.machine.clone());
-        let list = self.consoles.get(&scope_key(profile, here.as_deref())).cloned().unwrap_or_default();
-        // Las OTRAS máquinas de la cuenta (todas menos la que ya mira esta ventana).
-        let others: Vec<&Machine> = self.far.get(profile).map(|l| l.iter().filter(|m| here.as_deref() != Some(m.id.as_str())).collect()).unwrap_or_default();
+        // El panel es EL MISMO mire la ventana la máquina que mire: primero las consolas de esta
+        // máquina y después las de las otras. La consola de la ventana se marca donde esté.
+        let list = self.consoles.get(&scope_key(profile, None)).cloned().unwrap_or_default();
+        let others: Vec<&Machine> = self.far.get(profile).map(|l| l.iter().collect()).unwrap_or_default();
+        // ¿Mira la ventana una consola de ESTA máquina? Ordenar arrastrando y el menú de una
+        // consola hablan con la máquina de la ventana: solo se ofrecen sobre sus consolas.
+        let local = here.is_none();
+        // Las consolas de la máquina que mira la ventana (para el tamaño y ⤢).
+        let shown = self.consoles.get(&scope_key(profile, here.as_deref())).cloned().unwrap_or_default();
         let my_tag = self.windows.get(&id).map(|w| w.tag.clone()).unwrap_or_default();
         let panel_style = |theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() };
         // Colapsado: una franja estrecha, un botón numerado por consola (el título, al pasar).
@@ -2289,7 +2343,7 @@ impl App {
         let act = |m: Message| ready.then_some(m);
         let centered = |s: String, size: u32| text(s).size(size).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
         // ⤢ actúa sobre la consola de ESTA ventana: fija su tamaño a esta ventana, o lo suelta.
-        let cur = list.iter().enumerate().find(|(_, c)| mine.as_deref() == Some(c.id.as_str())).map(|(i, c)| (c.n.map(|n| n as usize).unwrap_or(i + 1), c));
+        let cur = shown.iter().enumerate().find(|(_, c)| mine.as_deref() == Some(c.id.as_str())).map(|(i, c)| (c.n.map(|n| n as usize).unwrap_or(i + 1), c));
         let pin_on = self.pinned_here(id);
         let can_pin = self.pin_ready() && cur.is_some();
         let pin_tip = match cur {
@@ -2322,13 +2376,13 @@ impl App {
         if collapsed {
             let mut strip = column![
                 button(centered("»".into(), 13)).width(24).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
-                button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
+                button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, None, None))),
                 pin_btn(24.0),
             ]
             .spacing(4);
             for (i, c) in list.iter().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
-                let is_mine = mine.as_deref() == Some(c.id.as_str());
+                let is_mine = local && mine.as_deref() == Some(c.id.as_str());
                 let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref().or(user_at_host().as_deref()));
                 let tip = [host, dir, name].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 let tip = if tip.is_empty() { format!("{} {}", t("Consola", "Console"), n) } else { tip };
@@ -2336,9 +2390,10 @@ impl App {
                     .width(24)
                     .padding([4, 0])
                     .style(console_button(is_mine, c.act()))
-                    .on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
+                    .on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
                 let open = is_mine || c.open_in_a_window();
-                let b = self.console_menu(id, c.id.clone(), is_mine, container(dotted(b.into(), open, self.blink_off && self.blinks(c))).center_x(Length::Fill).into());
+                let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c))).center_x(Length::Fill).into();
+                let b = if local { self.console_menu(id, c.id.clone(), is_mine, b) } else { b };
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
                     Act::Done => format!("{tip} · {}", t("terminó", "finished")),
@@ -2347,10 +2402,10 @@ impl App {
                 let tip = if c.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref() != Some(my_tag.as_str())) { format!("{tip} · {}", t("abierta en otra ventana", "open in another window")) } else { tip };
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
                 let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
-                strip = strip.push(arrowed(draggable(&c.id, tipped, Length::Fixed(24.0)), is_mine));
+                strip = strip.push(arrowed(if local { draggable(&c.id, tipped, Length::Fixed(24.0)) } else { tipped }, is_mine));
             }
             // Las otras máquinas: sus iniciales (clic: consola nueva allí) y un botón por consola.
-            // Todo abre en una ventana NUEVA: esta sigue en su máquina.
+            // Abren en ESTA ventana, como las de aquí (dueño, 2026-10-10).
             for m in &others {
                 let label = m.label();
                 let state = if m.locked { t("pide su clave", "asks for its code") } else if m.consoles.is_none() { t("no contesta", "not answering") } else { t("clic: consola nueva allí", "click: new console there") };
@@ -2358,7 +2413,7 @@ impl App {
                     .width(24)
                     .padding([3, 0])
                     .style(menu_button)
-                    .on_press_maybe(act(Message::OpenFar(id, m.id.clone(), None)));
+                    .on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
                 let head: Element<'_, Message> = iced::widget::tooltip(head, container(text(format!("{label} · {}\n{state}", m.id)).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(container(separator()).width(24));
                 strip = strip.push(container(head).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
@@ -2366,13 +2421,14 @@ impl App {
                     let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                     let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
                     let tip = std::iter::once(label.clone()).chain([host, dir, name].into_iter().flatten()).collect::<Vec<_>>().join("\n");
-                    let b = button(centered(format!("{n}"), 12)).width(24).padding([4, 0]).style(console_button(false, c.act())).on_press_maybe(act(Message::OpenFar(id, m.id.clone(), Some(c.id.clone()))));
+                    let is_mine = here.as_deref() == Some(m.id.as_str()) && mine.as_deref() == Some(c.id.as_str());
+                    let b = button(centered(format!("{n}"), 12)).width(24).padding([4, 0]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), Some(c.id.clone()))));
                     let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
-                    strip = strip.push(container(b).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+                    strip = strip.push(arrowed(b, is_mine));
                 }
             }
             // Sin otras máquinas por un motivo que se arregla: una «!» que lo dice al pasar.
-            if let Some((why, true)) = here.is_none().then(|| self.far_notice(profile)).flatten() {
+            if let Some((why, true)) = self.far_notice(profile) {
                 let mark = text("!").size(13).width(Length::Fill).align_x(iced::alignment::Horizontal::Center).style(|theme: &Theme| text::Style { color: Some(theme.palette().primary) });
                 let b = button(mark).width(24).padding([3, 0]).style(menu_button);
                 let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(why).size(12)).padding(6).max_width(320).style(panel_style), iced::widget::tooltip::Position::Right).into();
@@ -2386,7 +2442,7 @@ impl App {
         let mut items = column![
             row![
                 button(text("«").size(13)).padding([0, 6]).style(menu_button).on_press(Message::CollapseSidebar(id)),
-                text(match &here { Some(m) => format!("{} · {}", t("Consolas", "Consoles"), self.machine_label(profile, m)), None => t("Consolas", "Consoles") }).size(13),
+                text(t("Consolas", "Consoles")).size(13),
             ]
             .spacing(4)
             .align_y(iced::Alignment::Center)
@@ -2394,7 +2450,7 @@ impl App {
             // El «+» en la misma columna que las «×» de abajo.
             row![
                 text(t("Nueva consola", "New console")).size(12).width(Length::Fill),
-                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::NewConsole(id))),
+                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, None, None))),
             ]
             .align_y(iced::Alignment::Center)
             .padding(iced::Padding { left: 8.0, ..Default::default() }),
@@ -2415,7 +2471,7 @@ impl App {
         let mut items = column![container(items).padding(iced::Padding { right: 4.0 + ARROW_W, ..Default::default() })].spacing(2);
         for (i, c) in list.iter().enumerate() {
             let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
-            let is_mine = mine.as_deref() == Some(c.id.as_str());
+            let is_mine = local && mine.as_deref() == Some(c.id.as_str());
             let others = c.watchers.iter().filter(|w| w.tag.as_deref() != Some(my_tag.as_str())).collect::<Vec<_>>();
             let where_ = if others.iter().any(|w| w.origin == "remote") {
                 t("abierta en otro aparato", "open on another device")
@@ -2449,15 +2505,16 @@ impl App {
                 label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) }));
             }
             let label = label.push(text(where_).size(11).style(dim));
-            let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
-            let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
+            let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
+            let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, None, c.id.clone()));
             let pick = dotted(pick.into(), is_mine || c.open_in_a_window(), self.blink_off && self.blinks(c));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
-            let entry = container(draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill)).padding(iced::Padding { right: 4.0, ..Default::default() });
+            let entry_row = if local { draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill) } else { entry_row };
+            let entry = container(entry_row).padding(iced::Padding { right: 4.0, ..Default::default() });
             items = items.push(arrowed(entry.into(), is_mine));
         }
         // LAS OTRAS MÁQUINAS de la cuenta: su nombre, «+» (consola nueva allí) y sus consolas.
-        // Todo abre en una ventana NUEVA: esta sigue en su máquina.
+        // Abren en ESTA ventana y se cierran con su «×», como las de aquí (dueño, 2026-10-10).
         for m in &others {
             let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
             let state = if m.locked { Some(t("pide su clave", "asks for its code")) } else if m.consoles.is_none() { Some(t("no contesta", "not answering")) } else { None };
@@ -2465,7 +2522,7 @@ impl App {
             head = head.push(text(match state { Some(s) => format!("{} · {s}", m.id), None => m.id.clone() }).size(11).style(dim));
             let far_head = row![
                 head.width(Length::Fill),
-                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::OpenFar(id, m.id.clone(), None))),
+                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None))),
             ]
             .align_y(iced::Alignment::Center)
             .padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 });
@@ -2476,27 +2533,30 @@ impl App {
                 let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
                 let mut lines = [host, dir, name].into_iter().flatten();
                 let first = lines.next().map(|l| format!("{n} · {l}")).unwrap_or_else(|| format!("{} {}", t("Consola", "Console"), n));
-                let mut label = column![text(first).size(12)];
+                let is_mine = here.as_deref() == Some(m.id.as_str()) && mine.as_deref() == Some(c.id.as_str());
+                let mut label = column![text(format!("{}{first}", if is_mine { "● " } else { "" })).size(12)];
                 for l in lines {
                     label = label.push(text(l).size(12));
                 }
                 if let Some(line) = [c.task.as_deref(), c.note.as_deref()].into_iter().flatten().flat_map(str::lines).map(str::trim).find(|l| !l.is_empty()) {
                     label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) }));
                 }
-                let where_ = if c.watchers.is_empty() { t("suelta", "detached") } else { t("abierta", "open") };
+                let where_ = if is_mine { t("en esta ventana", "in this window") } else if c.watchers.is_empty() { t("suelta", "detached") } else { t("abierta", "open") };
                 let where_ = match c.act() {
                     Act::Busy => format!("{where_} · {}", t("trabajando", "working")),
                     Act::Done => format!("{where_} · {}", t("terminó", "finished")),
                     Act::Idle => where_,
                 };
                 let label = label.push(text(where_).size(11).style(dim));
-                let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(false, c.act())).on_press_maybe(act(Message::OpenFar(id, m.id.clone(), Some(c.id.clone()))));
-                items = items.push(container(pick).padding(iced::Padding { right: 4.0 + ARROW_W, ..Default::default() }));
+                let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), Some(c.id.clone()))));
+                let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, Some(m.id.clone()), c.id.clone()));
+                let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
+                items = items.push(arrowed(container(entry_row).padding(iced::Padding { right: 4.0, ..Default::default() }).into(), is_mine));
             }
         }
         // Ninguna otra máquina a la vista: se dice por qué, en vez de dejar el panel igual que si
         // no existieran.
-        if let Some((why, problem)) = here.is_none().then(|| self.far_notice(profile)).flatten() {
+        if let Some((why, problem)) = self.far_notice(profile) {
             let tone = move |theme: &Theme| text::Style { color: Some(if problem { theme.extended_palette().background.base.text } else { theme.extended_palette().background.base.text.scale_alpha(0.65) }) };
             items = items.push(container(separator()).padding(iced::Padding { top: 6.0, right: ARROW_W, ..Default::default() }));
             items = items.push(container(column![text(t("Otras máquinas", "Other machines")).size(13), text(why).size(11).style(tone)].spacing(2)).padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
