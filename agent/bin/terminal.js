@@ -16,6 +16,7 @@
  *   dotrino-terminal lock --off [--name <n>]   la quita
  *   dotrino-terminal vscode [--name <n>]       la terminal embebida de VS Code abre consolas de aquí
  *   dotrino-terminal vscode --off              lo deshace
+ *   dotrino-terminal desktop update [--check]  actualiza la app de escritorio (la ventana)
  *
  * Un PERFIL es un agente con nombre (`~/.dotrino/agent/terminal-agent/<nombre>/`), enlazado a
  * una bóveda o solo local. Cada consola vive en el agente de un perfil.
@@ -78,6 +79,9 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal vscode [--name <n>]       hace que la terminal embebida de VS Code (y de
                                              VS Code Insiders, VSCodium y Cursor) abra consolas de aquí
   dotrino-terminal vscode --off              lo deshace
+  dotrino-terminal desktop update            actualiza la app de escritorio (la ventana): baja la
+                                             versión nueva, comprueba su firma y la instala
+                                             (--check solo mira si hay una)
 
 Dentro de una consola: Ctrl+] y luego d la suelta sin cerrarla; Ctrl+] n abre otra
 (y suelta la actual); Ctrl+] a <id> Enter pasa a esa consola; Ctrl+] p fija el tamaño de la
@@ -107,6 +111,9 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal vscode [--name <n>]       make the integrated terminal of VS Code (and VS Code
                                              Insiders, VSCodium and Cursor) open consoles from here
   dotrino-terminal vscode --off              undo it
+  dotrino-terminal desktop update            update the desktop app (the window): downloads the
+                                             new version, checks its signature and installs it
+                                             (--check only looks for one)
 
 Inside a console: Ctrl+] then d detaches without closing it; Ctrl+] n opens another
 (detaching the current one); Ctrl+] a <id> Enter switches to that console; Ctrl+] p pins the
@@ -213,6 +220,49 @@ function vscode () {
     console.log(`  ${d.name.padEnd(18)} ${what}  ${d.settings}`)
   }
   if (!off) console.log(t('\nLas terminales nuevas del editor ya abren aquí. Si actualizas o cambias de Node, vuelve a correr esta orden.', '\nNew terminals in the editor now open here. If you update or switch Node, run this command again.'))
+}
+
+/** Dónde está la app de escritorio, si no lo dijo quien llama: la del PATH. */
+function findDesktop (name) {
+  for (const d of (process.env.PATH || '').split(path.delimiter)) {
+    if (!d) continue
+    const f = path.join(d, name)
+    try { fs.accessSync(f, fs.constants.X_OK); return fs.realpathSync(f) } catch (_) {}
+  }
+  return null
+}
+
+/**
+ * Actualiza la app de escritorio. La app lo corre desde su menú con `--current` (su versión)
+ * y `--exe` (su binario); a mano basta `dotrino-terminal desktop update`.
+ */
+async function desktop () {
+  if (args[1] !== 'update') die(t('uso: dotrino-terminal desktop update [--check]', 'usage: dotrino-terminal desktop update [--check]'))
+  const { updateDesktop, BINARY } = await import('../desktop.js')
+  const current = opt('--current')
+  const exe = opt('--exe') || findDesktop(BINARY)
+  const check = args.includes('--check')
+  if (!exe && !check) die(t(`no encontré ${BINARY} en esta máquina. Bájala de https://terminal.dotrino.com/`, `could not find ${BINARY} on this machine. Get it from https://terminal.dotrino.com/`))
+  const say = (step, d) => {
+    if (step === 'latest') console.log(d.current ? t(`Publicada: ${d.version} · esta: ${d.current}`, `Published: ${d.version} · this one: ${d.current}`) : t(`Publicada: ${d.version}`, `Published: ${d.version}`))
+    if (step === 'download') console.log(t(`Bajando ${d.name} y comprobando su firma…`, `Downloading ${d.name} and checking its signature…`))
+    if (step === 'verified') console.log(t(`Firmado por la release de ${d.repo} ✓`, `Signed by the release of ${d.repo} ✓`))
+    if (step === 'install' && (d.kind === 'deb' || d.kind === 'rpm') && process.getuid?.() !== 0) console.log(t('Instalar un paquete del sistema pide tu contraseña:', 'Installing a system package asks for your password:'))
+  }
+  console.log(t('Mirando qué hay publicado…', 'Checking what is published…'))
+  const r = await updateDesktop({ exe, current, check, say })
+  if (!r.ok) {
+    const why = {
+      'could-not-check': t(`No se pudo mirar (${r.reason}). No es que estés al día: es que no se sabe.`, `Could not check (${r.reason}). That does not mean you are up to date: it is unknown.`),
+      NO_GH: t('NO se instala nada: falta GitHub CLI (gh), que es con lo que se comprueba la firma. Instálalo (https://cli.github.com; no hace falta iniciar sesión) y repite.', 'Nothing is installed: GitHub CLI (gh) is missing, and it is what checks the signature. Install it (https://cli.github.com; no login needed) and try again.'),
+      GH_TOO_OLD: t('NO se instala nada: este gh es anterior a la 2.49 y no sabe comprobar firmas. Actualiza GitHub CLI y repite.', 'Nothing is installed: this gh predates 2.49 and cannot check signatures. Update GitHub CLI and try again.'),
+      'not-writable': t(`NO se instala nada: no puedo escribir donde está la app (${r.reason}). Bájala de https://terminal.dotrino.com/`, `Nothing is installed: I cannot write where the app is (${r.reason}). Get it from https://terminal.dotrino.com/`)
+    }[r.code] || t(`NO se instala nada: ${r.reason}`, `Nothing is installed: ${r.reason}`)
+    die(r.file ? `${why}\n${t('El archivo, ya comprobado, quedó en', 'The file, already checked, is at')} ${r.file}` : why)
+  }
+  if (r.updated) console.log(t(`\nInstalada la ${r.version}. Las ventanas abiertas siguen con la anterior: cierra Dotrino Terminal y vuelve a abrirla. Tus consolas no se cierran.`, `\nInstalled ${r.version}. Open windows keep the old one: quit Dotrino Terminal and open it again. Your consoles stay open.`))
+  else if (r.newer) console.log(t('Hay versión nueva. Tráela con: dotrino-terminal desktop update', 'There is a new version. Get it with: dotrino-terminal desktop update'))
+  else console.log(t(`La app está al día (${current}).`, `The app is up to date (${current}).`))
 }
 
 /** Enlaza un perfil. Sin `--name`, lo pregunta. Uno ya enlazado no se pisa: eso es `enroll`. */
@@ -689,6 +739,7 @@ try {
   if (cmd === 'rename') { await rename(); process.exit(0) }
   if (cmd === 'lock') { await lock(); process.exit(0) }
   if (cmd === 'vscode') { vscode(); process.exit(0) }
+  if (cmd === 'desktop') { await desktop(); process.exit(0) }
   if (cmd === 'note') { await note(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))
   if (cmd === 'open' || cmd === 'attach') captureEarly()

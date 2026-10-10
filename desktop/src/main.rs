@@ -77,6 +77,8 @@ const FAR_EVERY: u32 = 3;
 const FAR_SILENT_EVERY: u32 = 20;
 /// El primer cliente con `dotrino-terminal vscode`.
 const VSCODE_CLIENT: (u32, u32, u32) = (0, 20, 0);
+/// Desde qué versión sabe el cliente actualizar esta app (`dotrino-terminal desktop update`).
+const APP_UPDATE_CLIENT: (u32, u32, u32) = (0, 39, 0);
 
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
@@ -561,6 +563,7 @@ enum Message {
     Vscode(window::Id, bool),
     /// Escribe en la consola de la ventana la orden que instala (o actualiza) el cliente.
     InstallClient(window::Id),
+    UpdateApp(window::Id),
     /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
     CheckClient,
     Copy(window::Id),
@@ -1683,6 +1686,28 @@ impl App {
                 self.awaiting_client = true;
                 self.run_aside(id, script, t("Actualizar", "Update"))
             }
+            Message::UpdateApp(id) => {
+                // Como «Actualizar dotrino-terminal»: en ESTA ventana y en otra TTY, a la vista. La
+                // app no baja nada ella: lo hace el cliente, que verifica la firma antes de
+                // instalar. Un paquete del sistema pide ahí mismo la contraseña de sudo.
+                let Ok(launch) = self.launch.clone() else { return Task::none() };
+                let exe = match std::env::current_exe() {
+                    // Tras una actualización anterior sin reiniciar, Linux lo nombra «… (deleted)».
+                    Ok(p) => p.to_string_lossy().trim_end_matches(" (deleted)").to_string(),
+                    Err(e) => {
+                        if let Some(w) = self.windows.get_mut(&id) {
+                            w.error = Some(format!("{}: {e}", t("No sé dónde está instalada la app", "Can't tell where the app is installed")));
+                        }
+                        return Task::none();
+                    }
+                };
+                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
+                let script = format!(
+                    "PATH={}; export PATH; echo '$ dotrino-terminal desktop update'; {} desktop update --current {VERSION} --exe {}; echo; echo {}; read _",
+                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&exe), sh_quote(&close)
+                );
+                self.run_aside(id, script, t("Actualizar la app", "Update the app"))
+            }
             Message::CheckClient => {
                 // Se mira hasta que haya un cliente que entienda el panel (o, si no había ninguno,
                 // hasta que aparezca): su versión cambia al actualizarlo, aunque ya estuviera.
@@ -2056,6 +2081,12 @@ impl App {
         let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal…", "Update dotrino-terminal…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
         // Corre en una ventana aparte.
         profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
+        // La app misma: la baja, la verifica y la instala el cliente.
+        let app_update_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= APP_UPDATE_CLIENT);
+        profiles.push(Item::new(entry(t("Actualizar la app…", "Update the app…"), "", (!linking && app_update_ready).then_some(Message::UpdateApp(id)))));
+        if !app_update_ready {
+            profiles.push(Item::new(note(t("Para actualizar la app hace falta dotrino-terminal 0.39.0 o más reciente: instálalo o actualízalo aquí arriba.", "Updating the app needs dotrino-terminal 0.39.0 or newer: install or update it just above."))));
+        }
         let view_menu = Menu::new(vec![
             Item::new(entry(
                 format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),

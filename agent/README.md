@@ -50,6 +50,7 @@ dotrino-terminal profiles [--json]       # los perfiles (agentes con nombre) de 
 dotrino-terminal link [--name <n>]       # enlazar un perfil con tu bóveda
 dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para su agente; mismo aparato)
 dotrino-terminal vscode [--name <n>]     # la terminal embebida de VS Code abre consolas de aquí (--off lo deshace)
+dotrino-terminal desktop update [--check] # actualiza la app de escritorio: baja, verifica la firma e instala
 ```
 
 Cerrar la ventana no cierra la consola: sigue viva en el agente y se retoma después (se cierra

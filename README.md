@@ -89,6 +89,10 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   `npm install -g @dotrino/terminal-agent@latest` en la consola de la ventana, sin Enter (el
   `.deb` no lo trae: la instalación la dispara la persona, a la vista, §15); si faltaba el
   cliente, la app lo busca cada 3 s y activa los perfiles al aparecer.
+  «Perfil → Actualizar la app…» corre `dotrino-terminal desktop update --current <versión> --exe <binario>`
+  igual, en otra TTY: la app no tiene red, así que baja, verifica contra la atestación e instala el
+  cliente (`agent/desktop.js`, sobre `@dotrino/update`; `sudo dpkg -i` / `sudo rpm -U` si vino de un
+  paquete, cambio atómico del binario si vino del tarball, el `.app` entero en macOS). Cliente ≥ 0.39.0.
   «Perfil → Usar en / Quitar de la terminal de VS Code» corre `dotrino-terminal vscode --name <perfil>`
   o `vscode --off` como «Actualizar»: en la ventana, en otra TTY, y al acabar vuelve a su consola (cliente ≥ 0.20.0).
   **Cerrar una ventana nunca cierra una consola** (≥ 0.2.28): la suelta (Ctrl+] d) y se va, también
