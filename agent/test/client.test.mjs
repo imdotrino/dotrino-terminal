@@ -222,6 +222,11 @@ test('`dotrino-terminal note` DENTRO de una consola cambia la nota de ESA consol
     out = ''
     term.write(`echo "[$(${run} note | tr '\n' '|')]"\r`)
     assert.ok(await until(() => out.includes('[▸ pruebas|▸ falta: desplegar|llamar a Luis|]')), 'al leer, la tarea sale marcada y arriba')
+    // Una bandera desconocida no cae en la nota de la persona: la orden para y no cambia nada.
+    out = ''
+    term.write(`${run} note --nope 'texto suelto'; echo "SALIDA-$?"\r`)
+    assert.ok(await until(() => out.includes('SALIDA-1')), 'una bandera desconocida para la orden')
+    assert.equal((await both())[0].split('|')[1], 'llamar a Luis', 'una bandera desconocida no toca la nota')
     term.write(`${run} note --task ''\r`)
     assert.ok(await until(async () => (await both())[0] === '|llamar a Luis'), "--task '' quita la tarea y deja la nota")
     term.write(`${run} note --clear\r`)

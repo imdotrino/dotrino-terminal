@@ -601,9 +601,13 @@ async function note () {
   // Dentro de una consola, el perfil es el de esa consola, no el `default`.
   const dir = opt('--dir') || (opt('--name') ? dataDir(opt('--name')) : process.env.DOTRINO_TERMINAL_PROFILE_DIR || dataDir())
   const valued = new Set(['--id', '--dir', '--name', '--add', '--task', '--title'])
+  const flags = new Set([...valued, '--clear', '--json'])
   const words = []
   for (let i = 1; i < args.length; i++) {
     if (valued.has(args[i])) { i++; continue }
+    // Una bandera que no se conoce PARA, no se salta: saltarla dejaba su valor como texto suelto, y
+    // el texto suelto reemplaza la nota de la persona (un cliente viejo con `--title` lo hizo).
+    if (args[i].startsWith('--') && !flags.has(args[i])) die(t(`no conozco ${args[i]}: no se cambió nada. Mira «dotrino-terminal --help».`, `unknown option ${args[i]}: nothing was changed. See "dotrino-terminal --help".`))
     if (args[i] === '-' || !args[i].startsWith('-')) words.push(args[i])
   }
   const stdin = () => fs.readFileSync(0, 'utf8').replace(/\n+$/, '')
