@@ -276,10 +276,11 @@ fn drop_target(ids: &[&str], id: &str, over: &str) -> Option<Option<String>> {
     Some(if to < from { Some(over.to_string()) } else { ids.get(to + 1).map(|x| x.to_string()) })
 }
 
-/// A qué consola pasa una ventana que se quedó sin la suya: la primera que nadie tiene abierta y,
-/// si todas lo están, la primera. `None` = no queda ninguna (la ventana queda sin consola).
+/// A qué consola pasa una ventana que se quedó sin la suya: una desatendida EN ESTA MÁQUINA (ver
+/// `unattended`: que la mire otro aparato no cuenta) y, si todas están en alguna ventana de aquí,
+/// la primera. `None` = no queda ninguna (la ventana queda sin consola).
 fn next_console(list: &[ConsoleInfo]) -> Option<String> {
-    list.iter().find(|c| c.watchers.is_empty()).or_else(|| list.first()).map(|c| c.id.clone())
+    unattended(list).or_else(|| list.first().map(|c| c.id.clone()))
 }
 
 /// La consola a la que se engancha una ventana NUEVA en vez de crear otra: una que nadie mira y, si

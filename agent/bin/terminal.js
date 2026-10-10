@@ -522,7 +522,8 @@ function interactive (conn, first, dir) {
         request(conn, { type: 'list' }, 'consoles').then((r) => {
           if (r.type !== 'consoles') return            // un `fail`: ya lo atendió el manejador de abajo
           const rest = r.list.filter((c) => c.id !== closed)
-          const other = rest.find((c) => !c.watchers.length) || rest[0]
+          // Desatendida EN ESTA MÁQUINA: que la mire otro aparato no la hace atendida aquí.
+          const other = rest.find((c) => !c.watchers.length) || rest.find((c) => !c.watchers.some((w) => w.origin === 'local')) || rest[0]
           if (other) return switchTo({ type: 'attach', id: other.id })
           empty = true
           shellTitle = ''; remote = new Set(); showTitle()
