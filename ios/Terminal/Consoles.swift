@@ -36,6 +36,16 @@ struct ConsoleInfo: Equatable, Identifiable {
     var busy = false
     /// It finished and nobody has looked at it yet.
     var doneAt: Int64? = nil
+    /// What it is about, written by the person (agent ≥ 0.36); nil when the machine keeps no notes.
+    var note: String? = nil
+    /// The task in progress, set by the program running inside (agent ≥ 0.37): read and removed here, never edited.
+    var task: String? = nil
+
+    /// What the panel says of «what it is about»: the first line of the task, or of the note.
+    var aboutLine: String? {
+        [task, note].compactMap { $0 }.flatMap { $0.components(separatedBy: "\n") }
+            .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
+    }
 
     enum Activity { case idle, busy, done }
     var activity: Activity { busy ? .busy : doneAt != nil ? .done : .idle }
@@ -62,7 +72,8 @@ func consoleOf(_ o: JSON) -> ConsoleInfo? {
     return ConsoleInfo(id: id, n: int("n"), title: o["title"]?.string ?? "", origin: o["origin"]?.string, cols: int("cols"), rows: int("rows"),
                        viewers: int("viewers"), watchers: watchers.count, watchedLocally: watchers.contains { $0["origin"]?.string == "local" },
                        sizeBy: by, lastActive: o["lastActive"]?.int ?? 0, cwd: o["cwd"]?.string, host: o["host"]?.string,
-                       busy: o["activity"]?.string == "busy", doneAt: o["doneAt"]?.int)
+                       busy: o["activity"]?.string == "busy", doneAt: o["doneAt"]?.int,
+                       note: o["note"]?.string, task: o["task"]?.string)
 }
 
 /// Where a console dragged in the panel goes when dropped on another: it takes THAT one's place.
@@ -357,6 +368,8 @@ final class Tab: ObservableObject, Identifiable {
             sayScreen()
             if !pendingInput.isEmpty { let t = pendingInput; pendingInput = ""; input(t) }
             list()
+        // The note (or the task) was changed: the console as the machine has it now.
+        case "noted": if let c = m["console"].flatMap(consoleOf) { upsert(c) }
         case "meta":
             guard let c = m["console"].flatMap(consoleOf) else { return }
             upsert(c)
@@ -451,6 +464,20 @@ final class Tab: ObservableObject, Identifiable {
         guard state == .open else { return }
         try? channel?.send(["type": "resize", "cols": .int(Int64(screenCols)), "rows": .int(Int64(screenRows))])
         try? channel?.send(["type": "take"])
+    }
+
+    /// The person's note of the console on screen. Shown at once; the machine's answer confirms it.
+    func setNote(_ text: String) {
+        guard var c = current else { return }
+        c.note = text; upsert(c)
+        try? channel?.send(["type": "note", "id": .string(c.id), "text": .string(text)])
+    }
+
+    /// Removes the task the program set on the console on screen (it is not edited here, only removed).
+    func clearTask() {
+        guard var c = current else { return }
+        c.task = ""; upsert(c)
+        try? channel?.send(["type": "note", "id": .string(c.id), "task": ""])
     }
 
     /// Close a console on the machine. If it is the one on screen, first move to another free one (or a new one).

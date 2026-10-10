@@ -209,4 +209,40 @@ final class TabTests: XCTestCase {
         XCTAssertNil(dropTarget(ids, "b", "b"))
         XCTAssertNil(dropTarget(ids, "x", "b"))
     }
+
+    private func with(_ c: JSON, note: String? = nil, task: String? = nil) -> JSON {
+        var o = c.object ?? [:]
+        if let note { o["note"] = .string(note) }
+        if let task { o["task"] = .string(task) }
+        return .object(o)
+    }
+
+    func testTheNoteIsThePersonsAndTheTaskIsTheProgramsEachInItsField() {
+        let (t1, ch) = tab()
+        let c = with(console("a", 1, 80, 24), note: "llamar a Ana", task: "migrando\nfalta: probar")
+        t1.handle(consoles(c)); t1.handle(attached(c))
+        XCTAssertEqual(t1.current?.note, "llamar a Ana")
+        XCTAssertEqual(t1.current?.aboutLine, "migrando", "the panel shows the task's first line")
+
+        t1.setNote("llamar a Luis")
+        XCTAssertEqual(ch.last("note")?["text"]?.string, "llamar a Luis")
+        XCTAssertNil(ch.last("note")?["task"], "the task is not sent with it")
+        XCTAssertEqual(t1.current?.note, "llamar a Luis", "shown at once")
+        XCTAssertEqual(t1.current?.task, "migrando\nfalta: probar", "and the task stays")
+
+        t1.clearTask()
+        XCTAssertEqual(ch.last("note")?["task"]?.string, "")
+        XCTAssertNil(ch.last("note")?["text"], "removing the task does not send the note")
+        XCTAssertEqual(t1.current?.aboutLine, "llamar a Luis", "with no task, the panel shows the note")
+
+        t1.handle(["type": "noted", "console": with(console("a", 1, 80, 24), note: "de la máquina", task: "")])
+        XCTAssertEqual(t1.current?.note, "de la máquina", "the machine's answer is what stays")
+    }
+
+    func testAMachineThatKeepsNoNotesSaysNothingOfThem() {
+        let (t1, _) = tab()
+        let c = console("a", 1, 80, 24)
+        t1.handle(consoles(c)); t1.handle(attached(c))
+        XCTAssertNil(t1.current?.note); XCTAssertNil(t1.current?.task); XCTAssertNil(t1.current?.aboutLine)
+    }
 }

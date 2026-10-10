@@ -17,6 +17,7 @@ final class DemoAgent: Channel {
     private final class C {
         let id: String, n: Int, title: String, window: Bool
         var cols: Int, rows: Int, chosenBy: String?, holder: String?
+        var note = "", task = ""
         init(_ id: String, _ n: Int, _ title: String, _ cols: Int, _ rows: Int, _ window: Bool, _ chosenBy: String?, _ holder: String?) {
             self.id = id; self.n = n; self.title = title; self.cols = cols; self.rows = rows; self.window = window; self.chosenBy = chosenBy; self.holder = holder
         }
@@ -30,6 +31,11 @@ final class DemoAgent: Channel {
     ]
     private var current: C?
     private var cols = 80, rows = 24
+
+    init() {
+        consoles[0].task = "Mejorando el panel de consolas\nFalta: probar en el teléfono"
+        consoles[0].note = "Llamar a Ana antes de desplegar."
+    }
 
     func onMessage(_ l: @escaping (JSON) -> Void) -> () -> Void { let id = UUID(); listeners[id] = l; return { [weak self] in self?.listeners[id] = nil } }
     func onError(_ l: @escaping (Error) -> Void) -> () -> Void { {} }
@@ -47,7 +53,8 @@ final class DemoAgent: Channel {
         if current === c { watchers.append(["origin": "remote", "device": .string(Self.me)]) }
         var o: [String: JSON] = ["id": .string(c.id), "n": .int(Int64(c.n)), "title": .string(c.title), "origin": "local",
                                  "cols": .int(Int64(c.cols)), "rows": .int(Int64(c.rows)), "lastActive": .int(nowMs()),
-                                 "viewers": .int(Int64(watchers.count)), "watchers": .array(watchers)]
+                                 "viewers": .int(Int64(watchers.count)), "watchers": .array(watchers),
+                                 "note": .string(c.note), "task": .string(c.task)]
         if let who = decider(c) {
             o["sizeBy"] = who == "phone" ? ["origin": "remote", "device": .string(Self.me)]
                                          : ["origin": "local", "tag": "desktop-1"]
@@ -101,6 +108,11 @@ final class DemoAgent: Channel {
             consoles.insert(c, at: consoles.firstIndex { $0.id == p["before"]?.string } ?? consoles.count)
             list()
         case "close": if let c = current { consoles.removeAll { $0 === c } }; current = nil
+        case "note":
+            guard let c = consoles.first(where: { $0.id == p["id"]?.string }) else { return }
+            if let v = p["text"]?.string { c.note = v }
+            if let v = p["task"]?.string { c.task = v }
+            reply(["type": "noted", "console": info(c)])
         default: break
         }
     }

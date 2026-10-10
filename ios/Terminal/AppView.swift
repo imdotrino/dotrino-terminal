@@ -239,6 +239,10 @@ private struct ConsoleScreen: View {
     /// back before it shows; here it shows at once and goes whole, with Enter. The extra keys still
     /// go straight. Off, everything goes key by key, as full-screen programs (vim, htop) need.
     @AppStorage("compose") private var composing = false
+    /// «What it is about»: folded to one line (remembered). A phone starts folded; an iPad, open.
+    @AppStorage("aboutFolded") private var aboutFolded = UIDevice.current.userInterfaceIdiom == .phone
+    @State private var editing: ConsoleInfo?
+    @State private var noteDraft = ""
     @State private var composeText = ""
     @State private var composeFocus = false
     /// The field itself: what is sent is read from IT, not from the state, which lagged a keystroke
@@ -269,6 +273,11 @@ private struct ConsoleScreen: View {
                     .accessibilityIdentifier("tab-note")
                     .padding(.horizontal, 24).frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                // «What it is about»: a translucent card floating at the top right of the console.
+                if tab.state == .open, let c = tab.current {
+                    aboutCard(c).padding(.top, 6).padding(.trailing, 6).padding(.leading, 46)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
                 if let toast {
                     Text(toast).font(.footnote).foregroundColor(Palette.text).padding(12)
                         .background(RoundedRectangle(cornerRadius: 12).fill(Palette.panel2))
@@ -289,6 +298,28 @@ private struct ConsoleScreen: View {
             Button(t("code.cancel"), role: .cancel) { code = "" }
         } message: {
             Text(codeMessage)
+        }
+        // The person's note, edited in a sheet: only theirs — the task is not in the box.
+        .sheet(item: $editing) { e in
+            NavigationStack {
+                TextEditor(text: $noteDraft).accessibilityIdentifier("about-text")
+                    .scrollContentBackground(.hidden).foregroundColor(Palette.text)
+                    .padding(8).background(RoundedRectangle(cornerRadius: 12).fill(Palette.panel))
+                    .padding(16).background(Palette.panel2)
+                    .navigationTitle(t("about.notes", ("n", e.n))).navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button(t("about.cancel")) { editing = nil } }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(t("about.save")) {
+                                // If the tab moved to another console meanwhile, this note is not that one's.
+                                if tab.consoleId == e.id { tab.setNote(String(noteDraft.prefix(4000)).trimmingCharacters(in: .whitespacesAndNewlines)) }
+                                editing = nil
+                            }.accessibilityIdentifier("about-save")
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+            .preferredColorScheme(.dark)
         }
         .confirmationDialog(actions.map { "\($0.n) · " + shortTitle($0.title.isEmpty ? t("console.n", ("n", $0.n)) : $0.title) } ?? "",
                             isPresented: Binding(get: { actions != nil }, set: { if !$0 { actions = nil } }), titleVisibility: .visible) {
@@ -418,6 +449,62 @@ private struct ConsoleScreen: View {
         switch c.activity { case .busy: return Palette.busy; case .done: return Palette.online; case .idle: return nil }
     }
 
+    // The same card as the PWA and the desktop: the console's title, the task the program inside set
+    // (read and removed here, never edited) and the person's note. On a phone it starts FOLDED to
+    // one line — the task — because open it covers what is being read; on an iPad it starts open.
+    @ViewBuilder private func aboutCard(_ c: ConsoleInfo) -> some View {
+        let glass = RoundedRectangle(cornerRadius: 14).fill(Palette.panel2.opacity(0.8))
+        if aboutFolded {
+            Button { aboutFolded = false } label: {
+                Text(c.aboutLine ?? "i").font(c.aboutLine == nil ? .caption.bold().italic() : .caption).foregroundColor(Palette.text)
+                    .lineLimit(1).truncationMode(.tail).frame(maxWidth: 190, alignment: .leading).fixedSize(horizontal: c.aboutLine == nil, vertical: false)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(glass).overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line, lineWidth: 1))
+            }
+            .fixedSize()
+            .accessibilityLabel(t("about.show")).accessibilityIdentifier("about-show")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 7) {
+                    Text("\(c.n)").font(.caption.bold()).foregroundColor(Palette.onAccent).padding(.horizontal, 6)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Palette.accent))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(c.title.isEmpty ? t("about.untitled") : c.title).font(.caption.bold()).foregroundColor(Palette.text).lineLimit(3)
+                            .accessibilityIdentifier("about-title")
+                        Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { aboutFolded = true } label: { Text("–").foregroundColor(Palette.muted).padding(.horizontal, 8) }
+                        .accessibilityLabel(t("about.hide")).accessibilityIdentifier("about-hide")
+                }
+                if let task = c.task, !task.isEmpty {
+                    Rectangle().fill(Palette.line).frame(height: 1)
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(task).font(.caption).foregroundColor(Palette.text).lineLimit(8)
+                            .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("about-task")
+                        Button { tab.clearTask() } label: { Text("×").foregroundColor(Palette.muted).padding(.horizontal, 8) }
+                            .accessibilityLabel(t("about.taskDel")).accessibilityIdentifier("about-task-del")
+                    }
+                }
+                Rectangle().fill(Palette.line).frame(height: 1)
+                Text(c.note == nil ? t("about.old") : c.note!.isEmpty ? t("about.empty") : c.note!)
+                    .font(.caption).foregroundColor((c.note ?? "").isEmpty ? Palette.muted : Palette.text).lineLimit(10)
+                    .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("about-note")
+                // A machine that keeps no notes: the button shows, off (the line above says why).
+                Button { noteDraft = c.note ?? ""; editing = c } label: {
+                    Text(t((c.note ?? "").isEmpty ? "about.add" : "about.edit")).font(.caption.bold()).foregroundColor(Palette.text)
+                        .padding(.horizontal, 12).padding(.vertical, 4).overlay(Capsule().stroke(Palette.line))
+                }
+                .disabled(c.note == nil).opacity(c.note == nil ? 0.4 : 1)
+                .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("about-edit")
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .frame(width: 260)
+            .background(glass).overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.accentSoft, lineWidth: 1))
+            .contentShape(Rectangle()).onTapGesture {}      // a touch on the card does not reach the console
+        }
+    }
+
     private func whereIs(_ c: ConsoleInfo) -> String {
         let mine = c.id == tab.consoleId
         let others = c.watchers - (mine ? 1 : 0)
@@ -482,6 +569,7 @@ private struct ConsoleScreen: View {
                             ForEach([lines.dir, lines.name].compactMap { $0 }, id: \.self) { line in
                                 Text(line).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head)
                             }
+                            if let about = c.aboutLine { Text(about).font(.caption).foregroundColor(Palette.accent).lineLimit(1).truncationMode(.tail) }
                             Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
