@@ -130,6 +130,10 @@ struct ConsoleInfo {
     /// Terminó, o pidió atención, y nadie ha entrado ni tecleado desde entonces (ms).
     #[serde(default, rename = "doneAt")]
     done_at: Option<u64>,
+    /// De qué va la consola: la nota que escribe la persona o el programa de dentro
+    /// (`dotrino-terminal note`). `None`: el agente es anterior a la 0.36 y no las tiene.
+    #[serde(default)]
+    note: Option<String>,
 }
 
 /// Lo que el panel dice de una consola, cada cosa en SU línea: la máquina (`usuario@máquina`)
@@ -404,6 +408,8 @@ struct Win {
     sidebar: bool,
     /// Panel colapsado: una franja con un botón numerado por consola, para que ocupe poco.
     sidebar_collapsed: bool,
+    /// La nota que se está editando en la tarjeta «de qué va»: de qué consola y el texto.
+    note_edit: Option<(String, iced::widget::text_editor::Content)>,
 }
 
 struct App {
@@ -436,6 +442,8 @@ struct App {
     /// Lo que ya se vio: la consola (id) y el `doneAt` que tenía cuando su ventana tuvo el foco.
     /// Ese «terminó» ya no parpadea; uno nuevo (otro `doneAt`) sí.
     seen: HashMap<String, u64>,
+    /// La tarjeta «de qué va», plegada a un botón (en todas las ventanas; se recuerda).
+    about_folded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -502,6 +510,13 @@ enum Message {
     ScrollTo(window::Id, f32),
     /// Colapsar el panel a solo botones (o volver a abrirlo).
     CollapseSidebar(window::Id),
+    /// La tarjeta «de qué va»: plegarla o abrirla.
+    AboutFold,
+    /// Empezar a editar la nota de la consola de la ventana.
+    NoteEdit(window::Id),
+    NoteAction(window::Id, iced::widget::text_editor::Action),
+    NoteSave(window::Id),
+    NoteCancel(window::Id),
     Terminal(iced_term::Event),
 }
 
@@ -789,6 +804,27 @@ fn save_last_profile(name: &str) {
     let _ = std::fs::write(file, name);
 }
 
+/// ¿Está plegada la tarjeta «de qué va»? Una preferencia, junto al último perfil.
+fn about_folded_file() -> Option<PathBuf> {
+    Some(last_profile_file()?.with_file_name("about-folded"))
+}
+
+fn about_folded() -> bool {
+    about_folded_file().is_some_and(|f| f.exists())
+}
+
+fn save_about_folded(folded: bool) {
+    let Some(file) = about_folded_file() else { return };
+    if folded {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(file, "1");
+    } else {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
 fn linked_names(profiles: &[Profile]) -> Vec<String> {
     profiles.iter().filter(|p| p.linked).map(|p| p.name.clone()).collect()
 }
@@ -796,7 +832,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -861,7 +897,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true });
+        self.windows.insert(id, Win { profile, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -1104,6 +1140,95 @@ impl App {
         }
         let list = self.consoles.get(win.profile.as_ref()?)?;
         list.iter().find(|c| c.watchers.iter().any(|w| w.tag.as_deref() == Some(win.tag.as_str()))).map(|c| c.id.clone())
+    }
+
+    /// La consola que muestra la ventana, tal como la cuenta el agente.
+    fn my_console(&self, id: window::Id) -> Option<&ConsoleInfo> {
+        let mine = self.mine(id)?;
+        let win = self.windows.get(&id)?;
+        self.consoles.get(win.profile.as_ref()?)?.iter().find(|c| c.id == mine)
+    }
+
+    /// «De qué va»: una tarjeta translúcida, arriba a la derecha de la consola, con su título y su
+    /// nota (la tarea en curso). La misma que la PWA. Plegada, un botón.
+    fn about<'a>(&'a self, id: window::Id, win: &'a Win) -> Option<Element<'a, Message>> {
+        let c = self.my_console(id)?;
+        let place = |e: Element<'a, Message>| -> Element<'a, Message> {
+            container(e).width(Length::Fill).height(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(iced::Padding { top: 8.0, right: 20.0, ..Default::default() }).into()
+        };
+        let round = |theme: &Theme, status: button::Status| {
+            let mut s = menu_button(theme, status);
+            s.border = Border::default().rounded(11.0).width(1.0).color(theme.extended_palette().background.strong.color);
+            if s.background.is_none() {
+                s.background = Some(theme.extended_palette().background.weak.color.into());
+            }
+            s
+        };
+        let tip = t("De qué va esta consola", "What this console is about");
+        if self.about_folded {
+            let b = button(text("i").size(12).font(iced::Font { style: iced::font::Style::Italic, weight: iced::font::Weight::Bold, ..iced::Font::DEFAULT })).padding([2, 8]).style(round).on_press(Message::AboutFold);
+            return Some(place(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(container::rounded_box), iced::widget::tooltip::Position::Left).into()));
+        }
+        let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.6)) };
+        let n = c.n.map(|n| n.to_string()).unwrap_or_default();
+        let badge = container(text(n).size(12)).padding([0, 5]).style(|theme: &Theme| {
+            let p = theme.extended_palette();
+            container::Style { background: Some(p.primary.base.color.into()), text_color: Some(p.primary.base.text), border: Border::default().rounded(4.0), ..Default::default() }
+        });
+        let title = if c.title.is_empty() { t("Sin título", "Untitled") } else { c.title.clone() };
+        let head = row![badge, text(title).size(12).width(Length::Fill), button(text("–").size(12)).padding([0, 7]).style(round).on_press(Message::AboutFold)].spacing(6);
+        let act = |label: String, msg: Option<Message>| button(text(label).size(12)).padding([2, 10]).style(round).on_press_maybe(msg);
+        let editing = win.note_edit.as_ref().filter(|(cid, _)| *cid == c.id);
+        let mut card = column![head, rule::horizontal(1)].spacing(6);
+        if let Some((_, content)) = editing {
+            let editor = iced::widget::text_editor(content)
+                .id(note_editor_id(id))
+                .size(12)
+                .height(120)
+                .placeholder(t("La tarea en curso, lo que falta…", "The task in progress, what is left…"))
+                .on_action(move |a| Message::NoteAction(id, a))
+                // Ctrl+Enter guarda, Esc cancela; lo demás, lo de siempre.
+                .key_binding(move |k| {
+                    use iced::widget::text_editor::Binding;
+                    match k.key.as_ref() {
+                        Key::Named(keyboard::key::Named::Escape) => Some(Binding::Custom(Message::NoteCancel(id))),
+                        Key::Named(keyboard::key::Named::Enter) if k.modifiers.command() => Some(Binding::Custom(Message::NoteSave(id))),
+                        _ => Binding::from_key_press(k),
+                    }
+                });
+            card = card.push(editor).push(
+                row![space::horizontal(), act(t("Cancelar", "Cancel"), Some(Message::NoteCancel(id))), act(t("Guardar", "Save"), Some(Message::NoteSave(id)))].spacing(6),
+            );
+        } else {
+            match c.note.as_deref() {
+                // Agente viejo: el botón se ve, apagado, y se dice por qué.
+                None => {
+                    card = card
+                        .push(text(t("Actualiza dotrino-terminal (Perfil → Actualizar) para tener notas", "Update dotrino-terminal (Profile → Update) to have notes")).size(12).style(dim))
+                        .push(row![space::horizontal(), act(t("Agregar nota", "Add a note"), None)]);
+                }
+                Some("") => {
+                    card = card.push(text(t("Sin notas.", "No notes.")).size(12).style(dim)).push(row![space::horizontal(), act(t("Agregar nota", "Add a note"), Some(Message::NoteEdit(id)))]);
+                }
+                Some(note) => {
+                    card = card
+                        .push(container(iced::widget::scrollable(text(note.to_string()).size(12).width(Length::Fill))).max_height(220))
+                        .push(row![space::horizontal(), act(t("Editar", "Edit"), Some(Message::NoteEdit(id)))]);
+                }
+            }
+        }
+        let alpha = if editing.is_some() { 0.96 } else { 0.78 };
+        let card = container(card).width(300).padding(10).style(move |theme: &Theme| {
+            let p = theme.extended_palette();
+            container::Style {
+                background: Some(p.background.weak.color.scale_alpha(alpha).into()),
+                border: Border::default().rounded(10.0).width(1.0).color(p.primary.base.color.scale_alpha(0.35)),
+                ..Default::default()
+            }
+        });
+        // Con interacción propia, el clic sobre la tarjeta no llega a la terminal de debajo (no
+        // empieza una selección ni le deja el teclado mientras se escribe la nota).
+        Some(place(iced::widget::mouse_area(card).interaction(iced::mouse::Interaction::Idle).into()))
     }
 
     /// Cambiar de consola SIN cerrar la actual y SIN reiniciar nada: el cliente de la ventana
@@ -1427,7 +1552,58 @@ impl App {
             }
             Message::Poll => {
                 self.poll_consoles();
+                // La ventana pasó a otra consola a media edición: esa nota ya no es la que se ve.
+                let ids: Vec<window::Id> = self.windows.keys().copied().collect();
+                for id in ids {
+                    let mine = self.mine(id);
+                    if let Some(w) = self.windows.get_mut(&id) {
+                        if w.note_edit.as_ref().is_some_and(|(cid, _)| mine.as_deref() != Some(cid.as_str())) {
+                            w.note_edit = None;
+                        }
+                    }
+                }
                 Task::none()
+            }
+            Message::AboutFold => {
+                self.about_folded = !self.about_folded;
+                save_about_folded(self.about_folded);
+                Task::none()
+            }
+            Message::NoteEdit(id) => {
+                let Some(c) = self.my_console(id) else { return Task::none() };
+                let content = iced::widget::text_editor::Content::with_text(c.note.as_deref().unwrap_or(""));
+                let cid = c.id.clone();
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.note_edit = Some((cid, content));
+                }
+                iced::widget::operation::focus(note_editor_id(id))
+            }
+            Message::NoteAction(id, action) => {
+                if let Some((_, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.as_mut()) {
+                    content.perform(action);
+                }
+                Task::none()
+            }
+            Message::NoteCancel(id) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.note_edit = None;
+                }
+                self.focus(id)
+            }
+            Message::NoteSave(id) => {
+                let Some((cid, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.take()) else { return Task::none() };
+                let note = content.text().trim_end().to_string();
+                let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
+                if let Some(profile) = profile {
+                    if let Some(dir) = self.profile_dir(&profile) {
+                        agent_send(&dir, &serde_json::json!({ "type": "note", "id": cid, "text": note }));
+                    }
+                    // Se ve ya, sin esperar a la próxima lectura de la lista.
+                    if let Some(c) = self.consoles.get_mut(&profile).and_then(|l| l.iter_mut().find(|c| c.id == cid)) {
+                        c.note = Some(note);
+                    }
+                }
+                Task::batch([later(300, Message::Poll), self.focus(id)])
             }
             Message::Focused(id) => {
                 self.focused = Some(id);
@@ -1737,9 +1913,15 @@ impl App {
                 .into(),
             (None, None) => text("").into(),
         };
+        let body: Element<'_, Message> = container(body).width(Length::Fill).height(Length::Fill).into();
+        // La tarjeta «de qué va» flota sobre la consola (solo si hay consola que mostrar).
+        let body: Element<'_, Message> = match (win.term.is_some() && win.error.is_none()).then(|| self.about(id, win)).flatten() {
+            Some(card) => iced::widget::stack![body, card].into(),
+            None => body,
+        };
         let main: Element<'_, Message> = match (win.sidebar, &win.profile) {
-            (true, Some(profile)) => row![self.side(id, profile), container(body).width(Length::Fill).height(Length::Fill)].into(),
-            _ => container(body).width(Length::Fill).height(Length::Fill).into(),
+            (true, Some(profile)) => row![self.side(id, profile), body].into(),
+            _ => body,
         };
         column![self.menu(id, win), main].into()
     }
@@ -1917,6 +2099,10 @@ impl App {
             for l in lines {
                 label = label.push(text(l).size(12));
             }
+            // De qué va: la primera línea de su nota.
+            if let Some(line) = c.note.as_deref().and_then(|n| n.lines().map(str::trim).find(|l| !l.is_empty())) {
+                label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) }));
+            }
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::ShowConsole(id, c.id.clone())));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillConsole(id, c.id.clone()));
@@ -2000,6 +2186,11 @@ fn entry(label: String, keys: &str, msg: Option<Message>) -> Element<'static, Me
 }
 
 /// Un mensaje dentro de `ms` milisegundos.
+/// El editor de la nota de una ventana, para darle el teclado al abrirlo.
+fn note_editor_id(id: window::Id) -> iced::widget::Id {
+    iced::widget::Id::from(format!("note-{id:?}"))
+}
+
 fn later(ms: u64, msg: Message) -> Task<Message> {
     Task::perform(tokio::time::sleep(std::time::Duration::from_millis(ms)), move |_| msg.clone())
 }
