@@ -232,6 +232,44 @@ mod tests {
     }
 
     #[test]
+    fn a_console_rings_when_it_finishes_not_when_it_shows_up_finished() {
+        let c = |id: &str, done: &str| -> super::ConsoleInfo { serde_json::from_str(&format!(r#"{{"id":"{id}","n":1,"title":"t","doneAt":{done}}}"#)).unwrap() };
+        let lists = |v: Vec<super::ConsoleInfo>| -> std::collections::HashMap<String, Vec<super::ConsoleInfo>> { [("p".to_string(), v)].into_iter().collect() };
+        let empty = std::collections::HashMap::new();
+        // Al abrir la app: ya estaba terminada, no es una noticia.
+        assert!(super::just_done(&empty, &lists(vec![c("a", "10")])).is_empty());
+        // Termina mientras se mira: suena, y con el mismo `doneAt` no vuelve a sonar.
+        assert_eq!(super::just_done(&lists(vec![c("a", "null")]), &lists(vec![c("a", "20")])), vec![("a".to_string(), 20)]);
+        assert!(super::just_done(&lists(vec![c("a", "20")]), &lists(vec![c("a", "20")])).is_empty());
+        // Otro «terminó» de la misma consola: otra vez.
+        assert_eq!(super::just_done(&lists(vec![c("a", "20")]), &lists(vec![c("a", "30")])), vec![("a".to_string(), 30)]);
+        // Atendida (sin `doneAt`): nada.
+        assert!(super::just_done(&lists(vec![c("a", "20")]), &lists(vec![c("a", "null")])).is_empty());
+    }
+
+    #[test]
+    fn only_one_process_rings_for_the_same_finish() {
+        let dir = std::env::temp_dir().join(format!("dotrino-rung-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(super::claim_ring(&dir, "a/b", 10));
+        assert!(!super::claim_ring(&dir, "a/b", 10));
+        assert!(super::claim_ring(&dir, "a/b", 11));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A mano, en una máquina con altavoces: `cargo test -- --ignored the_ring_sounds`.
+    #[test]
+    #[ignore]
+    fn the_ring_sounds_on_this_machine() {
+        super::ring_now().unwrap();
+    }
+
+    #[test]
+    fn the_ring_is_a_sound_the_player_can_read() {
+        assert!(rodio::Decoder::new(std::io::Cursor::new(super::RING)).is_ok());
+    }
+
+    #[test]
     fn what_one_window_saw_is_added_to_what_the_others_saw() {
         let file = std::env::temp_dir().join(format!("dotrino-seen-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&file);
@@ -984,6 +1022,78 @@ fn save_last_profile(name: &str) {
     let _ = std::fs::write(file, name);
 }
 
+/// EL TRINO: el sonido de todos los avisos de Dotrino (`sound/trinos/trino-01a.wav` en la raíz del
+/// ecosistema, el original). El mismo que tocan la web (`@dotrino/notifications/ring`) y las apps
+/// del teléfono (`DotrinoRing`).
+const RING: &[u8] = include_bytes!("../assets/trino.wav");
+const RING_VOLUME: f32 = 0.6;
+
+/// Las consolas que ACABAN de terminar: estaban en la lista anterior y su `doneAt` es otro. Una que
+/// aparece ya terminada (al abrir la app, o al llegar la lista de otra máquina) no es una noticia.
+fn just_done(old: &HashMap<String, Vec<ConsoleInfo>>, new: &HashMap<String, Vec<ConsoleInfo>>) -> Vec<(String, u64)> {
+    let before: HashMap<&str, Option<u64>> = old.values().flatten().map(|c| (c.id.as_str(), c.done_at)).collect();
+    new.values()
+        .flatten()
+        .filter_map(|c| {
+            let at = c.done_at?;
+            (*before.get(c.id.as_str())? != Some(at)).then(|| (c.id.clone(), at))
+        })
+        .collect()
+}
+
+/// ¿Le toca a ESTE proceso tocar el trino por ese «terminó»? Cada lanzamiento de la app es un
+/// proceso aparte y todos ven la misma lista: sin esto sonaría una vez por ventana abierta. El
+/// primero que crea el archivo (`create_new` es atómico) lo toca; los demás callan.
+fn claim_ring(dir: &Path, id: &str, at: u64) -> bool {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        // Sin dónde anotarlo no hay con qué ponerse de acuerdo: suena en cada proceso, y se dice.
+        eprintln!("dotrino-terminal-desktop: ring: cannot share who rings ({e}), every window will");
+        return true;
+    }
+    // Lo de hace más de una hora ya no lo disputa nadie.
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for f in entries.flatten() {
+            let old = f.metadata().and_then(|m| m.modified()).ok().and_then(|m| m.elapsed().ok()).is_some_and(|d| d.as_secs() > 3600);
+            if old {
+                let _ = std::fs::remove_file(f.path());
+            }
+        }
+    }
+    let name: String = format!("{id}-{at}").chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(name)) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(e) => {
+            eprintln!("dotrino-terminal-desktop: ring: cannot share who rings ({e}), every window will");
+            true
+        }
+    }
+}
+
+fn ring_dir() -> Option<PathBuf> {
+    Some(last_profile_file()?.with_file_name("rung"))
+}
+
+/// Toca el trino, en un hilo aparte: abrir la salida de sonido tarda y la ventana no espera por eso.
+/// Una máquina sin salida de sonido lo dice en el registro y sigue: el punto que parpadea ya avisa.
+fn play_ring() {
+    std::thread::spawn(|| {
+        if let Err(e) = ring_now() {
+            eprintln!("dotrino-terminal-desktop: ring: could not play ({e})");
+        }
+    });
+}
+
+/// Abre la salida de sonido, toca el trino y espera a que acabe.
+fn ring_now() -> Result<(), Box<dyn std::error::Error>> {
+    let mut out = rodio::DeviceSinkBuilder::open_default_sink()?;
+    out.log_on_drop(false);
+    let player = rodio::play(out.mixer(), std::io::Cursor::new(RING))?;
+    player.set_volume(RING_VOLUME);
+    player.sleep_until_end();
+    Ok(())
+}
+
 /// Lo que ya se vio (consola → el `doneAt` que tenía), COMPARTIDO entre las ventanas de la app:
 /// cada lanzamiento es un proceso aparte, y sin esto una consola que terminó dejaba de parpadear
 /// solo en las ventanas del proceso que la miró; las demás seguían hasta que alguien tecleaba.
@@ -1438,6 +1548,18 @@ impl App {
         self.dying.retain(|id| alive_now.contains(id));
         for list in fresh.values_mut() {
             list.retain(|c| !self.dying.contains(&c.id));
+        }
+        // Una consola que acaba de terminar suena con el trino: una vez, por muchas que terminen
+        // a la vez y por muchas ventanas que haya.
+        let done = just_done(&self.consoles, &fresh);
+        if !done.is_empty() {
+            let mine = match ring_dir() {
+                Some(dir) => done.iter().filter(|(id, at)| claim_ring(&dir, id, *at)).count() > 0,
+                None => true,
+            };
+            if mine {
+                play_ring();
+            }
         }
         self.consoles = fresh;
         // Lo que vio OTRA ventana de la app (cada lanzamiento es un proceso aparte): también cuenta.

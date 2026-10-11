@@ -25,6 +25,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: desktop }
+      # El trino (rodio) enlaza con ALSA: las cabeceras no vienen en el runner.
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo build --release --locked
       - run: cargo install cargo-deb --locked
       - run: cargo deb --no-build

@@ -17,6 +17,8 @@ import { AgentClient } from './agentClient.js'
 import { DemoAgentClient, DEMO_MACHINE } from './demoAgent.js'
 import { panelLines, dropTarget } from './panel.js'
 import { clampRatio, splitLeaf, removeLeaf, layoutIds, restoreSaved } from './layout.js'
+import { doneWatcher } from './done.js'
+import { playRing } from '@dotrino/notifications/ring'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
 
@@ -550,7 +552,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       if (why?.closedBy === 'other') return closedByOther(s, p, why.id)
       p.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s)
     }
-    p.agent.onMeta = (info) => { p.meta = info; follow(p, info); renderAbout(s, p) }
+    p.agent.onMeta = (info) => { p.meta = info; follow(p, info); renderAbout(s, p); if (done.one(s.pub, info)) ring() }
     p.term.onData((d) => p.agent.input(d))
     // Cambió el espacio del panel (girar el teléfono, redimensionar, aparecer o colapsar el panel
     // de consolas, mover un divisor): se le dice al agente, que lo aplica solo si el tamaño es de
@@ -787,9 +789,15 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     })
   }
 
+  // Una consola que termina (o toca la campana) suena con el trino, una vez. Lo que la máquina
+  // empuja de la consola que miras y la lista de las demás pasan por el mismo sitio.
+  const done = doneWatcher()
+  const ring = () => playRing().catch((e) => console.warn('ring: could not play', e.name))
+
   async function refresh (s) {
     if (!s.agent?.rc?.key) return
-    try { s.list = await s.agent.list(); renderSide(s) } catch (_) {}
+    try { s.list = await s.agent.list(); renderSide(s) } catch (_) { return }
+    if (done.list(s.pub, s.list)) ring()
   }
 
   /** Pasar a otra consola (o a una nueva) en la misma conexión: toma el tamaño de esta pantalla. */
