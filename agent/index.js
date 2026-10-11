@@ -141,7 +141,8 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
     // aparato» sin nadie mirando, y nadie la elegía como libre).
     if (current !== c) { c.detach(viewer); return }
     // Volver a engancharse tras una reconexión (`keep`) no es abrir ni cambiarse: no toca el tamaño.
-    if (!keep) c.take(viewer)
+    // Pero si el tamaño era de esta misma pantalla, lo sigue siendo (y se le sigue el teclado, el giro).
+    if (!keep) c.take(viewer); else c.resume(viewer)
     // La pantalla va en trozos: el proxio corta los mensajes a 1 MB.
     for (let i = 0; i < snapshot.length || i === 0; i += REPLAY_CHUNK) {
       await session.send({ type: 'replay', id: c.id, data: snapshot.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= snapshot.length })

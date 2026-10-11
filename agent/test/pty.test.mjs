@@ -225,6 +225,31 @@ test('el TAMAÑO con tres aparatos: lo toma quien abre, se cambia, pulsa ⤢ o t
     // Cambiarse a la consola sí.
     pc.deliver({ type: 'attach', id, cols: 100, rows: 30 })
     await until(() => sizeOf(id) === '100x30')
+
+    // LA PANTALLA QUE TENÍA EL TAMAÑO VUELVE por una conexión nueva: sigue siendo suyo. El
+    // teléfono lo toma sin teclado, se le corta la red, vuelve y abre el teclado.
+    tel2.deliver({ type: 'take' })
+    await until(() => sizeOf(id) === '30x40')
+    const tel3 = fakeSession(); tel3.device = 'TEL'; serveSession(tel3, h, { origin: 'remote' })
+    tel3.deliver({ type: 'attach', id, cols: 30, rows: 40, keep: true })   // la conexión vieja sigue enganchada
+    await until(() => tel3.sent.some((p) => p.type === 'attached'))
+    tel3.deliver({ type: 'resize', cols: 30, rows: 22 })
+    await until(() => sizeOf(id) === '30x22')
+    // Y con la vieja ya soltada: vuelve con otro tamaño y la consola lo toma al engancharse.
+    tel2.deliver({ type: 'detach' }); tel3.deliver({ type: 'detach' })
+    const tel4 = fakeSession(); tel4.device = 'TEL'; serveSession(tel4, h, { origin: 'remote' })
+    tel4.deliver({ type: 'attach', id, cols: 30, rows: 18, keep: true })
+    await until(() => sizeOf(id) === '30x18')
+    // Si otra pantalla lo tomó entretanto, volver no se lo quita.
+    tab.deliver({ type: 'take' })
+    await until(() => sizeOf(id) === '90x30')
+    tel4.deliver({ type: 'detach' })
+    const tel5 = fakeSession(); tel5.device = 'TEL'; serveSession(tel5, h, { origin: 'remote' })
+    tel5.deliver({ type: 'attach', id, cols: 30, rows: 18, keep: true })
+    await until(() => tel5.sent.some((p) => p.type === 'attached'))
+    tel5.deliver({ type: 'resize', cols: 30, rows: 12 })
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(sizeOf(id), '90x30', 'el tamaño era de la tablet: el teléfono que vuelve no lo toma')
   } finally { h.killAll() }
 })
 

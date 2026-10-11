@@ -102,6 +102,9 @@ class Console {
     // hizo; solo a ella se le sigue la pantalla (redimensionar la ventana, girar el teléfono).
     // Volver a conectarse o que otra pantalla se vaya no cambia el tamaño.
     this.holder = null
+    // Quién lo tenía cuando se fue (su aparato o su ventana): si ESA pantalla vuelve por una
+    // conexión nueva sin que otra lo haya tomado, sigue siendo la suya (`resume`).
+    this.lastHolder = null
     this.exited = false
     this.screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
     this.serializer = new SerializeAddon()
@@ -262,14 +265,34 @@ class Console {
     this.viewers.delete(viewer)
     // Irse no cambia el tamaño ni se lo pasa a otra pantalla: se queda como está hasta que
     // alguien abra la consola, se cambie a ella, pulse ⤢ o teclee.
-    if (this.holder === viewer) this.holder = null
+    if (this.holder === viewer) { this.holder = null; this.lastHolder = screenOf(viewer) }
     this._meta()
+  }
+
+  /**
+   * `viewer` VUELVE por una conexión nueva (`attach` con `keep`). No toma el tamaño; pero si el
+   * tamaño era de ESA MISMA pantalla, lo sigue teniendo y se le sigue. Sin esto, tras un corte
+   * de red el teléfono que lo puso dejaba de contar: abría el teclado y la consola se quedaba
+   * con las filas de antes, las últimas por detrás del teclado, hasta que tecleaba.
+   * Vale tanto si su conexión vieja ya se soltó (`lastHolder`) como si sigue enganchada sin
+   * saberse muerta (`holder` es otra sesión de la misma pantalla).
+   */
+  resume (viewer) {
+    if (!this.viewers.has(viewer)) return
+    const mine = screenOf(viewer)
+    if (!mine) return
+    const had = this.holder ? screenOf(this.holder) : this.lastHolder
+    if (this.holder === viewer || had !== mine) return
+    this.holder = viewer
+    if (viewer.size && (viewer.size.cols !== this.cols || viewer.size.rows !== this.rows)) this.resize(viewer.size.cols, viewer.size.rows)
+    else this._meta()
   }
 
   /** `viewer` toma el tamaño AHORA: abrió la consola, se cambió a ella, pulsó ⤢ o tecleó. */
   take (viewer) {
     if (!this.viewers.has(viewer)) return
     this.holder = viewer
+    this.lastHolder = null
     if (viewer.size) this.resize(viewer.size.cols, viewer.size.rows)
     else this._meta()
   }
@@ -312,6 +335,12 @@ export function isTyped (data) { return String(data).replace(REPORTS, '') !== ''
 
 
 /** Las consolas de este agente. */
+/** Qué PANTALLA es un mirón, más allá de su conexión: el aparato, o la ventana con su etiqueta. Null si no se sabe. */
+function screenOf (v) {
+  if (v.origin === 'remote') return v.device ? `remote:${v.device}` : null
+  return v.tag ? `local:${v.tag}` : null
+}
+
 export class ConsoleHub {
   /**
    * @param {{ spawn:(opts:{cols:number,rows:number,cwd:string|null,id:string})=>any }} opts
