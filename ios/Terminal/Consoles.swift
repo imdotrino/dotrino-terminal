@@ -84,6 +84,17 @@ func dropTarget(_ ids: [String], _ id: String, _ over: String) -> (before: Strin
     return (to < from ? over : (to + 1 < ids.count ? ids[to + 1] : nil), ())
 }
 
+/// Did a console JUST finish? It was already in the list and its `doneAt` is another. One that shows
+/// up already finished (opening the app) is not news. It decides when the trino sounds: the same rule
+/// as Android and the desktop, and what the PWA does.
+func justDone(_ before: [ConsoleInfo], _ now: [ConsoleInfo]) -> Bool {
+    let was = Dictionary(before.map { ($0.id, $0.doneAt) }, uniquingKeysWith: { a, _ in a })
+    return now.contains { c in
+        guard let at = c.doneAt, let old = was[c.id] else { return false }
+        return old != at
+    }
+}
+
 /// What the open panel says of a console, each thing on ITS line: the machine (`user@host`) ALWAYS
 /// and first (owner, 2026-10-07: hidden when it was the console's own, the panel no longer said
 /// whose each console was), the folder, and the title the program set. A shell titles itself
@@ -132,6 +143,8 @@ final class Consoles: ObservableObject {
 
     @Published private(set) var profile: Profile?
     @Published private(set) var tabs: [Tab] = []
+    /// A console of some open tab just finished (or rang the bell): the app plays the trino.
+    var onDone: () -> Void = {}
     /// The connection to the proxy: `online`, `connecting`, `offline`.
     @Published private(set) var link = "connecting"
     /// DEBUG demo: a tab fed by a scripted agent, with no profile nor network.
@@ -232,6 +245,7 @@ final class Consoles: ObservableObject {
         let session = try await openSession(p, machine)
         let tab = Tab(machine: machine, myDevice: p.publickey)
         tab.onDrop = { [weak self, weak tab] in self?.tabs.removeAll { $0 === tab } }
+        tab.onDone = { [weak self] in self?.onDone() }
         tab.onLost = { [weak self, weak tab] in guard let self, let tab else { return }; Task { await self.resume(tab) } }
         tabs.append(tab)
         tab.bind(session, cols: cols, rows: rows, resume: nil)
@@ -250,6 +264,7 @@ final class Consoles: ObservableObject {
         demo = true; link = "online"
         let tab = Tab(machine: machine, myDevice: me)
         tab.onDrop = { [weak self, weak tab] in self?.tabs.removeAll { $0 === tab } }
+        tab.onDone = { [weak self] in self?.onDone() }
         tabs.append(tab)
         tab.bind(ch, cols: 80, rows: 24, resume: nil)
     }
@@ -288,6 +303,8 @@ final class Tab: ObservableObject, Identifiable {
     /// Redraw the emulator.
     var onOutput: () -> Void = {}
     var onBell: () -> Void = {}
+    /// One of the machine's consoles just finished its task (or rang the bell).
+    var onDone: () -> Void = {}
     var onDrop: () -> Void = {}
     var onLost: () -> Void = {}
 
@@ -346,7 +363,7 @@ final class Tab: ObservableObject, Identifiable {
         switch m["type"]?.string {
         case "consoles":
             // In the panel's order: the machine's (by number until someone moves one).
-            consoles = (m["list"]?.array ?? []).compactMap(consoleOf)
+            listed((m["list"]?.array ?? []).compactMap(consoleOf))
             if choosing {
                 choosing = false
                 // One that ALREADY exists: first one nobody watches; if all are watched, the first
@@ -406,7 +423,16 @@ final class Tab: ObservableObject, Identifiable {
 
     /// In its place (the order is the machine's); one not seen yet goes last until the next list.
     private func upsert(_ c: ConsoleInfo) {
-        if let i = consoles.firstIndex(where: { $0.id == c.id }) { consoles[i] = c } else { consoles.append(c) }
+        var now = consoles
+        if let i = now.firstIndex(where: { $0.id == c.id }) { now[i] = c } else { now.append(c) }
+        listed(now)
+    }
+
+    /// The machine's consoles as it now tells them. One that just finished is said (`onDone`).
+    private func listed(_ now: [ConsoleInfo]) {
+        let rings = justDone(consoles, now)
+        consoles = now
+        if rings { onDone() }
     }
 
     /// The emulator takes the console's size: if another screen has it, this one shows it at that size.

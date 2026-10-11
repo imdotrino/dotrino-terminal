@@ -65,6 +65,16 @@ data class ConsoleInfo(
     val activity: Activity get() = if (busy) Activity.BUSY else if (doneAt != null) Activity.DONE else Activity.IDLE
 }
 
+/**
+ * Did a console JUST finish? It was already in the list and its `doneAt` is another. One that shows
+ * up already finished (opening the app) is not news. It decides when the trino sounds: the same rule
+ * as the desktop, and what the PWA does.
+ */
+fun justDone(before: List<ConsoleInfo>, now: List<ConsoleInfo>): Boolean {
+    val was = before.associate { it.id to it.doneAt }
+    return now.any { it.doneAt != null && was.containsKey(it.id) && was[it.id] != it.doneAt }
+}
+
 /** What a [Consoles.Tab] needs from its session. An interface so the protocol can be tested without a network. */
 interface Channel {
     fun send(payload: JsonObject)
@@ -166,6 +176,8 @@ object Consoles {
     val tabs = ArrayList<Tab>()
     /** Something the screen shows changed (a tab's state, its title, the connection). Always on the main thread. */
     var onChange: () -> Unit = {}
+    /** A console of some open tab just finished (or rang the bell): the app plays the trino. */
+    @Volatile var onDone: () -> Unit = {}
     /** The connection to the proxy: `online`, `connecting`, `offline`. */
     @Volatile var link = "connecting"; private set
 
@@ -191,7 +203,7 @@ object Consoles {
 
     fun demoTab(machine: Machine, me: String, ch: Channel): Tab {
         demo = true; link = "online"
-        val tab = Tab(machine, me) { ui.post(it) }.apply { onChange = { changed() } }
+        val tab = Tab(machine, me) { ui.post(it) }.apply { onChange = { changed() }; onDone = { Consoles.onDone() } }
         tabs.add(tab); tab.bind(ch, 80, 24, null)
         return tab
     }
@@ -283,7 +295,7 @@ object Consoles {
         tabs.firstOrNull { it.machine == machine }?.let { return it }
         val p = profile ?: throw BootError("no profile", "no-profile")
         val session = openSession(p, machine)
-        val tab = Tab(machine, p.publickey) { ui.post(it) }.apply { onChange = { changed() } }
+        val tab = Tab(machine, p.publickey) { ui.post(it) }.apply { onChange = { changed() }; onDone = { Consoles.onDone() } }
         ui.post { tabs.add(tab); tab.bind(session.channel(), cols, rows, null); changed() }
         return tab
     }
@@ -349,6 +361,8 @@ object Consoles {
         var onBell: () -> Unit = {}
         /** Something the panel or the tab strip shows changed. */
         var onChange: () -> Unit = {}
+        /** One of the machine's consoles just finished its task (or rang the bell). */
+        var onDone: () -> Unit = {}
         /** Coming back, its console was gone on the machine (it restarted): a new one was opened instead. */
         var onGone: () -> Unit = {}
 
@@ -433,7 +447,7 @@ object Consoles {
             if (checking) { checking = false; onChange() }
             when ((m["type"] as? JsonPrimitive)?.content) {
                 "consoles" -> {
-                    consoles = (m["list"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::consoleOf) }
+                    listed((m["list"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::consoleOf) })
                     if (choosing) {
                         choosing = false
                         val pick = pick(null)
@@ -499,7 +513,14 @@ object Consoles {
 
         private fun upsert(info: ConsoleInfo) {
             // In its place (the order is the machine's); one not seen yet goes last until the next list.
-            consoles = if (consoles.any { it.id == info.id }) consoles.map { if (it.id == info.id) info else it } else consoles + info
+            listed(if (consoles.any { it.id == info.id }) consoles.map { if (it.id == info.id) info else it } else consoles + info)
+        }
+
+        /** The machine's consoles as it now tells them. One that just finished is said ([onDone]). */
+        private fun listed(now: List<ConsoleInfo>) {
+            val rings = justDone(consoles, now)
+            consoles = now
+            if (rings) onDone()
         }
 
         /** The emulator takes the console's size: if another screen has it, this one shows it at that size. */

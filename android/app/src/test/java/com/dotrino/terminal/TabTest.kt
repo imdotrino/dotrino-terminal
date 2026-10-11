@@ -314,4 +314,23 @@ class TabTest {
         ch.agent(consoles(c)); ch.agent(attached(c))
         assertNull(t.current!!.note); assertNull(t.current!!.task); assertNull(t.current!!.aboutLine)
     }
+
+    @Test fun aConsoleThatFinishesIsSaidOnceAndOneAlreadyFinishedIsNot() {
+        fun done(c: JsonObject, at: Long?) = JsonObject(c + ("doneAt" to (at?.let { JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)))
+        fun list(vararg c: JsonObject) = buildJsonObject { put("type", "consoles"); put("list", buildJsonArray { c.forEach { add(it) } }) }
+        val ch = FakeChannel()
+        val tab = Consoles.Tab(Machine(other, "PC"), me) { it() }
+        var rang = 0
+        tab.onDone = { rang++ }
+        tab.bind(ch, 50, 20, null)
+        val a = console("a", 1, 80, 24, watchers = 1); val b = console("b", 2, 80, 24)
+        // Opening: «a» was already finished. Not news.
+        ch.agent(list(done(a, 10), b)); assertEquals(0, rang)
+        // «b» finishes while the app is open: once, however many times the list comes.
+        ch.agent(list(done(a, 10), done(b, 20))); assertEquals(1, rang)
+        ch.agent(list(done(a, 10), done(b, 20))); assertEquals(1, rang)
+        // Attended and finished again, told by the machine's push of that console.
+        ch.agent(list(done(a, 10), done(b, null))); assertEquals(1, rang)
+        ch.agent(buildJsonObject { put("type", "meta"); put("console", done(b, 30)) }); assertEquals(2, rang)
+    }
 }

@@ -15,6 +15,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.dotrino.sdk.DotrinoRing
 import com.dotrino.sdk.ui.DotrinoLocale
 import com.dotrino.sdk.ui.DotrinoTopbar
 import com.dotrino.sdk.ui.DotrinoWebActivity
@@ -62,6 +63,8 @@ class MainActivity : Activity() {
         I18n.load(this)
         setContentView(shell())
         Consoles.onChange = { refresh() }
+        // A console that finishes while the app is open sounds with the trino, whatever is on screen.
+        Consoles.onDone = { DotrinoRing.play(applicationContext) }
         boot()
     }
 

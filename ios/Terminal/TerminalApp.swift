@@ -14,6 +14,8 @@ struct TerminalApp: App {
             fatalError("shared storage: \(error)")
         }
         DotrinoPalette.use(.init(bg: Palette.panel, card: Palette.panel2, fg: Palette.text, muted: Palette.muted, accent: Palette.accent))
+        // A console that finishes while the app is open sounds with the trino, whatever is on screen.
+        Consoles.shared.onDone = { DotrinoRing.play() }
         #if DEBUG
         // `-demo`: the consoles screen fed by a scripted agent (DemoAgent), with no profile nor network.
         if ProcessInfo.processInfo.arguments.contains("-demo") { DemoAgent.install() }
