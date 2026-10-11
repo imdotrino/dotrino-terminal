@@ -252,17 +252,17 @@ final class TabTests: XCTestCase {
             o["doneAt"] = at.map { .int($0) } ?? .null
             return .object(o)
         }
-        let (t, ch) = tab()
+        let (t, _) = tab()
         var rang = 0
         t.onDone = { rang += 1 }
         let a = console("a", 1, 80, 24, watchers: 1), b = console("b", 2, 80, 24)
         // Opening: «a» was already finished. Not news.
-        ch.agent(consoles(done(a, 10), b)); XCTAssertEqual(rang, 0)
+        t.handle(consoles(done(a, 10), b)); XCTAssertEqual(rang, 0)
         // «b» finishes while the app is open: once, however many times the list comes.
-        ch.agent(consoles(done(a, 10), done(b, 20))); XCTAssertEqual(rang, 1)
-        ch.agent(consoles(done(a, 10), done(b, 20))); XCTAssertEqual(rang, 1)
+        t.handle(consoles(done(a, 10), done(b, 20))); XCTAssertEqual(rang, 1)
+        t.handle(consoles(done(a, 10), done(b, 20))); XCTAssertEqual(rang, 1)
         // Attended and finished again, told by the machine's push of that console.
-        ch.agent(consoles(done(a, 10), done(b, nil))); XCTAssertEqual(rang, 1)
-        ch.agent(meta(done(b, 30))); XCTAssertEqual(rang, 2)
+        t.handle(consoles(done(a, 10), done(b, nil))); XCTAssertEqual(rang, 1)
+        t.handle(meta(done(b, 30))); XCTAssertEqual(rang, 2)
     }
 }
