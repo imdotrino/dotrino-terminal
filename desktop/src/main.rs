@@ -590,6 +590,10 @@ struct Win {
     sidebar_collapsed: bool,
     /// La nota que se está editando en la tarjeta «de qué va»: de qué consola y el texto.
     note_edit: Option<(String, iced::widget::text_editor::Content)>,
+    /// La tarea y la nota tal como se leen en la tarjeta (el texto y su editor de solo lectura,
+    /// para poder seleccionarlo y copiarlo).
+    task_read: Option<(String, iced::widget::text_editor::Content)>,
+    note_read: Option<(String, iced::widget::text_editor::Content)>,
 }
 
 impl Win {
@@ -647,6 +651,13 @@ struct App {
     seen: HashMap<String, u64>,
     /// La tarjeta «de qué va», plegada a un botón (en todas las ventanas; se recuerda).
     about_folded: bool,
+}
+
+/// Qué texto de la tarjeta «de qué va»: la tarea del programa o la nota del dueño.
+#[derive(Debug, Clone, Copy)]
+enum Part {
+    Task,
+    Note,
 }
 
 #[derive(Debug, Clone)]
@@ -738,6 +749,10 @@ enum Message {
     NoteCut(window::Id),
     NotePaste(window::Id),
     NotePasted(window::Id, Option<String>),
+    /// Lo que se lee en la tarjeta (tarea o nota): seleccionar y copiar, sin editar.
+    ReadAction(window::Id, Part, iced::widget::text_editor::Action),
+    ReadCopy(window::Id, Part),
+    ReadSelectAll(window::Id, Part),
     NoteSelectAll(window::Id),
     /// Quitar la tarea que puso el programa en la consola de la ventana.
     TaskClear(window::Id),
@@ -1249,7 +1264,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None });
+        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -1677,8 +1692,11 @@ impl App {
                 container(text(t("Quitar la tarea", "Remove the task")).size(12)).padding(6).style(container::rounded_box),
                 iced::widget::tooltip::Position::Left,
             );
-            let body = text(task.to_string()).size(12).width(Length::Fill);
-            card = card.push(row![container(iced::widget::scrollable(body)).max_height(160).width(Length::Fill), del].spacing(6)).push(rule::horizontal(1));
+            let body: Element<'_, Message> = match &win.task_read {
+                Some((_, content)) => reading(id, Part::Task, content, 160.0),
+                None => text(task.to_string()).size(12).width(Length::Fill).into(),
+            };
+            card = card.push(row![body, del].spacing(6)).push(rule::horizontal(1));
         }
         if let Some((_, content)) = editing {
             let editor = iced::widget::text_editor(content)
@@ -1733,8 +1751,12 @@ impl App {
                     card = card.push(text(t("Sin notas.", "No notes.")).size(12).style(dim)).push(row![space::horizontal(), act(t("Agregar nota", "Add a note"), Some(Message::NoteEdit(id)))]);
                 }
                 Some(note) => {
+                    let body: Element<'_, Message> = match &win.note_read {
+                        Some((_, content)) => reading(id, Part::Note, content, 220.0),
+                        None => text(note.to_string()).size(12).width(Length::Fill).into(),
+                    };
                     card = card
-                        .push(container(iced::widget::scrollable(text(note.to_string()).size(12).width(Length::Fill))).max_height(220))
+                        .push(body)
                         .push(row![space::horizontal(), act(t("Editar", "Edit"), Some(Message::NoteEdit(id)))]);
                 }
             }
@@ -1790,6 +1812,14 @@ impl App {
         };
         // La lista, enseguida y otra vez al poco (lo que tarda el agente en repintar).
         Task::batch([later(150, Message::Poll), later(700, Message::Poll), self.focus(id)])
+    }
+
+    fn reading_mut(&mut self, id: window::Id, part: Part) -> Option<&mut (String, iced::widget::text_editor::Content)> {
+        let w = self.windows.get_mut(&id)?;
+        match part {
+            Part::Task => w.task_read.as_mut(),
+            Part::Note => w.note_read.as_mut(),
+        }
     }
 
     /// Copiar (o cortar) lo seleccionado en el editor de la nota.
@@ -1948,6 +1978,35 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        self.sync_reading();
+        task
+    }
+
+    /// La tarea y la nota que se LEEN en la tarjeta van en un editor de solo lectura (el texto
+    /// normal de la ventana no se puede seleccionar): aquí se ponen al día con lo que dice la consola.
+    fn sync_reading(&mut self) {
+        fn sync(slot: &mut Option<(String, iced::widget::text_editor::Content)>, text: Option<&str>) {
+            match text.filter(|t| !t.is_empty()) {
+                None => *slot = None,
+                Some(t) if slot.as_ref().is_some_and(|(shown, _)| shown == t) => {}
+                Some(t) => *slot = Some((t.to_string(), iced::widget::text_editor::Content::with_text(t))),
+            }
+        }
+        let ids: Vec<window::Id> = self.windows.keys().copied().collect();
+        for id in ids {
+            let (task, note) = match self.my_console(id) {
+                Some(c) => (c.task.clone(), c.note.clone()),
+                None => (None, None),
+            };
+            if let Some(w) = self.windows.get_mut(&id) {
+                sync(&mut w.task_read, task.as_deref());
+                sync(&mut w.note_read, note.as_deref());
+            }
+        }
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::NewWindow(from) | Message::NewWindowFresh(from) => {
                 let fresh = matches!(message, Message::NewWindowFresh(_));
@@ -2027,7 +2086,7 @@ impl App {
             }
             Message::NoticeUpdate(id) => {
                 self.notice = None;
-                self.update(Message::InstallClient(id))
+                self.handle(Message::InstallClient(id))
             }
             Message::RestartApp => {
                 self.notice = None;
@@ -2194,6 +2253,25 @@ impl App {
                 }
                 iced::widget::operation::focus(note_editor_id(id))
             }
+            Message::ReadAction(id, part, action) => {
+                // Solo lectura: se selecciona y se desplaza, no se escribe.
+                if !matches!(action, iced::widget::text_editor::Action::Edit(_)) {
+                    if let Some((_, content)) = self.reading_mut(id, part) {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            Message::ReadSelectAll(id, part) => {
+                if let Some((_, content)) = self.reading_mut(id, part) {
+                    content.perform(iced::widget::text_editor::Action::SelectAll);
+                }
+                Task::none()
+            }
+            Message::ReadCopy(id, part) => match self.reading_mut(id, part).and_then(|(_, content)| content.selection()).filter(|s| !s.is_empty()) {
+                Some(selected) => iced::clipboard::write(selected),
+                None => Task::none(),
+            },
             Message::NoteCopy(id) => self.note_copy(id, false),
             Message::NoteCut(id) => self.note_copy(id, true),
             Message::NotePaste(id) => iced::clipboard::read().map(move |c| Message::NotePasted(id, c)),
@@ -2279,8 +2357,8 @@ impl App {
                 let Some(win) = self.windows.get(&id) else { return Task::none() };
                 if win.machine == machine {
                     return match cid {
-                        Some(cid) => self.update(Message::ShowConsole(id, cid)),
-                        None => self.update(Message::NewConsole(id)),
+                        Some(cid) => self.handle(Message::ShowConsole(id, cid)),
+                        None => self.handle(Message::NewConsole(id)),
                     };
                 }
                 self.switch_to(id, Pending::Far { machine, attach: cid })
@@ -2289,7 +2367,7 @@ impl App {
             Message::KillAt(id, machine, cid) => {
                 let Some(win) = self.windows.get(&id) else { return Task::none() };
                 if win.machine == machine {
-                    return self.update(Message::KillConsole(id, cid));
+                    return self.handle(Message::KillConsole(id, cid));
                 }
                 // No es la máquina que mira la ventana: la orden va directa, sin tocar su consola.
                 let Some(dir) = win.profile.as_deref().and_then(|p| self.profile_dir(p)) else { return Task::none() };
@@ -2330,12 +2408,12 @@ impl App {
                         .filter(|c| !self.dying.contains(&c.id))
                         .collect();
                     let Some(other) = next_console(&list) else {
-                        return self.update(Message::KillNow(id, cid));
+                        return self.handle(Message::KillNow(id, cid));
                     };
                     let switch = self.switch_to(id, Pending::Attach(other));
                     return switch.chain(later(400, Message::KillNow(id, cid)));
                 }
-                self.update(Message::KillNow(id, cid))
+                self.handle(Message::KillNow(id, cid))
             }
             Message::RowEnter(id, cid) => {
                 if let Some(d) = self.drag.as_mut().filter(|d| d.win == id) {
@@ -2970,6 +3048,46 @@ fn entry(label: String, keys: &str, msg: Option<Message>) -> Element<'static, Me
         .style(menu_button)
         .on_press_maybe(msg)
         .into()
+}
+
+/// Un texto de la tarjeta que se lee: se ve como texto, pero se puede seleccionar y copiar
+/// (arrastrando y Ctrl+C, o con el clic derecho).
+fn reading<'a>(id: window::Id, part: Part, content: &'a iced::widget::text_editor::Content, max_height: f32) -> Element<'a, Message> {
+    let editor = iced::widget::text_editor(content)
+        .size(12)
+        .padding(0)
+        .height(Length::Shrink)
+        .max_height(max_height)
+        .on_action(move |a| Message::ReadAction(id, part, a))
+        .style(|theme: &Theme, _| {
+            let p = theme.extended_palette();
+            iced::widget::text_editor::Style {
+                background: Color::TRANSPARENT.into(),
+                border: Border::default(),
+                placeholder: p.background.strong.color,
+                value: p.background.base.text,
+                selection: p.primary.weak.color,
+            }
+        });
+    let has_selection = content.selection().is_some_and(|s| !s.is_empty());
+    ContextMenu::new(editor, move || {
+        let (copy_key, all_key) = if cfg!(target_os = "macos") { ("⌘C", "⌘A") } else { ("Ctrl+C", "Ctrl+A") };
+        container(
+            column![
+                entry(t("Copiar", "Copy"), copy_key, has_selection.then_some(Message::ReadCopy(id, part))),
+                entry(t("Seleccionar todo", "Select all"), all_key, Some(Message::ReadSelectAll(id, part))),
+            ]
+            .width(220),
+        )
+        .padding(4)
+        .style(|theme: &Theme| container::Style {
+            background: Some(theme.extended_palette().background.weak.color.into()),
+            border: Border::default().rounded(6.0),
+            ..Default::default()
+        })
+        .into()
+    })
+    .into()
 }
 
 /// Un mensaje dentro de `ms` milisegundos.
