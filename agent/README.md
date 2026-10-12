@@ -122,6 +122,19 @@ Sin `--id`, es la consola en la que corre la orden: el agente pone su id en
 Para que un agente de IA la mantenga al día, el paquete trae un skill de Claude Code en
 `skills/dotrino-terminal-note/`: se copia a `~/.claude/skills/`.
 
+## Imágenes desde otro aparato
+
+Desde el teléfono o el navegador se puede adjuntar una imagen a la consola: viaja por la sesión
+(cifrada, en trozos con acuse), el agente la guarda en `uploads/` dentro de la carpeta del perfil
+y contesta la ruta, que es lo que el aparato escribe en la consola. Así se le enseña una foto o
+una captura a lo que corre dentro.
+
+- Solo PNG, JPEG, GIF y WebP, y qué es lo dicen los primeros bytes del archivo, no quien lo manda.
+- El nombre lo pone el agente (`img-<fecha>-<hora>-<azar>.<ext>`); la carpeta es solo del usuario.
+- Tope de 12 MB por imagen (el aparato la reduce antes de mandarla). Se borran solas a los 7 días.
+
+Protocolo: `{ type:'file', up, seq, data, last? }` → `{ type:'filed', up, seq, path? }` (`uploads.js`).
+
 ## Clave de la máquina (opcional)
 
 Por defecto, cualquier aparato de tu cuenta con permiso abre consolas en esta máquina. Si

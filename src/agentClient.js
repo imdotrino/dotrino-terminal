@@ -8,6 +8,16 @@
  */
 import { RemoteAgentClient } from '@dotrino/remote-agent/client'
 
+/** Lo que pesa cada trozo de una imagen antes de pasarlo a base64 (el proxio corta a 1 MB). */
+export const FILE_CHUNK = 96 * 1024
+
+/** base64 de unos bytes, sin pasar por una cadena gigante de una vez. */
+export function toBase64 (bytes) {
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+
 /** Error con `code` del agente (`no-console`…): se comprueba por el código, no por la frase. */
 const agentError = (p) => Object.assign(new Error(p.message || p.code), { code: p.code, ...(p.retryMs ? { retryMs: p.retryMs } : {}) })
 
@@ -176,6 +186,32 @@ export class AgentClient {
    */
   async note (id, { text, task } = {}) {
     return (await this._ask({ type: 'note', id, ...(typeof text === 'string' ? { text } : {}), ...(typeof task === 'string' ? { task } : {}) }, 'noted', 5000)).console
+  }
+
+  /**
+   * Manda una imagen a la máquina, que la guarda y dice DÓNDE quedó: esa ruta es lo que se
+   * escribe en la consola. Va en trozos y cada uno espera su acuse (agente ≥ 0.43; uno anterior
+   * no contesta y esto lanza `timeout`). Lanza también `not-image` y `too-big`.
+   * @param {Uint8Array} bytes
+   * @param {{ onProgress?: (sent:number, total:number)=>void }} [opts]
+   * @returns {Promise<string>} la ruta en la máquina
+   */
+  async sendImage (bytes, { onProgress } = {}) {
+    if (!bytes?.length) throw Object.assign(new Error('the image is empty'), { code: 'not-image' })
+    const up = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
+    for (let at = 0, seq = 0; ; seq++) {
+      const end = Math.min(bytes.length, at + FILE_CHUNK)
+      const last = end >= bytes.length
+      // Cada trozo espera SU acuse: `filed` de otra subida o de otro trozo no cuenta.
+      const p = await this._ask({ type: 'file', up, seq, data: toBase64(bytes.subarray(at, end)), ...(last ? { last: true } : {}) }, 'filed', 20000)
+      if (p.up !== up || p.seq !== seq) throw Object.assign(new Error('the machine answered about another image'), { code: 'bad-file' })
+      at = end
+      onProgress?.(at, bytes.length)
+      if (last) {
+        if (typeof p.path !== 'string' || !p.path) throw Object.assign(new Error('the machine did not say where it kept the image'), { code: 'bad-file' })
+        return p.path
+      }
+    }
   }
 
   /** Suelta la consola (sigue viva en la máquina) y corta la conexión. */

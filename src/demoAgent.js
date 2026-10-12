@@ -121,6 +121,13 @@ export class DemoAgentClient {
     return list()
   }
 
+  // La máquina de muestra «guarda» la imagen: contesta una ruta como la del agente.
+  async sendImage (bytes, { onProgress } = {}) {
+    if (!bytes?.length) { const e = new Error('the image is empty'); e.code = 'not-image'; throw e }
+    onProgress?.(bytes.length, bytes.length)
+    return `/home/seyacat/.dotrino/agent/terminal-agent/default/uploads/img-demo-${bytes.length}.${bytes[0] === 0xff ? 'jpg' : 'png'}`
+  }
+
   async disconnect () { this.consoleId = null; machine.clients.delete(this); broadcast() }
   async close () { if (this.consoleId) this.kill(this.consoleId); await this.disconnect() }
 }

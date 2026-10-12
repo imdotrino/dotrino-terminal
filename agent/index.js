@@ -18,11 +18,15 @@
  *                     { type:'note', id?, text?, task? } (de qué va una consola: `text` es la nota de
  *                       la persona y `task` la tarea que pone el programa; sin `id`, la enganchada;
  *                       sin ninguno de los dos, solo lee; contesta con `noted`) ·
- *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js)
+ *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js) ·
+ *                     { type:'file', up, seq, data, last? } (una imagen, en trozos base64 y en
+ *                       orden; cada trozo se acusa con `filed`, y el último trae la `path` donde
+ *                       quedó en esta máquina: uploads.js)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', data } ·
  *                     { type:'exit', code, closedBy? } · { type:'fail', code, message, retryMs? } ·
- *                     { type:'unlocked' } · { type:'noted', console }
+ *                     { type:'unlocked' } · { type:'noted', console } ·
+ *                     { type:'filed', up, seq, path? }
  *
  * Con clave puesta, una sesión remota que no la ha escrito recibe `fail` con `code:'locked'`
  * a todo lo que pida; tras `unlock` vale para esa conexión. `bad-code` y `wait` traen
@@ -38,6 +42,7 @@ import { ConsoleHub, REPLAY_CHUNK, isTyped } from './consoles.js'
 import { listenLocal } from './local.js'
 import { makeGate } from './access.js'
 import { makeFar } from './far.js'
+import { makeUploads } from './uploads.js'
 
 const require = createRequire(import.meta.url)
 
@@ -96,11 +101,14 @@ export function makeHub (pty, opts = {}) {
  *
  * @param {object} session
  * @param {ConsoleHub} hub
- * @param {{ origin?: 'local'|'remote', gate?: ReturnType<typeof makeGate> }} [opts]  `gate`: la
- *   clave de la máquina (access.js). Solo se le pide a las sesiones remotas.
+ * @param {{ origin?: 'local'|'remote', gate?: ReturnType<typeof makeGate>, uploadsDir?: string }} [opts]
+ *   `gate`: la clave de la máquina (access.js). Solo se le pide a las sesiones remotas.
+ *   `uploadsDir`: dónde se guardan las imágenes que manda esta sesión (uploads.js). Sin ella,
+ *   mandar una imagen falla con `no-uploads`.
  */
-export function serveSession (session, hub, { origin = 'remote', gate = null } = {}) {
+export function serveSession (session, hub, { origin = 'remote', gate = null, uploadsDir = null } = {}) {
   let current = null
+  const uploads = uploadsDir ? makeUploads(uploadsDir) : null
   let size = { cols: 80, rows: 24 }
   const viewer = {
     origin,
@@ -221,13 +229,22 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
       session.send({ type: 'noted', console: c.info() })
       return
     }
+    // Una imagen para lo que corre en la consola: se guarda aquí y se contesta dónde quedó.
+    if (msg.type === 'file') {
+      if (!uploads) return fail('no-uploads', 'this agent has nowhere to keep images')
+      try { session.send({ type: 'filed', ...uploads.take(msg) }) } catch (e) {
+        if (!e.code) console.error('[terminal-agent] could not keep an image:', e.message)
+        fail(e.code || 'file-failed', e.message)
+      }
+      return
+    }
     // El orden del panel: es de la máquina, así que lo ve igual cualquier pantalla.
     if (msg.type === 'move') {
       if (!hub.move(String(msg.id), msg.before == null ? null : String(msg.before))) return fail('no-console', 'that console no longer exists')
       session.send({ type: 'consoles', list: hub.list() })
     }
   })
-  session.on('close', release)
+  session.on('close', () => { release(); uploads?.drop() })
 }
 
 /**
@@ -237,7 +254,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null } =
  * otras máquinas hay, y una orden suelta para una de ellas.
  * Exportada para las pruebas.
  */
-export function serveLocal (session, hub, far) {
+export function serveLocal (session, hub, far, { uploadsDir = null } = {}) {
   const h = { message: [], close: [] }
   const inner = { device: null, send: (p) => session.send(p), on (ev, cb) { h[ev]?.push(cb); return this } }
   const failed = (e) => session.send({ type: 'fail', code: e.code || 'far-error', message: e.message })
@@ -249,7 +266,7 @@ export function serveLocal (session, hub, far) {
     if (!mode) {
       if (msg.type === 'via') { mode = 'far'; far.via(inner, msg.machine).catch(failed); return }
       mode = 'hub'
-      serveSession(inner, hub, { origin: 'local' })
+      serveSession(inner, hub, { origin: 'local', uploadsDir })
     }
     for (const cb of h.message) { try { cb(msg) } catch (_) {} }
   })
@@ -291,7 +308,8 @@ export async function startAgent (opts = {}) {
   })
   // Las consolas de las otras máquinas de la cuenta, para las ventanas de esta (far.js).
   const far = makeFar({ dir, loadLink: () => loadLink(dir), kind: LABEL })
-  const local = await listenLocal({ dir, serve: (session) => serveLocal(session, hub, far) })
+  const uploadsDir = path.join(dir, 'uploads')
+  const local = await listenLocal({ dir, serve: (session) => serveLocal(session, hub, far, { uploadsDir }) })
   let stopped = false
   const startRemote = () => startRemoteAgent({
     label: LABEL,
@@ -299,7 +317,7 @@ export async function startAgent (opts = {}) {
     proxyUrl: opts.proxyUrl,
     quiet: opts.quiet,
     onRevoked: () => { hub.killAll(); opts.onRevoked?.() },
-    onSession: (session) => serveSession(session, hub, { origin: 'remote', gate })
+    onSession: (session) => serveSession(session, hub, { origin: 'remote', gate, uploadsDir })
   })
   let watcher = null
   if (loadLink(dir)) {

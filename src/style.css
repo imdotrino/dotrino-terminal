@@ -168,6 +168,8 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .pane-tools:hover { opacity: 1 !important; }
 .pane-tools button { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 5px; width: 24px; height: 22px; font-size: 12px; cursor: pointer; padding: 0; }
 .pane-tools button:hover { background: var(--line); }
+.pane-tools button svg { vertical-align: middle; }
+@media (pointer: coarse) { .pane-tools button { width: 36px; height: 32px; } }
 .panes.single .pane-tools [data-p="close"] { display: none; }
 @media (pointer: coarse) { .pane-tools { opacity: .55; } }
 /* «De qué va»: una tarjeta que flota arriba a la derecha de cada consola, con su título y su nota.

@@ -18,6 +18,7 @@ import { DemoAgentClient, DEMO_MACHINE } from './demoAgent.js'
 import { panelLines, dropTarget } from './panel.js'
 import { clampRatio, splitLeaf, removeLeaf, layoutIds, restoreSaved } from './layout.js'
 import { doneWatcher } from './done.js'
+import { prepareImage, imageIn } from './image.js'
 import { playRing } from '@dotrino/notifications/ring'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
@@ -88,6 +89,10 @@ const M = {
     console_free: 'suelta',
     console_local: 'ventana abierta en la máquina',
     split_right: 'Dividir a la derecha', split_down: 'Dividir abajo', open_right: 'Abrir a la derecha', open_down: 'Abrir abajo', close_pane: 'Cerrar este panel', pane_last: 'Es el único panel: cierra la pestaña',
+    image_add: 'Adjuntar una imagen', image_sending: (pct) => `Enviando la imagen a la máquina… ${pct} %`, image_sent: 'La imagen ya está en la máquina: su ruta quedó escrita en la consola.',
+    image_no_console: 'Abre una consola antes de adjuntar una imagen.', image_busy: 'Ya se está enviando una imagen.',
+    image_old: 'Esta máquina aún no recibe imágenes: actualiza su terminal.', image_big: 'La imagen pesa demasiado para enviarla.',
+    image_not: 'Ese archivo no es una imagen que se pueda enviar (PNG, JPEG, GIF o WebP).', image_fail: 'No se pudo enviar la imagen: ',
     about_title: 'De qué va esta consola', about_hide: 'Plegar', about_show: 'De qué va esta consola',
     about_untitled: 'Sin título', about_empty: 'Sin notas.', about_edit: 'Editar', about_add: 'Agregar nota',
     about_save: 'Guardar', about_cancel: 'Cancelar', about_ph: 'Tus notas sobre esta consola…', about_task: 'Tarea en curso', about_task_del: 'Quitar la tarea',
@@ -175,6 +180,10 @@ const M = {
     about_save: 'Save', about_cancel: 'Cancel', about_ph: 'Your notes about this console…', about_task: 'Task in progress', about_task_del: 'Remove the task',
     about_old: 'This machine does not keep notes yet: update its terminal.', about_fail: 'Could not save the note.',
     split_right: 'Split right', split_down: 'Split down', open_right: 'Open to the right', open_down: 'Open below', close_pane: 'Close this pane', pane_last: 'The only pane: close the tab instead',
+    image_add: 'Attach an image', image_sending: (pct) => `Sending the image to the machine… ${pct}%`, image_sent: 'The image is on the machine: its path was typed into the console.',
+    image_no_console: 'Open a console before attaching an image.', image_busy: 'An image is already being sent.',
+    image_old: 'This machine does not take images yet: update its terminal.', image_big: 'The image is too large to send.',
+    image_not: 'That file is not an image that can be sent (PNG, JPEG, GIF or WebP).', image_fail: 'The image could not be sent: ',
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
     closed_by_other: (n) => `Another screen closed console ${n}. This is another one.`,
     closed_by_other_new: (n) => `Another screen closed console ${n}. This is a new one.`,
@@ -375,6 +384,8 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   // su propia conexión al agente con su xterm. `s.agent`/`s.term`/`s.fit`/`s.view` son los del
   // panel con el foco, para que el panel de consolas, el tamaño y el menú sigan hablando de «la
   // consola de esta pestaña». El reparto es un árbol: { pane } | { dir: 'row'|'col', a, b, ratio }.
+  /** Adjuntar una imagen: un marco con montaña y sol, dibujado (no depende de fuentes). */
+  const ICON_IMAGE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M2.5 11.5l3.5-3 2.5 2 2-1.7 3 2.7"/></svg>'
   const sessions = [] // { id, alias, pub, panes: [pane], focus: pane, layout, box, side, panesEl, tab, status, list, collapsed, poll }
   let active = null
   let counter = 0
@@ -391,10 +402,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     // Cada panel lleva SU panel de consolas (dueño, 2026-10-08): elige, abre y cierra para ese panel.
     const p = { id: ++paneCounter, s, collapsed }
     p.el = el(`<div class="pane" data-testid="pane"><div class="side" data-testid="pane-side" hidden></div><span class="cur-arrow" data-testid="current-arrow" aria-hidden="true" hidden></span><div class="pane-tools">
+      <button data-p="image" data-testid="pane-image" title="${esc(t('image_add'))}" aria-label="${esc(t('image_add'))}">${ICON_IMAGE}</button>
       <button data-p="right" title="${esc(t('split_right'))}" aria-label="${esc(t('split_right'))}">◫</button>
       <button data-p="down" title="${esc(t('split_down'))}" aria-label="${esc(t('split_down'))}">⊟</button>
       <button data-p="close" title="${esc(t('close_pane'))}" aria-label="${esc(t('close_pane'))}">×</button>
-    </div><aside class="about" data-testid="about" hidden></aside><div class="term"></div></div>`)
+    </div><input class="pane-file" data-testid="pane-file" type="file" accept="image/*" hidden><aside class="about" data-testid="about" hidden></aside><div class="term"></div></div>`)
     p.view = p.el.querySelector('.term')
     p.about = p.el.querySelector('.about')
     wireAbout(s, p)
@@ -406,11 +418,50 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     p.el.querySelector('.pane-tools').addEventListener('click', (e) => {
       const a = e.target.closest('button')?.dataset.p; if (!a) return
       e.stopPropagation()
-      if (a === 'close') closePane(s, p)
+      if (a === 'image') picker.click()
+      else if (a === 'close') closePane(s, p)
       else splitPane(s, p, a === 'right' ? 'row' : 'col', null)
+    })
+    // ADJUNTAR UNA IMAGEN: con el botón (en el teléfono abre la galería o la cámara), pegándola
+    // o soltándola encima. Va a la máquina y su ruta se escribe en la consola.
+    const picker = p.el.querySelector('.pane-file')
+    picker.addEventListener('change', () => { const f = picker.files?.[0]; picker.value = ''; if (f) attachImage(s, p, f) })
+    p.el.addEventListener('paste', (e) => {
+      const f = imageIn(e.clipboardData); if (!f) return
+      e.preventDefault(); e.stopPropagation()
+      attachImage(s, p, f)
+    }, true)
+    p.el.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault() })
+    p.el.addEventListener('drop', (e) => {
+      const f = imageIn(e.dataTransfer); if (!f) return
+      e.preventDefault()
+      attachImage(s, p, f)
     })
     s.panes.push(p)
     return p
+  }
+
+  /** La ruta tal como se escribe en la consola: entre comillas si lleva algo que la shell partiría. */
+  const typedPath = (file) => (/^[\w@%+=:,./-]+$/.test(file) ? file : `'${file.replace(/'/g, `'\\''`)}'`)
+
+  async function attachImage (s, p, file) {
+    if (!p.agent?.consoleId || !p.term) { hint.textContent = t('image_no_console'); return }
+    if (p.sending) { hint.textContent = t('image_busy'); return }
+    p.sending = true
+    const said = (text) => { if (active === s) { hint.textContent = text; hint.title = '' } }
+    said(t('image_sending', 0))
+    try {
+      const bytes = await prepareImage(file)
+      const where = await p.agent.sendImage(bytes, { onProgress: (sent, total) => said(t('image_sending', Math.round(sent * 100 / total))) })
+      // `paste` y no `input`: un programa que pidió pegado entre corchetes (Claude Code) recibe
+      // la ruta como algo pegado, que es como reconoce un archivo.
+      p.term.paste(typedPath(where) + ' ')
+      said(t('image_sent'))
+      try { p.term.focus() } catch {}
+    } catch (e) {
+      const known = { timeout: 'image_old', 'too-big': 'image_big', 'not-image': 'image_not' }[e.code]
+      said(known ? t(known) : t('image_fail') + e.message)
+    } finally { p.sending = false }
   }
 
   function focusPane (s, p) {
