@@ -333,4 +333,83 @@ class TabTest {
         ch.agent(list(done(a, 10), done(b, null))); assertEquals(1, rang)
         ch.agent(buildJsonObject { put("type", "meta"); put("console", done(b, 30)) }); assertEquals(2, rang)
     }
+
+    // ---------- An image for whatever runs in the console ----------
+
+    private fun openTab(): Pair<Consoles.Tab, FakeChannel> {
+        val (t, ch) = tab()
+        ch.agent(consoles(console("a", 1, 80, 24)))
+        ch.agent(attached(console("a", 1, 50, 20, watchers = 1, by = me)))
+        ch.sent.clear()
+        return t to ch
+    }
+    private fun filed(m: JsonObject, path: String? = null) = buildJsonObject {
+        put("type", "filed"); put("up", m["up"]!!); put("seq", m["seq"]!!); if (path != null) put("path", path)
+    }
+
+    @Test fun anImageGoesInPiecesEachOneAcknowledgedAndTheLastSaysWhereItWasKept() {
+        val (t, ch) = openTab()
+        var got: Pair<String?, String?>? = null
+        t.onImage = { path, problem -> got = path to problem }
+        val bytes = ByteArray(FILE_CHUNK * 2 + 10) { (it % 251).toByte() }
+        assertTrue(t.sendImage(bytes))
+        assertTrue(t.sendingImage)
+        assertFalse("one at a time", t.sendImage(bytes))
+        assertEquals("the next piece waits for the acknowledgement", 1, ch.sent.size)
+        val first = ch.sent[0]
+        assertEquals("file", (first["type"] as JsonPrimitive).content)
+        assertEquals(0, (first["seq"] as JsonPrimitive).content.toInt())
+        assertNull(first["last"])
+        ch.agent(filed(first)); ch.agent(filed(first))               // a repeated acknowledgement moves nothing
+        assertEquals(2, ch.sent.size)
+        ch.agent(filed(ch.sent[1]))
+        assertEquals(3, ch.sent.size)
+        assertEquals("true", (ch.sent[2]["last"] as JsonPrimitive).content)
+        val whole = ch.sent.flatMap { java.util.Base64.getDecoder().decode((it["data"] as JsonPrimitive).content).toList() }.toByteArray()
+        assertTrue("arrives whole", whole.contentEquals(bytes))
+        assertNull(got)
+        ch.agent(filed(ch.sent[2], "/home/me/uploads/img-1.jpg"))
+        assertEquals("/home/me/uploads/img-1.jpg" to null, got)
+        assertFalse(t.sendingImage)
+    }
+
+    @Test fun whatTheMachineRejectsIsSaidAndTheConsoleGoesOn() {
+        val (t, ch) = openTab()
+        var got: Pair<String?, String?>? = null
+        t.onImage = { path, problem -> got = path to problem }
+        assertTrue(t.sendImage(ByteArray(10)))
+        ch.agent(buildJsonObject { put("type", "fail"); put("code", "not-image"); put("message", "file: that is not an image") })
+        assertEquals(null to "not-image", got)
+        assertEquals("the tab did not fail", Consoles.Tab.State.OPEN, t.state)
+        assertFalse(t.sendingImage)
+    }
+
+    @Test fun aMachineThatNeverAnswersIsAnOlderTerminal() {
+        val (t, _) = openTab()
+        var got: Pair<String?, String?>? = null
+        t.onImage = { path, problem -> got = path to problem }
+        assertTrue(t.sendImage(ByteArray(10)))
+        val before = t.imageProgress
+        t.imageStalled()
+        assertEquals(null to "timeout", got)
+        assertEquals(before, t.imageProgress)
+        got = null; t.imageStalled()
+        assertNull("only once", got)
+    }
+
+    @Test fun withoutAConsoleOnScreenNoImageStarts() {
+        val (t, ch) = tab()
+        assertFalse(t.sendImage(ByteArray(10)))
+        assertFalse(ch.types().contains("file"))
+    }
+
+    @Test fun whatGoesAsItIsAndWhatIsReduced() {
+        assertTrue(Images.goesAsIs("image/png", 200_000))
+        assertFalse("a phone's photo is reduced", Images.goesAsIs("image/jpeg", 5_000_000))
+        assertFalse("a kind the machine does not keep is converted", Images.goesAsIs("image/heic", 200_000))
+        assertEquals(Images.MAX_SIDE to 1500, Images.fitSide(4000, 3000))
+        assertEquals("never enlarged", 800 to 600, Images.fitSide(800, 600))
+        assertEquals("/home/me/img-1.jpg", Images.typedPath("/home/me/img-1.jpg"))
+        assertEquals("'/home/my user/img.jpg'", Images.typedPath("/home/my user/img.jpg"))
+    }
 }

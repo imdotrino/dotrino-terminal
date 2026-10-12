@@ -59,6 +59,16 @@ object I18n {
         "boot.create" to "Crear perfil", "boot.adopt" to "Adoptar un perfil", "boot.retry" to "Reintentar",
         "key.shift" to "Shift", "key.ctrl" to "Ctrl", "key.alt" to "Alt",
         "key.copy" to "Copiar", "key.paste" to "Pegar", "key.copied" to "Copiado",
+        "key.image" to "Imagen", "image.pick" to "Adjuntar una imagen",
+        "image.sending" to "Enviando la imagen a la máquina…",
+        "image.sent" to "La imagen ya está en la máquina: su ruta quedó escrita.",
+        "image.noConsole" to "Abre una consola antes de adjuntar una imagen.",
+        "image.busy" to "Ya se está enviando una imagen.",
+        "image.old" to "Esta máquina aún no recibe imágenes: actualiza su terminal.",
+        "image.big" to "La imagen pesa demasiado para enviarla.",
+        "image.not" to "Eso no es una imagen que se pueda enviar.",
+        "image.lost" to "Se cortó la conexión y la imagen no llegó. Inténtalo de nuevo.",
+        "image.fail" to "No se pudo enviar la imagen.",
     )
     private val en = mapOf(
         "machines.title" to "Your machines",
@@ -108,6 +118,16 @@ object I18n {
         "boot.create" to "Create profile", "boot.adopt" to "Adopt a profile", "boot.retry" to "Retry",
         "key.shift" to "Shift", "key.ctrl" to "Ctrl", "key.alt" to "Alt",
         "key.copy" to "Copy", "key.paste" to "Paste", "key.copied" to "Copied",
+        "key.image" to "Image", "image.pick" to "Attach an image",
+        "image.sending" to "Sending the image to the machine…",
+        "image.sent" to "The image is on the machine: its path was typed in.",
+        "image.noConsole" to "Open a console before attaching an image.",
+        "image.busy" to "An image is already being sent.",
+        "image.old" to "This machine does not take images yet: update its terminal.",
+        "image.big" to "The image is too large to send.",
+        "image.not" to "That is not an image that can be sent.",
+        "image.lost" to "The connection dropped and the image did not arrive. Try again.",
+        "image.fail" to "The image could not be sent.",
     )
 
     fun t(key: String, vararg vars: Pair<String, Any>): String {

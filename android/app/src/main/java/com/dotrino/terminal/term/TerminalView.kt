@@ -43,6 +43,9 @@ class TerminalView(context: Context) : View(context) {
     var onResize: (cols: Int, rows: Int) -> Unit = { _, _ -> }
     /** The selection appeared, changed or went away (the «copy» key follows it). */
     var onSelectionChanged: () -> Unit = {}
+    /** The keyboard handed over an image (its clipboard, a sticker, a GIF). `done` is called when
+     *  the image has been read: until then the keyboard's permission to read it is held. */
+    var onImage: ((uri: android.net.Uri, done: () -> Unit) -> Unit)? = null
 
     /** A cell of the buffer, by ABSOLUTE line (history first, then the screen): stable while the
      *  console scrolls and while new output pushes lines into the history. */
@@ -457,7 +460,17 @@ class TerminalView(context: Context) : View(context) {
         // «Visible password»: the keyboard does not predict, correct nor compose — each key arrives as typed.
         out.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         out.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        // This field takes images: without saying so the keyboard shows its image button disabled.
+        out.contentMimeTypes = arrayOf("image/*")
         return object : BaseInputConnection(this, true) {
+            override fun commitContent(info: android.view.inputmethod.InputContentInfo, flags: Int, opts: android.os.Bundle?): Boolean {
+                val take = onImage ?: return false
+                if (!info.description.hasMimeType("image/*")) return false
+                val granted = flags and InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION != 0
+                if (granted) { try { info.requestPermission() } catch (e: Exception) { android.util.Log.w("terminal", "could not take the keyboard's image: ${e.message}"); return false } }
+                take(info.contentUri) { if (granted) info.releasePermission() }
+                return true
+            }
             private fun flush() {
                 val e = editable ?: return
                 val s = e.toString()

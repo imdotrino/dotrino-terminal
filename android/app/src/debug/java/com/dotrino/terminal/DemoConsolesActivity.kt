@@ -135,6 +135,11 @@ class DemoConsolesActivity : Activity() {
                     list()
                 }
                 "close" -> { current?.let { consoles.remove(it) }; current = null }
+                // The sample machine «keeps» the image: every piece acknowledged, the last with a path.
+                "file" -> reply(buildJsonObject {
+                    put("type", "filed"); put("up", payload["up"]!!); put("seq", payload["seq"]!!)
+                    if ((payload["last"] as? JsonPrimitive)?.booleanOrNull == true) put("path", "/home/seyacat/.dotrino/agent/terminal-agent/default/uploads/img-demo.jpg")
+                })
                 "note" -> consoles.firstOrNull { it.id == (payload["id"] as? JsonPrimitive)?.content }?.let { c ->
                     (payload["text"] as? JsonPrimitive)?.content?.let { c.note = it }
                     (payload["task"] as? JsonPrimitive)?.content?.let { c.task = it }

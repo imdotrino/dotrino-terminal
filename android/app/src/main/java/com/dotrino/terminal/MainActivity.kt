@@ -32,6 +32,8 @@ import kotlinx.coroutines.launch
  * returns to the machines (the consoles stay open); from the machines, leaves. Plain native
  * views. The consoles themselves live in [Consoles], not here: turning the phone keeps them.
  */
+private const val PICK_IMAGE = 41
+
 class MainActivity : Activity() {
     private companion object {
         /** How far the current console's arrow sticks out of the panel's edge, in dp. */
@@ -268,6 +270,7 @@ class MainActivity : Activity() {
             onResize = { cols, rows -> active?.screen(cols, rows) }
             onSelectionChanged = { renderCopyKey() }
             onModifiersChanged = { renderModifiers() }
+            onImage = { uri, done -> attachImage(uri, done) }
             terminal = tab.terminal
         }
         view = tv
@@ -820,6 +823,14 @@ class MainActivity : Activity() {
                 if ((v.ctrl || v.alt) && e.isNotEmpty()) { val c = e.last().toString(); e.delete(e.length - 1, e.length); v.type(c) }
             }
         })
+        // The writing line takes images too: from the keyboard (its clipboard, a GIF), pasted or dropped.
+        input.setOnReceiveContentListener(arrayOf("image/*")) { _, payload ->
+            val clip = payload.clip
+            val uri = (0 until clip.itemCount).firstNotNullOfOrNull { clip.getItemAt(it).uri }
+            // No picture in it: the line handles it as always (text). With one, `payload` is held
+            // until the image is read: the keyboard's permission to read it lives with it.
+            if (uri == null) payload else { attachImage(uri) { payload.hashCode() }; null }
+        }
         composeInput = input
         val bar = LinearLayout(this).apply {
             tag = "compose-bar"; gravity = Gravity.CENTER_VERTICAL
@@ -848,6 +859,64 @@ class MainActivity : Activity() {
 
     private var copyKey: android.widget.TextView? = null
 
+    // ---------- An image for whatever runs in the console ----------
+    //
+    // From the «Image» key (the phone's picker), from the keyboard (its clipboard, a GIF) or from
+    // «Paste» with a picture in the clipboard. It travels over the session to the machine, which
+    // keeps it and answers where: that path is what gets typed.
+
+    private fun pickImage() {
+        val pick = if (android.os.Build.VERSION.SDK_INT >= 33) Intent(android.provider.MediaStore.ACTION_PICK_IMAGES)
+        else Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE)
+        try { @Suppress("DEPRECATION") startActivityForResult(pick, PICK_IMAGE) } catch (e: android.content.ActivityNotFoundException) {
+            android.util.Log.w("terminal", "no app to pick an image: ${e.message}"); toast(t("image.fail"))
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION") super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_IMAGE && resultCode == RESULT_OK) data?.data?.let { attachImage(it) }
+    }
+
+    /** [done]: the image has been read (or will not be); whoever lent it can take it back. */
+    private fun attachImage(uri: Uri, done: () -> Unit = {}) {
+        val tab = active
+        if (tab == null || tab.state != Consoles.Tab.State.OPEN) { toast(t("image.noConsole")); done(); return }
+        if (tab.sendingImage) { toast(t("image.busy")); done(); return }
+        toast(t("image.sending"))
+        scope.launch {
+            val bytes = try {
+                kotlinx.coroutines.withContext(Dispatchers.IO) { Images.prepare(contentResolver, uri) }
+            } catch (e: Exception) {
+                android.util.Log.w("terminal", "could not read the image: ${e.message}")
+                toast(t("image.not")); null
+            } finally { done() }
+            if (bytes == null) return@launch
+            tab.onImage = { path, problem ->
+                if (path != null) {
+                    val typed = Images.typedPath(path) + " "
+                    // As a paste: a program that asked for bracketed paste (Claude Code) takes a
+                    // pasted path as a file. With the writing line on, it goes into the line.
+                    if (active === tab && composing && composeInput != null) composeInput!!.append(typed)
+                    else if (active === tab && view != null) view!!.paste(typed)
+                    else tab.input(typed)
+                    toast(t("image.sent"))
+                } else toast(t(when (problem) { "timeout" -> "image.old"; "too-big" -> "image.big"; "not-image" -> "image.not"; "lost" -> "image.lost"; else -> "image.fail" }))
+            }
+            if (!tab.sendImage(bytes)) { toast(t("image.noConsole")); return@launch }
+            // A machine with an older terminal never answers: after a while without a piece
+            // acknowledged, it is said instead of waiting forever.
+            var seen = tab.imageProgress
+            while (tab.sendingImage) {
+                kotlinx.coroutines.delay(20_000)
+                if (!tab.sendingImage) break
+                if (tab.imageProgress == seen) { tab.imageStalled(); break }
+                seen = tab.imageProgress
+            }
+        }
+    }
+
     private fun extraKeys(): View {
         modKeys.clear()
         val row = LinearLayout(this).apply { setPadding(px(4), px(4), px(4), px(4)) }
@@ -873,10 +942,15 @@ class MainActivity : Activity() {
             v.clearSelection(); toast(t("key.copied"))
         }
         clipKey("paste", t("key.paste")) {
-            val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+            // An image in the clipboard goes to the machine; anything else is pasted as text.
+            val clip = clipboard.primaryClip
+            val picture = clip?.takeIf { it.description.hasMimeType("image/*") }?.getItemAt(0)?.uri
+            if (picture != null) { attachImage(picture); return@clipKey }
+            val text = clip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
             if (text.isEmpty()) return@clipKey
             if (composing && composeInput != null) composeInput!!.append(text) else view?.paste(text)
         }
+        clipKey("image", t("key.image")) { pickImage() }.contentDescription = t("image.pick")
         renderCopyKey()
         for (k in EXTRA_KEYS) {
             val key = label(KEY_LABELS[k] ?: when (k) { "shift" -> t("key.shift"); "ctrl" -> t("key.ctrl"); "alt" -> t("key.alt"); else -> k }, 14f, bold = true).apply {

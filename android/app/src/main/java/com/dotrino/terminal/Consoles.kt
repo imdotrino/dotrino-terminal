@@ -76,6 +76,11 @@ fun justDone(before: List<ConsoleInfo>, now: List<ConsoleInfo>): Boolean {
 }
 
 /** What a [Consoles.Tab] needs from its session. An interface so the protocol can be tested without a network. */
+/** How much of an image travels in one piece, before base64 (the proxy cuts messages at 1 MB). */
+const val FILE_CHUNK = 96 * 1024
+/** The agent's reasons for not keeping an image (agent/uploads.js). */
+val IMAGE_FAILS = setOf("not-image", "too-big", "bad-file", "no-uploads", "file-failed")
+
 interface Channel {
     fun send(payload: JsonObject)
     fun onMessage(l: (JsonObject) -> Unit): () -> Unit
@@ -366,6 +371,19 @@ object Consoles {
         /** Coming back, its console was gone on the machine (it restarted): a new one was opened instead. */
         var onGone: () -> Unit = {}
 
+        /**
+         * An image sent to the machine ended: [path] is where the machine kept it (what is typed
+         * into the console), or [problem] says why not (`timeout`: the machine's terminal is older
+         * than 0.43 and does not answer; `not-image`, `too-big`; `lost`: the connection dropped).
+         */
+        var onImage: (path: String?, problem: String?) -> Unit = { _, _ -> }
+        /** An image is on its way to the machine. */
+        val sendingImage: Boolean get() = upload != null
+        /** Moves with every piece the machine acknowledges: whoever watches for a stall compares it. */
+        var imageProgress = 0; private set
+        private class Upload(val up: String, val bytes: ByteArray) { var at = 0; var seq = 0; var end = 0 }
+        private var upload: Upload? = null
+
         private var channel: Channel? = null
         private var off: (() -> Unit)? = null
         private var offError: (() -> Unit)? = null
@@ -471,6 +489,17 @@ object Consoles {
                 }
                 // The note (or the task) was changed: the console as the machine has it now.
                 "noted" -> { (m["console"] as? JsonObject)?.let(::consoleOf)?.let(::upsert); onChange() }
+                // A piece of the image arrived on the machine; the last one says where it was kept.
+                "filed" -> {
+                    val u = upload ?: return
+                    if ((m["up"] as? JsonPrimitive)?.content != u.up || (m["seq"] as? JsonPrimitive)?.intOrNull != u.seq) return
+                    imageProgress++
+                    if (u.end >= u.bytes.size) {
+                        upload = null
+                        val path = (m["path"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                        if (path.isNullOrEmpty()) onImage(null, "bad-file") else onImage(path, null)
+                    } else { u.at = u.end; u.seq++; sendPiece(u) }
+                }
                 "meta" -> {
                     val info = (m["console"] as? JsonObject)?.let(::consoleOf) ?: return
                     upsert(info)
@@ -502,6 +531,8 @@ object Consoles {
                         codeWaitMs = (m["retryMs"] as? JsonPrimitive)?.content?.toDoubleOrNull()?.toLong() ?: 0
                         onChange(); return
                     }
+                    // The machine did not take the image: the console goes on as it was.
+                    if (upload != null && code in IMAGE_FAILS) { upload = null; onImage(null, code); return }
                     // Coming back after the machine restarted: its consoles died with it. A new one, and it is said (as the PWA).
                     if (code == "no-console" && resuming) { resuming = false; consoleId = null; send("open", null); onGone(); return }
                     // The console is gone on the machine (it was closed there, or the agent restarted).
@@ -539,6 +570,33 @@ object Consoles {
             trying = code
             try { channel?.send(buildJsonObject { put("type", "unlock"); put("code", code) }) } catch (_: Exception) { trying = null }
         }
+
+        /**
+         * Sends an image to the machine, which keeps it and answers WHERE ([onImage]): that path is
+         * what goes into the console. In pieces, each one waiting for its acknowledgement (agent ≥ 0.43).
+         * False if it could not even start: no console on screen, or another image is on its way.
+         */
+        fun sendImage(bytes: ByteArray): Boolean {
+            if (state != State.OPEN || consoleId == null || upload != null || bytes.isEmpty()) return false
+            val u = Upload(java.util.UUID.randomUUID().toString().replace("-", "").take(16), bytes)
+            upload = u
+            sendPiece(u)
+            return true
+        }
+
+        private fun sendPiece(u: Upload) {
+            u.end = minOf(u.bytes.size, u.at + FILE_CHUNK)
+            val data = java.util.Base64.getEncoder().encodeToString(u.bytes.copyOfRange(u.at, u.end))
+            try {
+                channel?.send(buildJsonObject {
+                    put("type", "file"); put("up", u.up); put("seq", u.seq); put("data", data)
+                    if (u.end >= u.bytes.size) put("last", true)
+                }) ?: throw IllegalStateException("no channel")
+            } catch (_: Exception) { upload = null; onImage(null, "lost") }
+        }
+
+        /** The machine has not acknowledged a piece in a long while: an older terminal never answers. */
+        fun imageStalled() { if (upload != null) { upload = null; onImage(null, "timeout") } }
 
         /** What was typed while the console was still being attached (a switch, a reconnection): it
          *  goes the moment it is (owner, 2026-10-07: Enter right after changing console sent nothing). */
@@ -627,7 +685,10 @@ object Consoles {
         /** Leave the tab without touching the console: it stays alive on the machine. */
         internal fun drop() { release(); tabs.remove(this); changed() }
 
-        internal fun release() { off?.invoke(); offError?.invoke(); off = null; offError = null; channel?.close(); channel = null }
+        internal fun release() {
+            off?.invoke(); offError?.invoke(); off = null; offError = null; channel?.close(); channel = null
+            if (upload != null) { upload = null; onImage(null, "lost") }
+        }
 
         /** The connection dropped under this tab: it comes back by itself. */
         internal fun lost() { checking = false; if (state == State.OPEN || state == State.CONNECTING) { release(); state = State.LOST; onChange() } }
