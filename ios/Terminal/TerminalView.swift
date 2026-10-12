@@ -434,7 +434,10 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     func screenText() -> String {
         guard let t = terminal else { return "" }
         var s = ""
-        let back = min(scrollBack, t.historySize)
+        // Only the history part of the scroll counts here. `scrollBack` also goes NEGATIVE (a console
+        // taller than the view, scrolled down to its hidden rows): used as is, it asked for lines
+        // past the last row and the app closed on the next output (0.12.4 build 44, 2026-10-11).
+        let back = min(max(scrollBack, 0), t.historySize)
         for y in 0..<t.rows {
             let line = y - back
             s += t.text(line)
