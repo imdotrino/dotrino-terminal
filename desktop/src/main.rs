@@ -733,6 +733,12 @@ enum Message {
     NoteAction(window::Id, iced::widget::text_editor::Action),
     NoteSave(window::Id),
     NoteCancel(window::Id),
+    /// Clic derecho en el editor de la nota: copiar, cortar y pegar.
+    NoteCopy(window::Id),
+    NoteCut(window::Id),
+    NotePaste(window::Id),
+    NotePasted(window::Id, Option<String>),
+    NoteSelectAll(window::Id),
     /// Quitar la tarea que puso el programa en la consola de la ventana.
     TaskClear(window::Id),
     Terminal(iced_term::Event),
@@ -1690,6 +1696,28 @@ impl App {
                         _ => Binding::from_key_press(k),
                     }
                 });
+            // Clic derecho: lo mismo que Ctrl+X, Ctrl+C, Ctrl+V y Ctrl+A.
+            let has_selection = content.selection().is_some_and(|s| !s.is_empty());
+            let editor = ContextMenu::new(editor, move || {
+                let (cut_key, copy_key, paste_key, all_key) = if cfg!(target_os = "macos") { ("⌘X", "⌘C", "⌘V", "⌘A") } else { ("Ctrl+X", "Ctrl+C", "Ctrl+V", "Ctrl+A") };
+                container(
+                    column![
+                        entry(t("Cortar", "Cut"), cut_key, has_selection.then_some(Message::NoteCut(id))),
+                        entry(t("Copiar", "Copy"), copy_key, has_selection.then_some(Message::NoteCopy(id))),
+                        entry(t("Pegar", "Paste"), paste_key, Some(Message::NotePaste(id))),
+                        separator(),
+                        entry(t("Seleccionar todo", "Select all"), all_key, Some(Message::NoteSelectAll(id))),
+                    ]
+                    .width(220),
+                )
+                .padding(4)
+                .style(|theme: &Theme| container::Style {
+                    background: Some(theme.extended_palette().background.weak.color.into()),
+                    border: Border::default().rounded(6.0),
+                    ..Default::default()
+                })
+                .into()
+            });
             card = card.push(editor).push(
                 row![space::horizontal(), act(t("Cancelar", "Cancel"), Some(Message::NoteCancel(id))), act(t("Guardar", "Save"), Some(Message::NoteSave(id)))].spacing(6),
             );
@@ -1762,6 +1790,18 @@ impl App {
         };
         // La lista, enseguida y otra vez al poco (lo que tarda el agente en repintar).
         Task::batch([later(150, Message::Poll), later(700, Message::Poll), self.focus(id)])
+    }
+
+    /// Copiar (o cortar) lo seleccionado en el editor de la nota.
+    fn note_copy(&mut self, id: window::Id, cut: bool) -> Task<Message> {
+        use iced::widget::text_editor::{Action, Edit};
+        let back = iced::widget::operation::focus(note_editor_id(id));
+        let Some((_, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.as_mut()) else { return Task::none() };
+        let Some(selected) = content.selection().filter(|s| !s.is_empty()) else { return back };
+        if cut {
+            content.perform(Action::Edit(Edit::Delete));
+        }
+        iced::clipboard::write(selected).chain(back)
     }
 
     fn focus(&self, id: window::Id) -> Task<Message> {
@@ -2146,6 +2186,23 @@ impl App {
                     content.perform(action);
                 }
                 Task::none()
+            }
+            // Las del menú devuelven el teclado al editor: el clic en el menú no se lo quita.
+            Message::NoteSelectAll(id) => {
+                if let Some((_, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.as_mut()) {
+                    content.perform(iced::widget::text_editor::Action::SelectAll);
+                }
+                iced::widget::operation::focus(note_editor_id(id))
+            }
+            Message::NoteCopy(id) => self.note_copy(id, false),
+            Message::NoteCut(id) => self.note_copy(id, true),
+            Message::NotePaste(id) => iced::clipboard::read().map(move |c| Message::NotePasted(id, c)),
+            Message::NotePasted(id, pasted) => {
+                use iced::widget::text_editor::{Action, Edit};
+                if let (Some((_, content)), Some(pasted)) = (self.windows.get_mut(&id).and_then(|w| w.note_edit.as_mut()), pasted.filter(|p| !p.is_empty())) {
+                    content.perform(Action::Edit(Edit::Paste(std::sync::Arc::new(pasted))));
+                }
+                iced::widget::operation::focus(note_editor_id(id))
             }
             Message::NoteCancel(id) => {
                 if let Some(w) = self.windows.get_mut(&id) {
