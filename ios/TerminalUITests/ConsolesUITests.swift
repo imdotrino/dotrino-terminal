@@ -107,4 +107,23 @@ final class ConsolesUITests: XCTestCase {
         XCTAssertTrue(note.label.contains("HOY"), "and leaves the note")
         shot("9-about-no-task")
     }
+
+    /// The «Image» key: the phone's picker, and the path the machine answers ends up in the console.
+    func testAttachingAnImageTypesItsPath() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-compose", "0"]
+        app.launch()
+        XCTAssertTrue(app.buttons["console-new"].waitForExistence(timeout: 10))
+        let key = app.descendants(matching: .any).matching(identifier: "key-image").firstMatch
+        XCTAssertTrue(key.waitForExistence(timeout: 15), "the Image key is in the row of keys")
+        key.tap()
+        // The system's picker (another process, shown inside the app): the first photo of the library.
+        let photo = app.scrollViews.images.firstMatch
+        XCTAssertTrue(photo.waitForExistence(timeout: 20), "the photo picker came up")
+        photo.tap()
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal").firstMatch
+        let typed = NSPredicate { _, _ in (terminal.value as? String ?? "").contains("img-demo.jpg") }
+        wait(for: [expectation(for: typed, evaluatedWith: nil)], timeout: 20)
+        shot("image-attached")
+    }
 }
