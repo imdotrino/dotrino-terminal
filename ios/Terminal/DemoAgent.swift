@@ -108,6 +108,11 @@ final class DemoAgent: Channel {
             consoles.insert(c, at: consoles.firstIndex { $0.id == p["before"]?.string } ?? consoles.count)
             list()
         case "close": if let c = current { consoles.removeAll { $0 === c } }; current = nil
+        // The sample machine «keeps» the image: every piece acknowledged, the last with a path.
+        case "file":
+            var o: [String: JSON] = ["type": "filed", "up": p["up"] ?? .null, "seq": p["seq"] ?? .null]
+            if p["last"] == .bool(true) { o["path"] = "/home/seyacat/.dotrino/agent/terminal-agent/default/uploads/img-demo.jpg" }
+            reply(.object(o))
         case "note":
             guard let c = consoles.first(where: { $0.id == p["id"]?.string }) else { return }
             if let v = p["text"]?.string { c.note = v }

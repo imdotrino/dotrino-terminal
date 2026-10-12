@@ -69,6 +69,17 @@ enum I18n {
         "key.copy": "Copiar",
         "key.paste": "Pegar",
         "key.copied": "Copiado",
+        "key.image": "Imagen",
+        "image.pick": "Adjuntar una imagen",
+        "image.sending": "Enviando la imagen a la máquina…",
+        "image.sent": "La imagen ya está en la máquina: su ruta quedó escrita.",
+        "image.noConsole": "Abre una consola antes de adjuntar una imagen.",
+        "image.busy": "Ya se está enviando una imagen.",
+        "image.old": "Esta máquina aún no recibe imágenes: actualiza su terminal.",
+        "image.big": "La imagen pesa demasiado para enviarla.",
+        "image.not": "Eso no es una imagen que se pueda enviar.",
+        "image.lost": "Se cortó la conexión y la imagen no llegó. Inténtalo de nuevo.",
+        "image.fail": "No se pudo enviar la imagen.",
     ]
     static let en: [String: String] = [
         "machines.title": "Your machines",
@@ -134,6 +145,17 @@ enum I18n {
         "key.copy": "Copy",
         "key.paste": "Paste",
         "key.copied": "Copied",
+        "key.image": "Image",
+        "image.pick": "Attach an image",
+        "image.sending": "Sending the image to the machine…",
+        "image.sent": "The image is on the machine: its path was typed in.",
+        "image.noConsole": "Open a console before attaching an image.",
+        "image.busy": "An image is already being sent.",
+        "image.old": "This machine does not take images yet: update its terminal.",
+        "image.big": "The image is too large to send.",
+        "image.not": "That is not an image that can be sent.",
+        "image.lost": "The connection dropped and the image did not arrive. Try again.",
+        "image.fail": "The image could not be sent.",
     ]
 
     /// Both languages say the same things: a key in one and not in the other is a text nobody translated.

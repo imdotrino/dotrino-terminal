@@ -1,5 +1,6 @@
 import DotrinoNative
 import DotrinoNativeUI
+import PhotosUI
 import SwiftUI
 
 /// The app: your machines and, from there, their consoles — one tab per machine, with the panel
@@ -248,6 +249,8 @@ private struct ConsoleScreen: View {
     /// The field itself: what is sent is read from IT, not from the state, which lagged a keystroke
     /// behind now and then (owner, 2026-10-07: «Enter sometimes works, sometimes not»).
     @State private var composeBox = ComposeField.Box()
+    /// The picture chosen with the «Image» key, until it has been read.
+    @State private var picked: PhotosPickerItem?
 
     private static let keys = ["esc", "tab", "shift", "ctrl", "alt", "up", "down", "left", "right", "home", "end", "pgup", "pgdn", "-", "/", "|", "~"]
     private static let labels = ["esc": "Esc", "tab": "Tab", "up": "↑", "down": "↓", "left": "←", "right": "→", "home": "Home", "end": "End", "pgup": "PgUp", "pgdn": "PgDn"]
@@ -397,6 +400,39 @@ private struct ConsoleScreen: View {
         // Said out loud: if this screen already had the size, nothing else changes on screen.
         show(t("size.usedNow", ("n", n), ("cols", tab.screenCols), ("rows", tab.screenRows)))
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { tab.list() }
+    }
+
+    /// An image for whatever runs in the console: reduced here, sent over the session to the machine,
+    /// which keeps it and answers where. That path is what gets typed.
+    private func attachImage(_ raw: Data) {
+        guard tab.state == .open else { show(t("image.noConsole")); return }
+        if tab.sendingImage { show(t("image.busy")); return }
+        show(t("image.sending"))
+        Task {
+            let bytes: Data
+            do { bytes = try await Task.detached(priority: .userInitiated) { try Images.prepare(raw) }.value } catch { show(t("image.not")); return }
+            tab.onImage = { path, problem in
+                if let path {
+                    let typed = Images.typedPath(path) + " "
+                    // As a paste: a program that asked for bracketed paste (Claude Code) takes a
+                    // pasted path as a file. With the writing line on, it goes into the line.
+                    if composing, let f = composeBox.field { f.insertText(typed) } else if let v = view { v.paste(typed) } else { tab.input(typed) }
+                    show(t("image.sent"))
+                } else {
+                    show(t(problem == "timeout" ? "image.old" : problem == "too-big" ? "image.big" : problem == "not-image" ? "image.not" : problem == "lost" ? "image.lost" : "image.fail"))
+                }
+            }
+            guard tab.sendImage(bytes) else { show(t("image.noConsole")); return }
+            // A machine with an older terminal never answers: after a while without a piece
+            // acknowledged, it is said instead of waiting forever.
+            var seen = tab.imageProgress
+            while tab.sendingImage {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                if !tab.sendingImage { break }
+                if tab.imageProgress == seen { tab.imageStalled(); break }
+                seen = tab.imageProgress
+            }
+        }
     }
 
     private func show(_ s: String) {
@@ -681,6 +717,11 @@ private struct ConsoleScreen: View {
                 }
                 .disabled(!hasSelection).opacity(hasSelection ? 1 : 0.4).accessibilityIdentifier("key-copy")
                 Button {
+                    // A picture in the clipboard goes to the machine; anything else is pasted as text.
+                    if UIPasteboard.general.hasImages, let image = UIPasteboard.general.image {
+                        if let d = image.pngData() { attachImage(d) } else { show(t("image.not")) }
+                        return
+                    }
                     guard let s = UIPasteboard.general.string, !s.isEmpty else { return }
                     if composing { composeText += s } else { view?.paste(s) }
                 } label: {
@@ -689,6 +730,23 @@ private struct ConsoleScreen: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel2))
                 }
                 .accessibilityIdentifier("key-paste")
+                // An image for whatever runs in the console: the phone's own picker (no permission asked).
+                PhotosPicker(selection: $picked, matching: .images, photoLibrary: .shared()) {
+                    Text(t("key.image")).font(.subheadline.bold()).foregroundColor(Palette.text)
+                        .frame(minWidth: 44).padding(.vertical, 9).padding(.horizontal, 6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel2))
+                }
+                .accessibilityLabel(t("image.pick")).accessibilityIdentifier("key-image")
+                .onChange(of: picked) { item in
+                    guard let item else { return }
+                    picked = nil
+                    Task {
+                        do {
+                            guard let d = try await item.loadTransferable(type: Data.self) else { show(t("image.not")); return }
+                            attachImage(d)
+                        } catch { show(t("image.not")) }
+                    }
+                }
                 ForEach(Self.keys, id: \.self) { k in
                     let lit = (k == "shift" && mods.shift) || (k == "ctrl" && mods.ctrl) || (k == "alt" && mods.alt)
                     Button { press(k) } label: {

@@ -265,4 +265,84 @@ final class TabTests: XCTestCase {
         t.handle(consoles(done(a, 10), done(b, nil))); XCTAssertEqual(rang, 1)
         t.handle(meta(done(b, 30))); XCTAssertEqual(rang, 2)
     }
+
+    // ---------- An image for whatever runs in the console ----------
+
+    private func openTab() -> (Tab, FakeChannel) {
+        let (t, ch) = tab()
+        t.handle(consoles(console("a", 1, 80, 24)))
+        t.handle(attached(console("a", 1, 50, 20, watchers: 1, by: me)))
+        ch.sent = []
+        return (t, ch)
+    }
+    private func filed(_ m: JSON, path: String? = nil) -> JSON {
+        var o: [String: JSON] = ["type": "filed", "up": m["up"]!, "seq": m["seq"]!]
+        if let path { o["path"] = .string(path) }
+        return .object(o)
+    }
+
+    func testAnImageGoesInPiecesEachOneAcknowledgedAndTheLastSaysWhereItWasKept() {
+        let (t, ch) = openTab()
+        var got: (String?, String?)?
+        t.onImage = { got = ($0, $1) }
+        let bytes = Data((0..<(fileChunk * 2 + 10)).map { UInt8($0 % 251) })
+        XCTAssertTrue(t.sendImage(bytes))
+        XCTAssertTrue(t.sendingImage)
+        XCTAssertFalse(t.sendImage(bytes))                           // one at a time
+        XCTAssertEqual(ch.sent.count, 1)                             // the next piece waits for the acknowledgement
+        XCTAssertEqual(ch.sent[0]["type"]?.string, "file")
+        XCTAssertEqual(ch.sent[0]["seq"]?.int, 0)
+        XCTAssertNil(ch.sent[0]["last"])
+        t.handle(filed(ch.sent[0])); t.handle(filed(ch.sent[0]))     // a repeated acknowledgement moves nothing
+        XCTAssertEqual(ch.sent.count, 2)
+        t.handle(filed(ch.sent[1]))
+        XCTAssertEqual(ch.sent.count, 3)
+        XCTAssertEqual(ch.sent[2]["last"], .bool(true))
+        var whole = Data()
+        for m in ch.sent { whole.append(Data(base64Encoded: m["data"]!.string!)!) }
+        XCTAssertEqual(whole, bytes)                                 // arrives whole
+        XCTAssertNil(got)
+        t.handle(filed(ch.sent[2], path: "/home/me/uploads/img-1.jpg"))
+        XCTAssertEqual(got?.0, "/home/me/uploads/img-1.jpg")
+        XCTAssertNil(got?.1)
+        XCTAssertFalse(t.sendingImage)
+    }
+
+    func testWhatTheMachineRejectsIsSaidAndTheConsoleGoesOn() {
+        let (t, _) = openTab()
+        var got: (String?, String?)?
+        t.onImage = { got = ($0, $1) }
+        XCTAssertTrue(t.sendImage(Data(count: 10)))
+        t.handle(["type": "fail", "code": "not-image", "message": "file: that is not an image"])
+        XCTAssertEqual(got?.1, "not-image")
+        XCTAssertEqual(t.state, .open)                               // the tab did not fail
+        XCTAssertFalse(t.sendingImage)
+    }
+
+    func testAMachineThatNeverAnswersIsAnOlderTerminal() {
+        let (t, _) = openTab()
+        var got: [String?] = []
+        t.onImage = { _, problem in got.append(problem) }
+        XCTAssertTrue(t.sendImage(Data(count: 10)))
+        t.imageStalled(); t.imageStalled()
+        XCTAssertEqual(got, ["timeout"])                             // only once
+    }
+
+    func testWithoutAConsoleOnScreenNoImageStarts() {
+        let (t, ch) = tab()
+        XCTAssertFalse(t.sendImage(Data(count: 10)))
+        XCTAssertFalse(ch.types.contains("file"))
+    }
+
+    func testWhatGoesAsItIsAndWhatIsReduced() {
+        let png = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) + Data(count: 100)
+        XCTAssertTrue(Images.goesAsIs(png))
+        XCTAssertFalse(Images.goesAsIs(Data([0xff, 0xd8, 0xff]) + Data(count: 5_000_000)))   // a phone's photo is reduced
+        XCTAssertFalse(Images.goesAsIs(Data("ftypheic........".utf8)))                       // a kind the machine does not keep is converted
+        XCTAssertTrue(Images.fitSide(4000, 3000) == (Images.maxSide, 1500))
+        XCTAssertTrue(Images.fitSide(800, 600) == (800, 600))                                // never enlarged
+        XCTAssertEqual(Images.typedPath("/home/me/img-1.jpg"), "/home/me/img-1.jpg")
+        XCTAssertEqual(Images.typedPath("/home/my user/img.jpg"), "'/home/my user/img.jpg'")
+        XCTAssertThrowsError(try Images.prepare(Data("not an image".utf8)))
+    }
 }

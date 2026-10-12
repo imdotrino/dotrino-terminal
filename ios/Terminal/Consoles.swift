@@ -51,6 +51,11 @@ struct ConsoleInfo: Equatable, Identifiable {
     var activity: Activity { busy ? .busy : doneAt != nil ? .done : .idle }
 }
 
+/// How much of an image travels in one piece, before base64 (the proxy cuts messages at 1 MB).
+let fileChunk = 96 * 1024
+/// The agent's reasons for not keeping an image (agent/uploads.js).
+let imageFails: Set<String> = ["not-image", "too-big", "bad-file", "no-uploads", "file-failed"]
+
 /// What a `Tab` needs from its session. A protocol so the protocol can be tested without a network.
 protocol Channel: AnyObject {
     func send(_ payload: JSON) throws
@@ -307,6 +312,20 @@ final class Tab: ObservableObject, Identifiable {
     var onDone: () -> Void = {}
     var onDrop: () -> Void = {}
     var onLost: () -> Void = {}
+    /// An image sent to the machine ended: `path` is where the machine kept it (what is typed into
+    /// the console), or `problem` says why not (`timeout`: the machine's terminal is older than 0.43
+    /// and does not answer; `not-image`, `too-big`; `lost`: the connection dropped).
+    var onImage: (_ path: String?, _ problem: String?) -> Void = { _, _ in }
+    /// An image is on its way to the machine.
+    var sendingImage: Bool { upload != nil }
+    /// Moves with every piece the machine acknowledges: whoever watches for a stall compares it.
+    private(set) var imageProgress = 0
+    private final class Upload {
+        let up: String, bytes: Data
+        var at = 0, seq = 0, end = 0
+        init(up: String, bytes: Data) { self.up = up; self.bytes = bytes }
+    }
+    private var upload: Upload?
 
     private var channel: Channel?
     private var offs: [() -> Void] = []
@@ -387,6 +406,14 @@ final class Tab: ObservableObject, Identifiable {
             list()
         // The note (or the task) was changed: the console as the machine has it now.
         case "noted": if let c = m["console"].flatMap(consoleOf) { upsert(c) }
+        // A piece of the image arrived on the machine; the last one says where it was kept.
+        case "filed":
+            guard let u = upload, m["up"]?.string == u.up, m["seq"]?.int.map({ Int($0) }) == u.seq else { return }
+            imageProgress += 1
+            if u.end >= u.bytes.count {
+                upload = nil
+                if let path = m["path"]?.string, !path.isEmpty { onImage(path, nil) } else { onImage(nil, "bad-file") }
+            } else { u.at = u.end; u.seq += 1; sendPiece(u) }
         case "meta":
             guard let c = m["console"].flatMap(consoleOf) else { return }
             upsert(c)
@@ -414,6 +441,8 @@ final class Tab: ObservableObject, Identifiable {
                 codeAsks += 1
                 return
             }
+            // The machine did not take the image: the console goes on as it was.
+            if upload != nil, let code, imageFails.contains(code) { upload = nil; onImage(nil, code); return }
             // The console is gone on the machine (it was closed there, or the agent restarted).
             if code == "no-console" { state = .exited; note = code } else { state = .failed; note = m["message"]?.string ?? code }
             list()
@@ -451,6 +480,30 @@ final class Tab: ObservableObject, Identifiable {
         trying = code
         do { try channel?.send(["type": "unlock", "code": .string(code)]) } catch { trying = nil }
     }
+
+    /// Sends an image to the machine, which keeps it and answers WHERE (`onImage`): that path is what
+    /// goes into the console. In pieces, each one waiting for its acknowledgement (agent ≥ 0.43).
+    /// False if it could not even start: no console on screen, or another image is on its way.
+    @discardableResult func sendImage(_ bytes: Data) -> Bool {
+        guard state == .open, consoleId != nil, upload == nil, !bytes.isEmpty else { return false }
+        let u = Upload(up: UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased(), bytes: bytes)
+        upload = u
+        sendPiece(u)
+        return true
+    }
+
+    private func sendPiece(_ u: Upload) {
+        u.end = min(u.bytes.count, u.at + fileChunk)
+        let start = u.bytes.startIndex + u.at
+        var o: [String: JSON] = ["type": "file", "up": .string(u.up), "seq": .int(Int64(u.seq)),
+                                 "data": .string(u.bytes.subdata(in: start..<(u.bytes.startIndex + u.end)).base64EncodedString())]
+        if u.end >= u.bytes.count { o["last"] = .bool(true) }
+        guard let channel else { upload = nil; onImage(nil, "lost"); return }
+        do { try channel.send(.object(o)) } catch { upload = nil; onImage(nil, "lost") }
+    }
+
+    /// The machine has not acknowledged a piece in a long while: an older terminal never answers.
+    func imageStalled() { if upload != nil { upload = nil; onImage(nil, "timeout") } }
 
     /// What was typed while the console was still being attached (a switch, a reconnection): it
     /// goes the moment it is (owner, 2026-10-07: Enter right after changing console sent nothing).
@@ -541,6 +594,7 @@ final class Tab: ObservableObject, Identifiable {
         for off in offs { off() }
         offs = []
         channel?.close(); channel = nil
+        if upload != nil { upload = nil; onImage(nil, "lost") }
     }
 
     /// The connection dropped under this tab: it comes back by itself.
