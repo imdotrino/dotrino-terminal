@@ -536,6 +536,26 @@ struct Watcher {
     tag: Option<String>,
 }
 
+/// Una orden sobre una consola de OTRA máquina que aún no se ve cumplida: va por la red y la lista
+/// de esa máquina tarda en confirmarla. Mientras, la ventana enseña un aviso flotante («Aplicando…»)
+/// para que se sepa que hay que esperar (dueño, 2026-10-13).
+struct Applying {
+    what: String,
+    since: std::time::Instant,
+    until: Applied,
+}
+
+/// Cuándo se da por cumplida.
+enum Applied {
+    /// La consola ya no está en la lista.
+    Gone(String),
+    /// El tamaño de la consola ya es de la ventana con esa etiqueta.
+    SizeOf(String, String),
+}
+
+/// Lo más que se enseña el aviso: si para entonces no se confirmó, deja de estorbar.
+const APPLYING_MAX: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Lo que la ventana hace cuando su cliente termine de soltar la consola actual.
 #[derive(Debug, Clone)]
 enum Pending {
@@ -715,6 +735,8 @@ struct App {
     next_tag: u64,
     /// El medio ciclo apagado del punto que parpadea (consola que terminó y nadie ha atendido).
     blink_off: bool,
+    /// Las órdenes sobre consolas de otra máquina que aún no se ven cumplidas, por ventana.
+    applying: HashMap<window::Id, Applying>,
     /// Por qué «terminó» ya sonó el trino en este proceso: consola (id) → su `doneAt`.
     rung: HashMap<String, u64>,
     /// La ventana que tiene el foco.
@@ -1321,7 +1343,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, applying: HashMap::new(), rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1657,7 +1679,8 @@ impl App {
             let profiles: Vec<String> = fresh.keys().cloned().collect();
             for p in &profiles {
                 let silent = self.far_silent.get(p).copied().unwrap_or(0);
-                let every = if silent >= 2 { FAR_SILENT_EVERY } else { FAR_EVERY };
+                // Con una orden pendiente de confirmar se pregunta en cada lectura.
+                let every = if !self.applying.is_empty() { 1 } else if silent >= 2 { FAR_SILENT_EVERY } else { FAR_EVERY };
                 if self.polls % every != 1 % every {
                     continue;
                 }
@@ -1693,6 +1716,14 @@ impl App {
             }
             self.far.retain(|p, _| profiles.contains(p));
             self.far_why.retain(|p, _| profiles.contains(p));
+            // Lo que se mandó cerrar no vuelve al panel aunque la otra máquina aún lo liste.
+            for machines in self.far.values_mut() {
+                for m in machines.iter_mut() {
+                    if let Some(list) = m.consoles.as_mut() {
+                        list.retain(|c| !self.dying.contains(&c.id));
+                    }
+                }
+            }
             for (p, machines) in &self.far {
                 for m in machines {
                     if let Some(list) = &m.consoles {
@@ -1724,6 +1755,15 @@ impl App {
             }
         }
         self.consoles = fresh;
+        // Las órdenes pendientes que ya se ven cumplidas (o que llevan demasiado) dejan de avisar.
+        let all: Vec<&ConsoleInfo> = self.consoles.values().flatten().collect();
+        self.applying.retain(|_, a| {
+            let done = match &a.until {
+                Applied::Gone(cid) => !all.iter().any(|c| &c.id == cid),
+                Applied::SizeOf(cid, tag) => all.iter().any(|c| &c.id == cid && c.size_by.as_ref().and_then(|b| b.tag.as_deref()) == Some(tag.as_str())),
+            };
+            !done && a.since.elapsed() < APPLYING_MAX
+        });
         // Lo que vio OTRA ventana de la app (cada lanzamiento es un proceso aparte): también cuenta.
         for (id, at) in load_seen() {
             self.seen.entry(id).and_modify(|mine| *mine = (*mine).max(at)).or_insert(at);
@@ -2356,7 +2396,12 @@ impl App {
                 let pinned = self.pinned_here(id);
                 let mine = self.mine(id);
                 if let Some(w) = self.windows.get_mut(&id) {
-                    w.took_size = if pinned { None } else { mine.map(|cid| (cid, std::time::Instant::now())) };
+                    w.took_size = if pinned { None } else { mine.clone().map(|cid| (cid, std::time::Instant::now())) };
+                    // En otra máquina tarda en verse: se avisa mientras.
+                    if let (false, true, Some(cid)) = (pinned, w.machine.is_some(), mine) {
+                        let tag = w.tag.clone();
+                        self.applying.insert(id, Applying { what: t("Aplicando el tamaño…", "Applying the size…"), since: std::time::Instant::now(), until: Applied::SizeOf(cid, tag) });
+                    }
                 }
                 if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
                     let keys: &[u8] = if pinned { b"\x1du" } else { b"\x1dp" };
@@ -2537,6 +2582,9 @@ impl App {
             // Cerrar desde el panel una consola de `machine` (`None`: esta máquina).
             Message::KillAt(id, machine, cid) => {
                 let Some(win) = self.windows.get(&id) else { return Task::none() };
+                if machine.is_some() {
+                    self.applying.insert(id, Applying { what: t("Cerrando la consola…", "Closing the console…"), since: std::time::Instant::now(), until: Applied::Gone(cid.clone()) });
+                }
                 if win.machine == machine {
                     return self.handle(Message::KillConsole(id, cid));
                 }
@@ -2550,6 +2598,13 @@ impl App {
                 agent_send(&dir, &msg);
                 if let Some(key) = win.profile.as_deref().map(|p| scope_key(p, machine.as_deref())) {
                     if let Some(list) = self.consoles.get_mut(&key) {
+                        list.retain(|c| c.id != cid);
+                    }
+                }
+                // Tampoco en la lista de su máquina, que es de donde la pinta el panel.
+                self.dying.insert(cid.clone());
+                for m in self.far.values_mut().flatten() {
+                    if let Some(list) = m.consoles.as_mut() {
                         list.retain(|c| c.id != cid);
                     }
                 }
@@ -2832,6 +2887,19 @@ impl App {
         };
         let all: Element<'_, Message> = column![self.menu(id, win), main].into();
         // El aviso (versión nueva, o reiniciar) flota centrado sobre la ventana.
+        // Una orden sobre otra máquina que aún no se confirma: un aviso pequeño, abajo y centrado.
+        let all: Element<'_, Message> = match self.applying.get(&id) {
+            Some(a) => {
+                let chip = container(text(a.what.clone()).size(12)).padding([6, 12]).style(|theme: &Theme| container::Style {
+                    background: Some(theme.extended_palette().background.weak.color.into()),
+                    border: Border { color: theme.palette().primary, width: 1.0, radius: 12.0.into() },
+                    ..Default::default()
+                });
+                let over = container(chip).width(Length::Fill).height(Length::Fill).align_x(iced::alignment::Horizontal::Center).align_y(iced::alignment::Vertical::Bottom).padding(16);
+                iced::widget::stack![all, over].into()
+            }
+            None => all,
+        };
         match &self.notice {
             Some(n) => iced::widget::stack![all, self.notice_card(id, n)].into(),
             None => all,
