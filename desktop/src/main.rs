@@ -227,6 +227,13 @@ mod tests {
         assert!(!c(r#"[{"origin":"local","tag":"vscode"}]"#).attended());
         assert!(!c(r#"[{"origin":"remote","device":"phone","tag":"desktop-1-1"}]"#).attended());
         assert!(!c("[]").attended());
+        // Una consola de OTRA máquina que una ventana de aquí muestra: allí es «remote», con la
+        // etiqueta de este proceso. La de un proceso que no existe (otra máquina) no cuenta.
+        let mine = format!(r#"[{{"origin":"remote","device":"me","tag":"desktop-{}-1"}}]"#, std::process::id());
+        assert!(c(&mine).attended_from_here());
+        assert!(!c(r#"[{"origin":"remote","device":"other","tag":"desktop-4294967295-1"}]"#).attended_from_here());
+        assert!(!c(r#"[{"origin":"remote","device":"phone"}]"#).attended_from_here());
+        assert!(!c(r#"[{"origin":"local","tag":"desktop-1-1"}]"#).attended_from_here());
     }
 
     #[test]
@@ -417,6 +424,25 @@ impl ConsoleInfo {
     fn attended(&self) -> bool {
         self.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref().is_some_and(|t| t.starts_with("desktop-")))
     }
+
+    /// Lo mismo para una consola de OTRA máquina: allí una ventana de aquí es «otro aparato»
+    /// (`remote`), y se la reconoce por su etiqueta, que lleva el proceso de la app que la abrió.
+    /// Que la consola viva lejos no cambia nada: el punto dice que una ventana de ESTA máquina la
+    /// muestra (dueño, 2026-10-13).
+    fn attended_from_here(&self) -> bool {
+        self.watchers.iter().any(|w| w.origin == "remote" && w.tag.as_deref().is_some_and(window_of_this_machine))
+    }
+}
+
+/// ¿Es `tag` (`desktop-<pid>-<n>`) de una ventana de la app que corre en ESTA máquina? La de este
+/// proceso, o la de otro proceso de la app que siga vivo (cada lanzamiento es un proceso).
+fn window_of_this_machine(tag: &str) -> bool {
+    let Some(pid) = tag.strip_prefix("desktop-").and_then(|r| r.split('-').next()).and_then(|p| p.parse::<u32>().ok()) else { return false };
+    if pid == std::process::id() {
+        return true;
+    }
+    // El nombre del proceso, cortado a 15 letras por el núcleo. Sin /proc (macOS), solo este proceso.
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|name| name.trim_end().starts_with("dotrino-termina"))
 }
 
 /// El cuadrito de una consola con un punto verde en su esquina superior derecha cuando `on`.
@@ -738,7 +764,8 @@ enum Message {
     MouseDown(window::Id),
     MouseUp,
     /// Panel lateral (clic derecho): abrir esa consola en una ventana nueva.
-    OpenInNewWindow(window::Id, String),
+    /// Abrir en otra ventana la consola `cid` de `machine` (`None`: esta máquina).
+    OpenInNewWindow(window::Id, Option<String>, String),
     /// Panel lateral: ir a una consola (o abrir una nueva, `None`) de una máquina (`None`: esta),
     /// en esta misma ventana.
     Go(window::Id, Option<String>, Option<String>),
@@ -2390,10 +2417,10 @@ impl App {
                 self.switch_to(id, Pending::Attach(cid))
             }
             Message::NewConsole(id) => self.switch_to(id, Pending::New),
-            Message::OpenInNewWindow(id, cid) => {
+            Message::OpenInNewWindow(id, machine, cid) => {
                 let Some(win) = self.windows.get(&id) else { return Task::none() };
-                let (profile, cwd, machine) = (win.profile.clone(), win.cwd.clone(), win.machine.clone());
-                // La ventana nueva nace ya enganchada a esa consola (de la misma máquina que esta).
+                let (profile, cwd) = (win.profile.clone(), win.cwd.clone());
+                // La ventana nueva nace ya enganchada a esa consola, en la máquina donde vive.
                 self.open_window_with(profile, cwd, None, Some(cid), machine).1
             }
             // El panel: ir a una consola (`cid`) o abrir una nueva (`None`) en `machine` (`None`:
@@ -2706,19 +2733,21 @@ impl App {
     }
 
     /// Clic derecho sobre una consola del panel (colapsado o no): lo que se puede hacer con ella.
-    fn console_menu<'a>(&self, id: window::Id, cid: String, is_mine: bool, under: Element<'a, Message>) -> Element<'a, Message> {
+    /// El menú de clic secundario de una consola del panel. `machine`: dónde vive (`None`: esta
+    /// máquina). Vale igual para las de aquí y las de otra máquina, mire la ventana la que mire.
+    fn console_menu<'a>(&self, id: window::Id, machine: Option<String>, cid: String, is_mine: bool, under: Element<'a, Message>) -> Element<'a, Message> {
         let ready = self.panel_ready();
         let pin_label = if self.pinned_here(id) { t("Soltar el tamaño", "Release the size") } else { t("Usar el tamaño de esta ventana", "Use this window's size") };
         let can_pin = is_mine && self.pin_ready();
         ContextMenu::new(under, move || {
-            let here = (!is_mine && ready).then(|| Message::ShowConsole(id, cid.clone()));
+            let here = (!is_mine && ready).then(|| Message::Go(id, machine.clone(), Some(cid.clone())));
             container(
                 column![
                     entry(t("Abrir aquí", "Open here"), "", here),
-                    entry(t("Abrir en otra ventana", "Open in another window"), "", Some(Message::OpenInNewWindow(id, cid.clone()))),
+                    entry(t("Abrir en otra ventana", "Open in another window"), "", Some(Message::OpenInNewWindow(id, machine.clone(), cid.clone()))),
                     entry(pin_label.clone(), "", can_pin.then_some(Message::TogglePin(id))),
                     separator(),
-                    entry(t("Cerrar consola", "Close console"), "", Some(Message::KillConsole(id, cid.clone()))),
+                    entry(t("Cerrar consola", "Close console"), "", Some(Message::KillAt(id, machine.clone(), cid.clone()))),
                 ]
                 .width(220),
             )
@@ -2849,7 +2878,7 @@ impl App {
                 // El punto verde, y su parpadeo: solo en una consola atendida de ESTA máquina.
                 let open = is_mine || (local && c.attended());
                 let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c))).center_x(Length::Fill).into();
-                let b = if local { self.console_menu(id, c.id.clone(), is_mine, b) } else { b };
+                let b = self.console_menu(id, None, c.id.clone(), is_mine, b);
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
                     Act::Done => format!("{tip} · {}", t("terminó", "finished")),
@@ -2879,6 +2908,8 @@ impl App {
                     let tip = std::iter::once(label.clone()).chain([host, dir, name].into_iter().flatten()).collect::<Vec<_>>().join("\n");
                     let is_mine = here.as_deref() == Some(m.id.as_str()) && mine.as_deref() == Some(c.id.as_str());
                     let b = button(centered(format!("{n}"), 12)).width(24).padding([4, 0]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), Some(c.id.clone()))));
+                    let b: Element<'_, Message> = container(dotted(b.into(), is_mine || c.attended_from_here(), self.blink_off && self.blinks(c))).center_x(Length::Fill).into();
+                    let b = self.console_menu(id, Some(m.id.clone()), c.id.clone(), is_mine, b);
                     let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                     strip = strip.push(arrowed(b, is_mine));
                 }
@@ -2965,7 +2996,8 @@ impl App {
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, None, c.id.clone()));
             let pick = dotted(pick.into(), is_mine || (local && c.attended()), self.blink_off && self.blinks(c));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
-            let entry_row = if local { draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill) } else { entry_row };
+            let entry_row = self.console_menu(id, None, c.id.clone(), is_mine, entry_row);
+            let entry_row = if local { draggable(&c.id, entry_row, Length::Fill) } else { entry_row };
             let entry = container(entry_row).padding(iced::Padding { right: 4.0, ..Default::default() });
             items = items.push(arrowed(entry.into(), is_mine));
         }
@@ -3012,7 +3044,9 @@ impl App {
                 let label = label.push(text(where_).size(11).style(dim));
                 let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), Some(c.id.clone()))));
                 let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, Some(m.id.clone()), c.id.clone()));
+                let pick = dotted(pick.into(), is_mine || c.attended_from_here(), self.blink_off && self.blinks(c));
                 let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
+                let entry_row = self.console_menu(id, Some(m.id.clone()), c.id.clone(), is_mine, entry_row);
                 items = items.push(arrowed(container(entry_row).padding(iced::Padding { right: 4.0, ..Default::default() }).into(), is_mine));
             }
         }
@@ -3054,7 +3088,8 @@ impl App {
         let polling = self.windows.values().any(|w| w.sidebar && w.profile.is_some())
             .then(|| iced::time::every(std::time::Duration::from_millis(1500)).map(|_| Message::Poll));
         // El punto parpadea solo mientras haya alguno que deba: sin eso, nada se repinta de más.
-        let blinking = (polling.is_some() && self.consoles.values().flatten().any(|c| self.blinks(c) && c.attended()))
+        let blinking = (polling.is_some() && self.consoles.values().flatten().any(|c| self.blinks(c) && c.attended())
+            || self.far.values().flatten().flat_map(|m| m.consoles.iter().flatten()).any(|c| self.blinks(c) && c.attended_from_here()))
             .then(|| iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::Blink));
         Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting).chain(polling).chain(blinking))
     }
