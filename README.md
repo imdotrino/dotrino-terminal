@@ -85,11 +85,11 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   `dotrino-terminal --name <perfil>` (el último elegido, `~/.config/dotrino-terminal/last-profile`;
   si no, `default`; si no, el primero enlazado; si no, el primero que exista). **Sin perfil** es
   el repliegue cuando no hay ninguno o falta el cliente, y el título lo dice: la shell del
-  usuario directa, sin agente. «Perfil → Instalar/Actualizar dotrino-terminal…» ESCRIBE
+  usuario directa, sin agente. «Herramientas → Instalar/Actualizar dotrino-terminal…» ESCRIBE
   `npm install -g @dotrino/terminal-agent@latest` en la consola de la ventana, sin Enter (el
   `.deb` no lo trae: la instalación la dispara la persona, a la vista, §15); si faltaba el
   cliente, la app lo busca cada 3 s y activa los perfiles al aparecer.
-  «Perfil → Actualizar la app…» corre `dotrino-terminal desktop update --current <versión> --exe <binario>`
+  «Herramientas → Actualizar dotrino-terminal y la app…» corre `dotrino-terminal desktop update --current <versión> --exe <binario>`
   igual, en otra TTY: la app no tiene red, así que baja, verifica contra la atestación e instala el
   cliente (`agent/desktop.js`, sobre `@dotrino/update`; `sudo apt-get install` / `sudo dnf install` si vino de un
   paquete, cambio atómico del binario si vino del tarball, el `.app` entero en macOS). Cliente ≥ 0.39.0.

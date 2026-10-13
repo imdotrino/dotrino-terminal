@@ -96,6 +96,22 @@ fn client_version(program: &Path) -> Option<(u32, u32, u32)> {
     Some((it.next()??, it.next()??, it.next()??))
 }
 
+/// La carpeta de npm en la que vive el cliente que la app arranca (`<prefijo>/lib/node_modules/
+/// @dotrino/terminal-agent`, o sin `lib` en Windows). Actualizar es instalar AHÍ: un
+/// `npm install -g` a secas va a la carpeta del npm del PATH, que puede ser otra (el instalador
+/// universal usa `~/.dotrino/npm`), y deja la versión nueva en una copia que nadie arranca.
+/// `None`: el cliente no cuelga de un `node_modules` (un checkout, `DOTRINO_TERMINAL_BIN`).
+fn client_prefix(program: &Path) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(program).ok()?;
+    // …/node_modules/@dotrino/terminal-agent/bin/terminal.js
+    let modules = real.parent()?.parent()?.parent()?.parent()?;
+    if modules.file_name()? != "node_modules" {
+        return None;
+    }
+    let up = modules.parent()?;
+    Some(if up.file_name().is_some_and(|n| n == "lib") { up.parent()?.to_path_buf() } else { up.to_path_buf() })
+}
+
 /// Un perfil, tal como lo cuenta `dotrino-terminal profiles --json`.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 struct Profile {
@@ -224,7 +240,33 @@ fn user_at_host() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_target, panel_lines};
+    use super::{client_prefix, drop_target, panel_lines};
+
+    #[test]
+    fn client_prefix_is_the_npm_folder_the_client_lives_in() {
+        let tmp = std::env::temp_dir().join(format!("dotrino-prefix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Como lo deja npm en Linux y macOS: <prefijo>/lib/node_modules/…, con el enlace en bin/.
+        let pkg = tmp.join("pre/lib/node_modules/@dotrino/terminal-agent/bin");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("terminal.js"), "").unwrap();
+        std::fs::create_dir_all(tmp.join("pre/bin")).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(pkg.join("terminal.js"), tmp.join("pre/bin/dotrino-terminal")).unwrap();
+            // Y un segundo enlace, como el de ~/.dotrino/bin del instalador universal.
+            std::fs::create_dir_all(tmp.join("bin")).unwrap();
+            std::os::unix::fs::symlink(tmp.join("pre/bin/dotrino-terminal"), tmp.join("bin/dotrino-terminal")).unwrap();
+            let want = std::fs::canonicalize(tmp.join("pre")).unwrap();
+            assert_eq!(client_prefix(&tmp.join("bin/dotrino-terminal")), Some(want));
+        }
+        // Un checkout no cuelga de ningún node_modules: no hay carpeta de npm que actualizar.
+        let co = tmp.join("repo/agent/bin");
+        std::fs::create_dir_all(&co).unwrap();
+        std::fs::write(co.join("terminal.js"), "").unwrap();
+        assert_eq!(client_prefix(&co.join("terminal.js")), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn the_green_dot_blinks_only_for_a_console_a_window_of_the_app_shows() {
@@ -870,6 +912,8 @@ enum Message {
     AgentsChecked(Option<Stale>),
     /// El aviso: cerrar todas las terminales para que el agente arranque con la versión nueva.
     RestartAgents,
+    /// Reiniciar el agente del perfil de esta ventana, vaya o no por detrás (menú Herramientas).
+    RestartAgent(window::Id),
     AgentsRestarted(Result<(), String>),
     /// Las ventanas cuyo cliente no cayó con el reinicio dejan de esperarlo.
     ReopenExpired,
@@ -1634,6 +1678,33 @@ impl App {
         Task::perform(async move { tokio::task::spawn_blocking(move || check_agents(launch)).await.ok().flatten() }, Message::AgentsChecked)
     }
 
+    /// Una orden de `dotrino-terminal` en ESTA ventana y en su propia TTY, con la salida a la
+    /// vista hasta Enter. `args` ya viene escapado para la shell.
+    fn client_aside(&mut self, id: window::Id, args: String, what: String) -> Task<Message> {
+        let Ok(launch) = self.launch.clone() else { return Task::none() };
+        let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
+        // Sin la carpeta del perfil en el entorno: la orden no corre dentro de ninguna consola
+        // del agente, aunque la app se haya abierto desde una.
+        let script = format!(
+            "PATH={}; export PATH; unset DOTRINO_TERMINAL_PROFILE_DIR; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
+            sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
+        );
+        self.run_aside(id, script, what)
+    }
+
+    /// El perfil de una ventana cambió de nombre mientras corría una orden: el nombre que tenía
+    /// ya no está y hay exactamente uno nuevo. Recarga los perfiles.
+    fn renamed_profile(&mut self, current: Option<&String>) -> Option<String> {
+        let before: Vec<String> = self.profiles.iter().map(|p| p.name.clone()).collect();
+        let _ = self.reload_profiles();
+        let names: Vec<String> = self.profiles.iter().map(|p| p.name.clone()).collect();
+        current.filter(|p| !names.contains(p))?;
+        match names.iter().filter(|n| !before.contains(n)).collect::<Vec<_>>().as_slice() {
+            [only] => Some((*only).clone()),
+            _ => None,
+        }
+    }
+
     fn run_aside(&mut self, id: window::Id, script: String, what: String) -> Task<Message> {
         let back = self.mine(id);
         let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
@@ -1720,7 +1791,7 @@ impl App {
     /// algo que arreglar) o solo un estado (no hay ninguna encendida).
     fn far_notice(&self, profile: &str) -> Option<(String, bool)> {
         if self.launch.is_ok() && !self.far_ready() {
-            return Some((t("Para ver las consolas de tus otras máquinas hace falta dotrino-terminal 0.38.0 o más reciente: actualízalo en Perfil → Actualizar dotrino-terminal y la app…", "Seeing the consoles of your other machines needs dotrino-terminal 0.38.0 or newer: update it in Profile → Update dotrino-terminal and the app…"), true));
+            return Some((t("Para ver las consolas de tus otras máquinas hace falta dotrino-terminal 0.38.0 o más reciente: actualízalo en Herramientas → Actualizar dotrino-terminal y la app…", "Seeing the consoles of your other machines needs dotrino-terminal 0.38.0 or newer: update it in Tools → Update dotrino-terminal and the app…"), true));
         }
         if let Some(why) = self.far_why.get(profile) {
             return Some((why.clone(), true));
@@ -2025,7 +2096,7 @@ impl App {
                 // Agente viejo: el botón se ve, apagado, y se dice por qué.
                 None => {
                     card = card
-                        .push(text(t("Actualiza dotrino-terminal (Perfil → Actualizar) para tener notas", "Update dotrino-terminal (Profile → Update) to have notes")).size(12).style(dim))
+                        .push(text(t("Actualiza dotrino-terminal (Herramientas → Actualizar) para tener notas", "Update dotrino-terminal (Tools → Update) to have notes")).size(12).style(dim))
                         .push(row![space::horizontal(), act(t("Agregar nota", "Add a note"), None)]);
                 }
                 Some("") => {
@@ -2218,16 +2289,7 @@ impl App {
             }
             Mode::Console => {
                 let current = win.profile.clone();
-                let before: Vec<String> = self.profiles.iter().map(|p| p.name.clone()).collect();
-                let _ = self.reload_profiles();
-                let names: Vec<String> = self.profiles.iter().map(|p| p.name.clone()).collect();
-                let renamed = current.as_ref().filter(|p| !names.contains(p)).and_then(|_| {
-                    match names.iter().filter(|n| !before.contains(n)).collect::<Vec<_>>().as_slice() {
-                        [only] => Some((*only).clone()),
-                        _ => None,
-                    }
-                });
-                match renamed {
+                match self.renamed_profile(current.as_ref()) {
                     Some(new) => {
                         if let Some(win) = self.windows.get_mut(&id) {
                             win.profile = Some(new);
@@ -2240,8 +2302,25 @@ impl App {
             }
             // Terminó la actualización: la ventana vuelve a su consola (o abre una).
             Mode::Updating { back, .. } => {
-                let back = back.clone();
+                let mut back = back.clone();
+                // La orden pudo renombrar el perfil o parar su agente (`rename`, `restart`): la
+                // ventana sigue en el perfil con su nombre nuevo, y solo vuelve a su consola si
+                // sigue viva. Engancharse a una que ya no existe cerraría la ventana.
+                let current = win.profile.clone();
+                let far = win.machine.is_some();
+                let renamed = self.renamed_profile(current.as_ref());
+                let profile = renamed.clone().or(current);
+                if let (false, Some(cid), Some(name)) = (far, back.clone(), profile) {
+                    let dir = self.profiles.iter().find(|p| p.name == name).map(|p| PathBuf::from(&p.dir));
+                    let alive = dir.and_then(|d| agent_list(&d)).is_some_and(|l| l.iter().any(|c| c.id == cid));
+                    if !alive {
+                        back = None;
+                    }
+                }
                 if let Some(win) = self.windows.get_mut(&id) {
+                    if let Some(new) = renamed {
+                        win.profile = Some(new);
+                    }
                     win.showing = back.clone();
                     win.attach = back;
                 }
@@ -2373,8 +2452,10 @@ impl App {
                 // Tras una actualización anterior sin reiniciar, Linux nombra el binario «… (deleted)».
                 let exe = std::env::current_exe().map(|p| p.to_string_lossy().trim_end_matches(" (deleted)").to_string()).unwrap_or_default();
                 let no_client = t("La app no se actualizó: hace falta dotrino-terminal para bajarla y comprobarla.", "The app was not updated: dotrino-terminal is needed to download and check it.");
+                // En la carpeta del cliente que la app arranca, no en la del npm del PATH.
+                let prefix = self.launch.as_ref().ok().and_then(|l| client_prefix(&l.program)).map(|p| format!(" --prefix {}", sh_quote(&p.to_string_lossy()))).unwrap_or_default();
                 let script = format!(
-                    "PATH={}; export PATH; if command -v npm >/dev/null; then echo '$ npm install -g {CLIENT_PKG}@latest'; npm install -g {CLIENT_PKG}@latest && echo && echo {} || {{ echo; echo {}; }}; else echo {}; fi; echo; if command -v dotrino-terminal >/dev/null; then echo '$ dotrino-terminal desktop update'; dotrino-terminal desktop update --current {VERSION} --exe {}; else echo {}; fi; echo; echo {}; read _",
+                    "PATH={}; export PATH; if command -v npm >/dev/null; then echo \"\\$ npm install -g{prefix} {CLIENT_PKG}@latest\"; npm install -g{prefix} {CLIENT_PKG}@latest && echo && echo {} || {{ echo; echo {}; }}; else echo {}; fi; echo; if command -v dotrino-terminal >/dev/null; then echo '$ dotrino-terminal desktop update'; dotrino-terminal desktop update --current {VERSION} --exe {}; else echo {}; fi; echo; echo {}; read _",
                     sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&exe), sh_quote(&no_client), sh_quote(&close)
                 );
                 self.awaiting_client = true;
@@ -2485,55 +2566,38 @@ impl App {
                 Task::none()
             }
             Message::Rename(id) => {
-                // Como «Instalar»: la orden queda escrita en TU consola, sin Enter, y el nombre
-                // nuevo lo completas tú. Al acabar, la ventana sigue en el perfil renombrado.
+                // En ESTA ventana y en otra TTY (dueño, 2026-10-13): antes la orden se escribía en
+                // tu consola, y si ahí corría un programa (un editor, Claude Code) se la comía él.
+                // El nombre nuevo lo pide la orden. Al acabar, la ventana sigue en el perfil renombrado.
                 let _ = self.reload_profiles();
-                if let Some(win) = self.windows.get_mut(&id) {
-                    if let (Some(from), Some(term)) = (win.profile.clone(), win.term.as_mut()) {
-                        let order = format!("dotrino-terminal rename {from} ");
-                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
-                    }
-                }
-                self.focus(id)
+                let Some(from) = self.windows.get(&id).and_then(|w| w.profile.clone()) else { return Task::none() };
+                self.client_aside(id, format!("rename {}", sh_quote(&from)), t("Renombrar", "Rename"))
             }
             Message::Lock(id, set) => {
-                // Como «Renombrar»: la orden corre en TU consola, a la vista. La clave se teclea
-                // ahí (no se ve) y vale al momento para los otros aparatos, sin reiniciar nada.
-                if let Some(win) = self.windows.get_mut(&id) {
-                    if let (Some(profile), Some(term)) = (win.profile.clone(), win.term.as_mut()) {
-                        let order = format!("dotrino-terminal lock{} --name {profile}\r", if set { "" } else { " --off" });
-                        term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(order.into_bytes())));
-                    }
-                }
-                self.focus(id)
+                // Como «Renombrar»: en su TTY. La clave se teclea ahí (no se ve) y vale al momento
+                // para los otros aparatos, sin reiniciar nada.
+                let Some(profile) = self.windows.get(&id).and_then(|w| w.profile.clone()) else { return Task::none() };
+                self.client_aside(id, format!("lock{} --name {}", if set { "" } else { " --off" }, sh_quote(&profile)), t("Clave", "Code"))
+            }
+            Message::RestartAgent(id) => {
+                // Reiniciar el agente de este perfil aunque esté al día. La orden dice cuántas
+                // consolas se cierran y pregunta antes; la ventana sigue, con una consola nueva.
+                let Some(profile) = self.windows.get(&id).and_then(|w| w.profile.clone()) else { return Task::none() };
+                self.client_aside(id, format!("restart --name {}", sh_quote(&profile)), t("Reiniciar el agente", "Restart the agent"))
             }
             Message::Vscode(id, set) => {
                 // Como «Actualizar»: en ESTA ventana y en otra TTY, con la salida a la vista hasta
                 // Enter. Quitarlo no depende del perfil.
-                let Ok(launch) = self.launch.clone() else { return Task::none() };
                 let profile = self.windows.get(&id).and_then(|w| w.profile.clone());
                 let args = match (set, profile) {
                     (true, Some(p)) => format!("vscode --name {}", sh_quote(&p)),
                     (true, None) => "vscode".to_string(),
                     (false, _) => "vscode --off".to_string(),
                 };
-                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
-                let script = format!(
-                    "PATH={}; export PATH; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
-                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
-                );
-                self.run_aside(id, script, "VS Code".to_string())
+                self.client_aside(id, args, "VS Code".to_string())
             }
             Message::Claude(id, set) => {
-                // Como VS Code: en ESTA ventana y en otra TTY, con la salida a la vista hasta Enter.
-                let Ok(launch) = self.launch.clone() else { return Task::none() };
-                let args = if set { "claude" } else { "claude --off" };
-                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
-                let script = format!(
-                    "PATH={}; export PATH; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
-                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
-                );
-                self.run_aside(id, script, "Claude Code".to_string())
+                self.client_aside(id, if set { "claude" } else { "claude --off" }.to_string(), "Claude Code".to_string())
             }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
@@ -2957,31 +3021,42 @@ impl App {
         let can_lock = !linking && self.launch.is_ok() && win.profile.is_some() && win.term.is_some();
         profiles.push(Item::new(entry(t("Poner o cambiar la clave…", "Set or change the code…"), "", can_lock.then_some(Message::Lock(id, true)))));
         profiles.push(Item::new(entry(t("Quitar la clave", "Remove the code"), "", can_lock.then_some(Message::Lock(id, false)))));
-        // La terminal embebida de VS Code (y variantes) abre consolas de este perfil.
-        let vscode_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= VSCODE_CLIENT);
-        let can_vscode = !linking && vscode_ready;
-        profiles.push(Item::new(entry(t("Usar en la terminal de VS Code", "Use in VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, true)))));
-        profiles.push(Item::new(entry(t("Quitar de la terminal de VS Code", "Remove from VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, false)))));
-        if self.launch.is_ok() && !vscode_ready {
-            profiles.push(Item::new(note(t("Para VS Code hace falta dotrino-terminal 0.20.0 o más reciente: actualízalo aquí abajo.", "VS Code needs dotrino-terminal 0.20.0 or newer: update it just below."))));
-        }
-        // Claude Code mantiene la tarjeta «de qué va» de la consola en la que corre.
-        let claude_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= CLAUDE_CLIENT);
-        let can_claude = !linking && claude_ready;
-        profiles.push(Item::new(entry(t("Notas con Claude Code: instalar", "Notes with Claude Code: install"), "", can_claude.then_some(Message::Claude(id, true)))));
-        profiles.push(Item::new(entry(t("Notas con Claude Code: quitar", "Notes with Claude Code: remove"), "", can_claude.then_some(Message::Claude(id, false)))));
-        if self.launch.is_ok() && !claude_ready {
-            profiles.push(Item::new(note(t("Para las notas con Claude Code hace falta dotrino-terminal 0.44.0 o más reciente: actualízalo aquí abajo.", "Notes with Claude Code need dotrino-terminal 0.44.0 or newer: update it just below."))));
-        }
         // Sin el cliente no hay perfiles ni enrolar: se ve deshabilitado, y la razón a la vista.
         profiles.push(Item::new(entry(t("Enrolar…", "Enroll…"), "", (!linking && self.launch.is_ok()).then_some(Message::Enroll(id)))));
         if let Err(why) = &self.launch {
             profiles.push(Item::new(note(why.clone())));
         }
+        // HERRAMIENTAS: las órdenes que no son del perfil (dueño, 2026-10-13: eran tantas en
+        // «Perfil» que van en un menú aparte). Cada una corre en su propia TTY.
+        let mut tools = Vec::new();
+        // Reiniciar el agente de este perfil, vaya o no por detrás de lo instalado.
+        let agents_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= AGENTS_CLIENT);
+        let can_restart = !linking && agents_ready && win.profile.is_some() && win.machine.is_none();
+        tools.push(Item::new(entry(t("Reiniciar el agente…", "Restart the agent…"), "", can_restart.then_some(Message::RestartAgent(id)))));
+        if self.launch.is_ok() && !agents_ready {
+            tools.push(Item::new(note(t("Para reiniciar el agente desde aquí hace falta dotrino-terminal 0.45.0 o más reciente: actualízalo aquí abajo.", "Restarting the agent from here needs dotrino-terminal 0.45.0 or newer: update it just below."))));
+        }
+        tools.push(Item::new(separator()));
+        // La terminal embebida de VS Code (y variantes) abre consolas de este perfil.
+        let vscode_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= VSCODE_CLIENT);
+        let can_vscode = !linking && vscode_ready;
+        tools.push(Item::new(entry(t("Usar en la terminal de VS Code", "Use in VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, true)))));
+        tools.push(Item::new(entry(t("Quitar de la terminal de VS Code", "Remove from VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, false)))));
+        if self.launch.is_ok() && !vscode_ready {
+            tools.push(Item::new(note(t("Para VS Code hace falta dotrino-terminal 0.20.0 o más reciente: actualízalo aquí abajo.", "VS Code needs dotrino-terminal 0.20.0 or newer: update it just below."))));
+        }
+        // Claude Code mantiene la tarjeta «de qué va» de la consola en la que corre.
+        let claude_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= CLAUDE_CLIENT);
+        let can_claude = !linking && claude_ready;
+        tools.push(Item::new(entry(t("Notas con Claude Code: instalar", "Notes with Claude Code: install"), "", can_claude.then_some(Message::Claude(id, true)))));
+        tools.push(Item::new(entry(t("Notas con Claude Code: quitar", "Notes with Claude Code: remove"), "", can_claude.then_some(Message::Claude(id, false)))));
+        if self.launch.is_ok() && !claude_ready {
+            tools.push(Item::new(note(t("Para las notas con Claude Code hace falta dotrino-terminal 0.44.0 o más reciente: actualízalo aquí abajo.", "Notes with Claude Code need dotrino-terminal 0.44.0 or newer: update it just below."))));
+        }
+        tools.push(Item::new(separator()));
         // Una sola acción: el cliente y, después, la app.
         let install_label = if self.launch.is_ok() { t("Actualizar dotrino-terminal y la app…", "Update dotrino-terminal and the app…") } else { t("Instalar dotrino-terminal…", "Install dotrino-terminal…") };
-        // Corre en una ventana aparte.
-        profiles.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
+        tools.push(Item::new(entry(install_label, "", (!linking).then_some(Message::InstallClient(id)))));
         let view_menu = Menu::new(vec![
             Item::new(entry(
                 format!("{}{}", if win.sidebar { "✓  " } else { "     " }, t("Panel de consolas", "Consoles panel")),
@@ -3008,6 +3083,7 @@ impl App {
             root(t("Editar", "Edit"), edit),
             root(t("Ver", "View"), view_menu),
             root(t("Perfil", "Profile"), Menu::new(profiles)),
+            root(t("Herramientas", "Tools"), Menu::new(tools)),
             root(t("Ayuda", "Help"), help),
         ])
         .spacing(2.0)
@@ -3225,7 +3301,7 @@ impl App {
         };
         // Con un cliente viejo, nada de lo que cambia de consola funciona: deshabilitado, y por qué.
         let ready = self.panel_ready();
-        let why = t("Actualiza dotrino-terminal (Perfil → Actualizar) para usar el panel", "Update dotrino-terminal (Profile → Update) to use the panel");
+        let why = t("Actualiza dotrino-terminal (Herramientas → Actualizar) para usar el panel", "Update dotrino-terminal (Tools → Update) to use the panel");
         let act = |m: Message| ready.then_some(m);
         let centered = |s: String, size: u32| text(s).size(size).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
         // ⤢ actúa sobre la consola de ESTA ventana: fija su tamaño a esta ventana, o lo suelta.
@@ -3236,7 +3312,7 @@ impl App {
         // mientras la de otra máquina tarda en llegar.
         let can_pin = self.pin_ready() && self.windows.get(&id).is_some_and(|w| matches!(w.mode, Mode::Console) && w.profile.is_some() && w.term.is_some());
         let pin_tip = match cur {
-            _ if !self.pin_ready() => t("Actualiza dotrino-terminal (Perfil → Actualizar) para elegir el tamaño", "Update dotrino-terminal (Profile → Update) to choose the size"),
+            _ if !self.pin_ready() => t("Actualiza dotrino-terminal (Herramientas → Actualizar) para elegir el tamaño", "Update dotrino-terminal (Tools → Update) to choose the size"),
             Some((n, _)) if pin_on => format!("{} {n} {}", t("Soltar: la consola", "Release: console"), t("deja de usar el tamaño de esta ventana", "stops using this window's size")),
             Some((n, _)) => format!("{} {n}", t("Usar el tamaño de esta ventana en la consola", "Use this window's size for console")),
             None => t("Usar el tamaño de esta ventana", "Use this window's size"),
