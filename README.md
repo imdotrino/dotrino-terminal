@@ -104,8 +104,9 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   nueva (o un cambio de perfil) cuando no hay ninguna libre. En el panel (plegado y abierto),
   un **punto verde** en la esquina superior derecha de una consola dice que está abierta en una
   ventana de ESTA máquina (`watchers` con `origin: 'local'`: una ventana de la app, o la terminal de
-  VS Code); lo remoto no cuenta. Parpadea solo si la muestra una ventana de la app (etiqueta
-  `desktop-…`), que es la que puede darla por vista. En una consola de OTRA máquina
+  VS Code); lo remoto no cuenta. Es verde si la muestra una ventana de la app (etiqueta
+  `desktop-…`) y azul si solo la atiende otra cosa (VS Code). Parpadea solo el verde: la ventana
+  de la app es la que puede darla por vista. En una consola de OTRA máquina
   el punto sale igual si la muestra una ventana de aquí (allí es `remote`, con la etiqueta
   `desktop-<pid>-…` de un proceso de la app vivo en esta máquina). El punto parpadea si la consola terminó sin atender (`doneAt`) y
   deja de hacerlo cuando su ventana tiene el foco (`App::seen`, solo de la app: el borde verde de

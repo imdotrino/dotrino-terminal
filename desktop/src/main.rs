@@ -425,6 +425,9 @@ const DONE_COLOR: Color = Color::from_rgb(0.478, 0.843, 0.761);
 
 /// Verde = atendida: abierta en una ventana de ESTA máquina (de la app, o la terminal de VS Code).
 const OPEN_COLOR: Color = Color::from_rgb(0.298, 0.851, 0.392);
+/// Azul = atendida solo fuera de la app (la terminal de VS Code): se distingue de las que tienen
+/// ventana de la app, a la que se puede ir (dueño, 2026-10-13).
+const OUTSIDE_COLOR: Color = Color::from_rgb(0.310, 0.620, 1.0);
 
 impl ConsoleInfo {
     /// ¿La muestra alguna ventana de esta máquina (esta incluida)? Lo abierto en otro aparato no cuenta.
@@ -464,12 +467,12 @@ fn window_of_this_machine(tag: &str) -> bool {
 /// El cuadrito de una consola con un punto verde en su esquina superior derecha cuando `on`.
 /// `faint`: el medio ciclo apagado del parpadeo (terminó y nadie la ha atendido).
 /// El punto no recibe el ratón: los clics llegan al botón de debajo.
-fn dotted<'a>(under: Element<'a, Message>, on: bool, faint: bool) -> Element<'a, Message> {
+fn dotted<'a>(under: Element<'a, Message>, on: bool, faint: bool, color: Color) -> Element<'a, Message> {
     if !on {
         return under;
     }
     // 5 px, a 3 del borde: en la esquina, sin tocar el borde ni montarse sobre el número.
-    let dot = container(space()).width(5).height(5).style(move |_: &Theme| container::Style { background: Some(OPEN_COLOR.scale_alpha(if faint { 0.15 } else { 1.0 }).into()), border: Border::default().rounded(2.5), ..Default::default() });
+    let dot = container(space()).width(5).height(5).style(move |_: &Theme| container::Style { background: Some(color.scale_alpha(if faint { 0.15 } else { 1.0 }).into()), border: Border::default().rounded(2.5), ..Default::default() });
     iced::widget::stack![under, container(dot).width(Length::Fill).align_x(iced::alignment::Horizontal::Right).padding(3)].into()
 }
 
@@ -2944,7 +2947,7 @@ impl App {
                 // El punto verde: una consola atendida en ESTA máquina (una ventana de la app, o la
                 // terminal de VS Code). Parpadea solo si la muestra una ventana de la app.
                 let open = is_mine || c.open_in_a_window();
-                let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c) && c.in_an_app_window())).center_x(Length::Fill).into();
+                let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c) && c.in_an_app_window(), if is_mine || c.in_an_app_window() { OPEN_COLOR } else { OUTSIDE_COLOR })).center_x(Length::Fill).into();
                 let b = self.console_menu(id, None, c.id.clone(), is_mine, b);
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
@@ -2978,7 +2981,7 @@ impl App {
                     let tip = std::iter::once(label.clone()).chain([host, dir, name].into_iter().flatten()).collect::<Vec<_>>().join("\n");
                     let is_mine = here.as_deref() == Some(m.id.as_str()) && mine.as_deref() == Some(c.id.as_str());
                     let b = button(centered(format!("{n}"), 12)).width(24).padding([4, 0]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), Some(c.id.clone()))));
-                    let b: Element<'_, Message> = container(dotted(b.into(), is_mine || c.attended_from_here(), self.blink_off && self.blinks(c))).center_x(Length::Fill).into();
+                    let b: Element<'_, Message> = container(dotted(b.into(), is_mine || c.attended_from_here(), self.blink_off && self.blinks(c), OPEN_COLOR)).center_x(Length::Fill).into();
                     let b = self.console_menu(id, Some(m.id.clone()), c.id.clone(), is_mine, b);
                     let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                     strip = strip.push(arrowed(b, is_mine));
@@ -3064,7 +3067,7 @@ impl App {
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, None, c.id.clone()));
-            let pick = dotted(pick.into(), is_mine || c.open_in_a_window(), self.blink_off && self.blinks(c) && c.in_an_app_window());
+            let pick = dotted(pick.into(), is_mine || c.open_in_a_window(), self.blink_off && self.blinks(c) && c.in_an_app_window(), if is_mine || c.in_an_app_window() { OPEN_COLOR } else { OUTSIDE_COLOR });
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             let entry_row = self.console_menu(id, None, c.id.clone(), is_mine, entry_row);
             let entry_row = if local { draggable(&c.id, entry_row, Length::Fill) } else { entry_row };
@@ -3114,7 +3117,7 @@ impl App {
                 let label = label.push(text(where_).size(11).style(dim));
                 let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), Some(c.id.clone()))));
                 let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, Some(m.id.clone()), c.id.clone()));
-                let pick = dotted(pick.into(), is_mine || c.attended_from_here(), self.blink_off && self.blinks(c));
+                let pick = dotted(pick.into(), is_mine || c.attended_from_here(), self.blink_off && self.blinks(c), OPEN_COLOR);
                 let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
                 let entry_row = self.console_menu(id, Some(m.id.clone()), c.id.clone(), is_mine, entry_row);
                 items = items.push(arrowed(container(entry_row).padding(iced::Padding { right: 4.0, ..Default::default() }).into(), is_mine));
