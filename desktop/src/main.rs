@@ -889,6 +889,7 @@ fn terminal_font() -> iced_term::settings::FontSettings {
     } else {
         ("DejaVu Sans Mono".to_string(), 9.0)
     });
+    let family = installed_monospace(&family);
     iced_term::settings::FontSettings {
         size: points * 96.0 / 72.0,
         // Interlineado: con DejaVu 9 pt, XFCE Terminal deja 15 px por línea (12 × 1,25).
@@ -896,6 +897,33 @@ fn terminal_font() -> iced_term::settings::FontSettings {
         scale_factor: 1.25,
         // iced pide un nombre `'static`: se crea una vez por proceso.
         font_type: iced::Font::with_name(Box::leak(family.into_boxed_str())),
+    }
+}
+
+/// La familia que de verdad se va a pintar. El escritorio suele decir «Monospace», que es un alias
+/// de fontconfig y no una familia: pasado tal cual, el motor de texto no lo encuentra y pinta una
+/// fuente proporcional en la rejilla de la terminal (letras con huecos entre ellas). Lo mismo si la
+/// familia pedida no está instalada. Se pregunta a fontconfig, como hace la terminal del sistema:
+/// la familia pedida si existe y es monoespaciada y, si no, la monoespaciada del sistema.
+/// Sin `fc-match` (macOS) se deja el nombre como vino.
+fn installed_monospace(family: &str) -> String {
+    let ask = |pattern: &str| -> Option<(String, bool)> {
+        let out = Command::new("fc-match").args(["-f", "%{family[0]}|%{spacing}", pattern]).output().ok()?;
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let (name, spacing) = s.split_once('|')?;
+        // 90 = dual, 100 = mono, 110 = celda: todas valen para una rejilla.
+        (out.status.success() && !name.is_empty()).then(|| (name.to_string(), spacing.parse::<u32>().is_ok_and(|n| n >= 90)))
+    };
+    match ask(family) {
+        Some((name, true)) => name,
+        Some(_) => match ask("monospace") {
+            Some((name, _)) => {
+                log(&format!("font: {family:?} is not an installed monospace family, using {name:?}"));
+                name
+            }
+            None => family.to_string(),
+        },
+        None => family.to_string(),
     }
 }
 
