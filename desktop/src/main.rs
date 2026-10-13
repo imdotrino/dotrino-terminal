@@ -792,6 +792,8 @@ struct App {
     /// Agentes que van por detrás de lo instalado: se ofrece cerrarlos cuando no hay otro aviso
     /// delante (primero actualizar, después reiniciar la app, y al final esto).
     stale: Option<Stale>,
+    /// Hay un menú de clic secundario abierto: los hints del panel no se pintan encima.
+    menu_open: bool,
     /// Cómo era el binario de la app al arrancar: si cambia tras actualizar, hay versión nueva
     /// instalada y se ofrece reiniciar.
     exe_stamp: Option<(u64, std::time::SystemTime)>,
@@ -869,6 +871,8 @@ enum Message {
     AgentsRestarted(Result<(), String>),
     /// Las ventanas cuyo cliente no cayó con el reinicio dejan de esperarlo.
     ReopenExpired,
+    /// Se abrió un menú de clic secundario (lo cierra el siguiente clic).
+    MenuOpen,
     /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
     CheckClient,
     Copy(window::Id),
@@ -1424,7 +1428,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, stale: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, applying: HashMap::new(), rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, stale: None, menu_open: false, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, applying: HashMap::new(), rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -2429,6 +2433,10 @@ impl App {
                     }
                 }
             }
+            Message::MenuOpen => {
+                self.menu_open = true;
+                Task::none()
+            }
             Message::ReopenExpired => {
                 for win in self.windows.values_mut() {
                     if std::mem::take(&mut win.reopening) {
@@ -2819,6 +2827,7 @@ impl App {
                 Task::none()
             }
             Message::MouseDown(id) => {
+                self.menu_open = false;
                 self.drag = self.hover.clone().filter(|(w, _)| *w == id).map(|(win, cid)| Drag { win, over: cid.clone(), id: cid });
                 Task::none()
             }
@@ -3233,7 +3242,6 @@ impl App {
                 // terminal de VS Code). Parpadea solo si la muestra una ventana de la app.
                 let open = is_mine || c.open_in_a_window();
                 let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c) && c.in_an_app_window(), if is_mine || c.in_an_app_window() { OPEN_COLOR } else { OUTSIDE_COLOR })).center_x(Length::Fill).into();
-                let b = self.console_menu(id, None, c.id.clone(), is_mine, b);
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
                     Act::Done => format!("{tip} · {}", t("terminó", "finished")),
@@ -3241,7 +3249,10 @@ impl App {
                 };
                 let tip = if c.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref() != Some(my_tag.as_str())) { format!("{tip} · {}", t("abierta en otra ventana", "open in another window")) } else { tip };
                 let tip = if ready { tip } else { format!("{tip}\n{why}") };
-                let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                // El menú va POR FUERA del hint: con el menú abierto el hint se quita sin que el
+                // menú pierda su estado.
+                let tipped: Element<'_, Message> = if self.menu_open { b } else { iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into() };
+                let tipped = self.console_menu(id, None, c.id.clone(), is_mine, tipped);
                 strip = strip.push(arrowed(if local { draggable(&c.id, tipped, Length::Fixed(24.0)) } else { tipped }, is_mine));
             }
             // Las otras máquinas: sus iniciales (de dónde son las consolas; no es un botón), un «+»
@@ -3268,8 +3279,8 @@ impl App {
                     let is_mine = here.as_deref() == Some(m.id.as_str()) && mine.as_deref() == Some(c.id.as_str());
                     let b = button(centered(format!("{n}"), 12)).width(24).padding([4, 0]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), Some(c.id.clone()))));
                     let b: Element<'_, Message> = container(dotted(b.into(), is_mine || c.attended_from_here(), self.blink_off && self.blinks(c), OPEN_COLOR)).center_x(Length::Fill).into();
+                    let b: Element<'_, Message> = if self.menu_open { b } else { iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into() };
                     let b = self.console_menu(id, Some(m.id.clone()), c.id.clone(), is_mine, b);
-                    let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                     strip = strip.push(arrowed(b, is_mine));
                 }
             }
@@ -3474,6 +3485,8 @@ fn shortcut(event: Event, _status: iced::event::Status, id: window::Id) -> Optio
     match event {
         Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => return Some(Message::MouseDown(id)),
         Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => return Some(Message::MouseUp),
+        // El clic secundario abre un menú: mientras está abierto, los hints del panel no salen.
+        Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Right)) => return Some(Message::MenuOpen),
         Event::Window(window::Event::Focused) => return Some(Message::Focused(id)),
         Event::Window(window::Event::Unfocused) => return Some(Message::Unfocused(id)),
         _ => {}
