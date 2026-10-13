@@ -53,6 +53,7 @@ dotrino-terminal vscode [--name <n>]     # la terminal embebida de VS Code abre 
 dotrino-terminal claude                  # Claude Code mantiene la tarjeta de su consola: skill + hooks en ~/.claude (--off lo deshace, --status lo dice)
 dotrino-terminal desktop update [--check] # actualiza la app de escritorio: baja, verifica la firma e instala
 dotrino-terminal agents [--json]          # con qué versión corre el agente de cada perfil
+dotrino-terminal network [--name <n>]     # el uso de red del agente: por dónde va cada conexión (directo, TURN o el proxio) y cuánto pasó
 dotrino-terminal restart [--name <n>]     # para el agente para que arranque con la versión instalada (cierra sus consolas; --stale: solo los atrasados)
 dotrino-terminal service install|uninstall|status [--name <n>]  # el agente como servicio del usuario
 ```

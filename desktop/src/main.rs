@@ -83,6 +83,8 @@ const VSCODE_CLIENT: (u32, u32, u32) = (0, 20, 0);
 const CLAUDE_CLIENT: (u32, u32, u32) = (0, 44, 0);
 /// El primer cliente con `agents` y `restart`: dice qué versión corre cada agente y lo reinicia.
 const AGENTS_CLIENT: (u32, u32, u32) = (0, 45, 0);
+/// El primer cliente con `network`: el uso de red del agente.
+const NET_CLIENT: (u32, u32, u32) = (0, 46, 0);
 
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
@@ -941,6 +943,10 @@ enum Message {
     NoteSelectAll(window::Id),
     /// Quitar la tarea que puso el programa en la consola de la ventana.
     TaskClear(window::Id),
+    /// Borrar la nota propia de la consola de la ventana.
+    NoteClear(window::Id),
+    /// Ayuda → el uso de red del agente, en otra TTY de esta ventana.
+    Network(window::Id),
     Terminal(iced_term::Event),
 }
 
@@ -2030,8 +2036,14 @@ impl App {
                         Some((_, content)) => reading(id, Part::Note, content, 220.0),
                         None => text(note.to_string()).size(12).width(Length::Fill).into(),
                     };
+                    // Como la tarea: una × la borra de una vez, sin pasar por el editor.
+                    let del = iced::widget::tooltip(
+                        button(text("×").size(12)).padding([0, 7]).style(round).on_press(Message::NoteClear(id)),
+                        container(text(t("Borrar la nota", "Delete the note")).size(12)).padding(6).style(container::rounded_box),
+                        iced::widget::tooltip::Position::Left,
+                    );
                     card = card
-                        .push(body)
+                        .push(row![body, del].spacing(6))
                         .push(row![space::horizontal(), act(t("Editar", "Edit"), Some(Message::NoteEdit(id)))]);
                 }
             }
@@ -2679,6 +2691,33 @@ impl App {
                 }
                 Task::batch([later(300, Message::Poll), self.focus(id)])
             }
+            Message::NoteClear(id) => {
+                let Some(cid) = self.my_console(id).map(|c| c.id.clone()) else { return Task::none() };
+                self.tell(id, serde_json::json!({ "type": "note", "id": cid, "text": "" }));
+                if let Some(scope) = self.windows.get(&id).and_then(|w| w.scope()) {
+                    if let Some(c) = self.consoles.get_mut(&scope).and_then(|l| l.iter_mut().find(|c| c.id == cid)) {
+                        c.note = Some(String::new());
+                    }
+                }
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.note_read = None;
+                }
+                Task::batch([later(300, Message::Poll), self.focus(id)])
+            }
+            Message::Network(id) => {
+                // Como VS Code: en ESTA ventana y en otra TTY, con la salida a la vista hasta Enter.
+                let Ok(launch) = self.launch.clone() else { return Task::none() };
+                let args = match self.windows.get(&id).and_then(|w| w.profile.clone()) {
+                    Some(p) => format!("network --name {}", sh_quote(&p)),
+                    None => "network".to_string(),
+                };
+                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
+                let script = format!(
+                    "PATH={}; export PATH; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
+                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
+                );
+                self.run_aside(id, script, t("Red", "Network"))
+            }
             Message::NoteSave(id) => {
                 let Some((cid, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.take()) else { return Task::none() };
                 let note = content.text().trim_end().to_string();
@@ -2953,11 +2992,14 @@ impl App {
             Item::new(entry(
                 format!("     {}", t("Usar el tamaño de esta ventana", "Use this window's size")),
                 "",
-                (self.pin_ready() && win.profile.is_some() && self.mine(id).is_some()).then_some(Message::TogglePin(id)),
+                (self.pin_ready() && win.profile.is_some() && matches!(win.mode, Mode::Console) && win.term.is_some()).then_some(Message::TogglePin(id)),
             )),
         ]);
+        let net_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= NET_CLIENT) && win.profile.is_some();
         let help = Menu::new(vec![
             Item::new(entry(t("Cómo se usa", "How to use it"), "", Some(Message::Help))),
+            // Por dónde va cada conexión con los otros aparatos (cliente ≥ 0.46.0).
+            Item::new(entry(t("Uso de red…", "Network use…"), "", net_ready.then_some(Message::Network(id)))),
             Item::new(entry(format!("Dotrino Terminal {VERSION}"), "", None)),
         ]);
         let root = |label: String, menu: Menu<'static, Message, Theme, iced::Renderer>| Item::with_menu(top(label), menu.width(300.0).offset(2.0).padding(4));
@@ -3189,7 +3231,10 @@ impl App {
         // ⤢ actúa sobre la consola de ESTA ventana: fija su tamaño a esta ventana, o lo suelta.
         let cur = shown.iter().enumerate().find(|(_, c)| mine.as_deref() == Some(c.id.as_str())).map(|(i, c)| (c.n.map(|n| n as usize).unwrap_or(i + 1), c));
         let pin_on = self.pinned_here(id);
-        let can_pin = self.pin_ready() && cur.is_some();
+        // Basta con que la ventana tenga una consola: la orden va a su cliente. Esperar a verla en
+        // la lista dejaba el botón apagado en una máquina con clave (su lista no se puede leer) y
+        // mientras la de otra máquina tarda en llegar.
+        let can_pin = self.pin_ready() && self.windows.get(&id).is_some_and(|w| matches!(w.mode, Mode::Console) && w.profile.is_some() && w.term.is_some());
         let pin_tip = match cur {
             _ if !self.pin_ready() => t("Actualiza dotrino-terminal (Perfil → Actualizar) para elegir el tamaño", "Update dotrino-terminal (Profile → Update) to choose the size"),
             Some((n, _)) if pin_on => format!("{} {n} {}", t("Soltar: la consola", "Release: console"), t("deja de usar el tamaño de esta ventana", "stops using this window's size")),

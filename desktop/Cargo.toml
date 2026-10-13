@@ -1,6 +1,6 @@
 [package]
 name = "dotrino-terminal-desktop"
-version = "0.2.68"
+version = "0.2.69"
 edition = "2024"
 description = "Dotrino Terminal: terminal windows (Linux, macOS) whose consoles you can also open from your other devices."
 license = "MIT"
@@ -21,6 +21,8 @@ tokio = { version = "1", features = ["time"] }
 [patch.crates-io]
 # Un método público más (ver vendor/README.md).
 iced_term = { path = "vendor/iced_term" }
+# Un pánico al dar foco con un menú de clic secundario abierto (ver vendor/README.md).
+iced_aw = { path = "vendor/iced_aw" }
 
 [profile.release]
 lto = "thin"

@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "dotrino-terminal-desktop"
-version = "0.2.68"
+version = "0.2.69"
 dependencies = [
  "iced",
  "iced_aw",
@@ -1433,8 +1433,6 @@ dependencies = [
 [[package]]
 name = "iced_aw"
 version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59b7f923642b024c415150b70ef84ee5c11626e3b0af73b954d817d573bcd0a4"
 dependencies = [
  "cfg-if",
  "iced_core",

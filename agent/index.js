@@ -38,6 +38,8 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { startRemoteAgent } from '@dotrino/remote-agent/agent'
 import { dataDir, loadLink, LABEL } from './link.js'
+import { listTransports, netReport } from '@dotrino/proxy-client'
+import { shortId } from './far.js'
 import { ConsoleHub, REPLAY_CHUNK, isTyped } from './consoles.js'
 import { listenLocal } from './local.js'
 import { makeGate } from './access.js'
@@ -257,6 +259,20 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
  * otras máquinas hay, y una orden suelta para una de ellas.
  * Exportada para las pruebas.
  */
+/**
+ * El uso de red de este agente: cada conexión con otro aparato, por qué camino va (directo,
+ * TURN o el proxio) y cuánto pasó por cada uno. El mismo informe que el modal de red del topbar.
+ * Una máquina de la cuenta sale con su nombre; cualquier otro aparato, con su id.
+ */
+export async function netOf (far) {
+  const transports = await Promise.all(listTransports().map(async (c) => {
+    try { return await c.stats() } catch (e) { return { url: c.url, error: e?.message || String(e) } }
+  }))
+  const names = new Map(far.known().map((m) => [m.id, m.name ? `${m.name} ${m.id}` : m.id]))
+  const label = async (pubkey) => { const id = await shortId(pubkey); return names.get(id) || id }
+  return { transports, report: await netReport(transports, { label }) }
+}
+
 export function serveLocal (session, hub, far, { uploadsDir = null } = {}) {
   const h = { message: [], close: [] }
   const inner = { device: null, send: (p) => session.send(p), on (ev, cb) { h[ev]?.push(cb); return this } }
@@ -265,6 +281,7 @@ export function serveLocal (session, hub, far, { uploadsDir = null } = {}) {
   session.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return
     if (mode !== 'far' && msg.type === 'machines') { far.list().then((list) => session.send({ type: 'machines', list })).catch(failed); return }
+    if (mode !== 'far' && msg.type === 'net') { netOf(far).then((r) => session.send({ type: 'net', ...r })).catch(failed); return }
     if (mode !== 'far' && msg.type === 'far') { far.send(msg.machine, msg.msg).catch(failed); return }
     if (!mode) {
       if (msg.type === 'via') { mode = 'far'; far.via(inner, msg.machine).catch(failed); return }

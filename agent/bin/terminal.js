@@ -20,6 +20,7 @@
  *   dotrino-terminal updates [--json] [--desktop <versión>]
  *                                              qué versiones nuevas hay (del cliente y de la app)
  *   dotrino-terminal agents [--json]           qué agente corre en cada perfil y con qué versión
+ *   dotrino-terminal network [--name <n>] [--json]  el uso de red del agente: por dónde va cada conexión
  *   dotrino-terminal restart [--name <n>] [--stale] [--yes]
  *                                              para el agente (cierra sus consolas) para que arranque
  *                                              con la versión instalada
@@ -97,6 +98,8 @@ if (args.includes('-h') || args.includes('--help')) {
                                              (--desktop <versión> es la app que tienes; no instala nada)
   dotrino-terminal agents [--json]           qué agente corre en cada perfil, con qué versión y si va
                                              por detrás de la instalada
+  dotrino-terminal network [--name <n>]      el uso de red del agente: por dónde va cada conexión con
+                                             tus otros aparatos (directo, TURN o el proxy) y cuánto pasó
   dotrino-terminal restart [--name <n>]      para el agente para que arranque con la versión instalada
                                              (cierra TODAS sus consolas; --stale: solo los que van por
                                              detrás, en todos los perfiles; --yes no pregunta)
@@ -145,6 +148,8 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
                                              the app (--desktop <version> is the app you have; installs nothing)
   dotrino-terminal agents [--json]           which agent runs in each profile, its version and whether
                                              it is behind the installed one
+  dotrino-terminal network [--name <n>]      the agent's network use: which path each connection with
+                                             your other devices takes (direct, TURN or the proxy) and how much
   dotrino-terminal restart [--name <n>]      stop the agent so it starts with the installed version
                                              (closes ALL its consoles; --stale: only the ones behind,
                                              in every profile; --yes does not ask)
@@ -462,6 +467,31 @@ async function restart () {
       ? t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Su servicio lo vuelve a levantar con la ${VERSION}.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). Its service starts it again with ${VERSION}.`)
       : t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Arranca con la ${VERSION} al abrir una ventana.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). It starts with ${VERSION} when you open a window.`))
   }
+}
+
+/**
+ * `dotrino-terminal network`: el uso de red del agente de este perfil. Por dónde va cada conexión
+ * con tus otros aparatos (directo, TURN o el proxio) y cuánto pasó por cada camino.
+ */
+async function network () {
+  const asked = opt('--name')
+  if (asked !== undefined && !isValidName(asked)) die(t(`nombre de perfil no válido: ${asked}`, `invalid profile name: ${asked}`))
+  const { dir } = resolveInstance(LABEL, asked)
+  let conn
+  try { conn = await connectLocal(dir) } catch (e) {
+    if (e.code !== 'ENOAGENT') throw e
+    console.log(t('Este perfil no tiene un agente corriendo: no hay conexiones.', 'This profile has no agent running: there are no connections.'))
+    return
+  }
+  const r = await Promise.race([request(conn, { type: 'net' }, 'net'), new Promise((resolve) => setTimeout(() => resolve(null), 5000))])
+  conn.close()
+  if (!r) die(t('el agente que corre es anterior a la 0.46.0 y no da su uso de red. Reinícialo con la versión nueva: dotrino-terminal restart', 'the running agent predates 0.46.0 and does not report its network use. Restart it with the new version: dotrino-terminal restart'))
+  if (r.type === 'fail') die(`${r.message} (${r.code})`)
+  if (args.includes('--json')) { console.log(JSON.stringify(r.transports)); return }
+  console.log(t('Esta ventana ↔ el agente de esta máquina: socket local (no toca la red).', 'This window ↔ this machine\'s agent: local socket (never touches the network).'))
+  console.log(t('El agente ↔ tus otros aparatos (route: direct = WebRTC directo, turn = WebRTC por TURN, proxy = por el proxy):\n', 'The agent ↔ your other devices (route: direct = direct WebRTC, turn = WebRTC via TURN, proxy = through the proxy):\n'))
+  process.stdout.write(r.report)
+  console.log(t('\nBytes del contenido, sin las cabeceras de la red. Acumulados desde que arrancó el agente.', '\nContent bytes, without network headers. Accumulated since the agent started.'))
 }
 
 /** El agente como servicio del usuario (systemd en Linux, launchd en macOS). */
@@ -1034,6 +1064,7 @@ try {
   if (cmd === 'desktop') { await desktop(); process.exit(0) }
   if (cmd === 'updates') { await updates(); process.exit(0) }
   if (cmd === 'agents') { await agents(); process.exit(0) }
+  if (cmd === 'network') { await network(); process.exit(0) }
   if (cmd === 'restart') { await restart(); process.exit(0) }
   if (cmd === 'service') { await service(); process.exit(0) }
   if (cmd === 'note') { await note(); process.exit(0) }

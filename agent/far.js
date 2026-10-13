@@ -262,8 +262,11 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     refreshedAt = 1
   }
 
+  /** Las máquinas que ya se conocen, sin preguntar a la red (para nombrarlas en un informe). */
+  const known = () => [...machines.values()].map((m) => ({ sub: m.sub, id: m.id, name: m.name }))
+
   return {
-    list, via, send,
+    list, via, send, known,
     close: () => { closed = true; clearTimeout(idle); release() }
   }
 }
