@@ -72,6 +72,8 @@ const PIN_CLIENT: (u32, u32, u32) = (0, 14, 0);
 const FAR_CLIENT: (u32, u32, u32) = (0, 38, 0);
 /// Cada cuántas lecturas del panel se pregunta por las otras máquinas (va a la red: más despacio).
 const FAR_EVERY: u32 = 3;
+/// Cuánto vale un ⤢ recién pulsado antes de que mande la lista (ver `Window::took_size`).
+const TOOK_SIZE_FOR: std::time::Duration = std::time::Duration::from_secs(20);
 /// Un agente que no contesta por las otras máquinas (anterior a la 0.38, aún sin reiniciar) se
 /// vuelve a preguntar solo cada tantas lecturas: cada pregunta sin respuesta para la ventana un instante.
 const FAR_SILENT_EVERY: u32 = 20;
@@ -646,6 +648,10 @@ struct Win {
     attach: Option<String>,
     /// Lo que toca cuando el cliente termine de soltar la consola (panel lateral).
     pending: Option<Pending>,
+    /// ⤢ recién pulsado: la consola (id) cuyo tamaño tomó esta ventana, y cuándo. Durante
+    /// `TOOK_SIZE_FOR` la ventana se comporta ya como dueña del tamaño, sin esperar a que la lista
+    /// lo confirme: la de otra máquina tarda varios segundos en llegar y parecía que no hacía nada.
+    took_size: Option<(String, std::time::Instant)>,
     /// La consola recién elegida en el panel, marcada YA, antes de que la próxima lectura de la
     /// lista lo confirme (si no, durante un momento salían dos marcadas, o ninguna).
     showing: Option<String>,
@@ -1391,7 +1397,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None });
+        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -1540,6 +1546,10 @@ impl App {
         let c = self.consoles.get(&win.scope()?)?.iter().find(|c| c.id == cid)?;
         let b = c.size_by.as_ref()?;
         if b.tag.as_deref() == Some(win.tag.as_str()) || c.cols == 0 || c.rows == 0 {
+            return None;
+        }
+        // ⤢ recién pulsado aquí: ya es de esta ventana, aunque la lista todavía diga lo de antes.
+        if win.took_size.as_ref().is_some_and(|(taken, at)| *taken == cid && at.elapsed() < TOOK_SIZE_FOR) {
             return None;
         }
         Some((c.cols, c.rows))
@@ -2344,6 +2354,10 @@ impl App {
             Message::TogglePin(id) => {
                 // ⤢: esta ventana fija el tamaño de su consola, o lo suelta (Ctrl+] p / u).
                 let pinned = self.pinned_here(id);
+                let mine = self.mine(id);
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.took_size = if pinned { None } else { mine.map(|cid| (cid, std::time::Instant::now())) };
+                }
                 if let Some(term) = self.windows.get_mut(&id).and_then(|w| w.term.as_mut()) {
                     let keys: &[u8] = if pinned { b"\x1du" } else { b"\x1dp" };
                     term.handle(iced_term::Command::ProxyToBackend(iced_term::BackendCommand::Write(keys.to_vec())));
@@ -2928,7 +2942,10 @@ impl App {
             Some((n, _)) => format!("{} {n}", t("Usar el tamaño de esta ventana en la consola", "Use this window's size for console")),
             None => t("Usar el tamaño de esta ventana", "Use this window's size"),
         };
-        let pin_btn = |w: f32| -> Element<'_, Message> {
+        // `here`: ¿es este el botón de la máquina donde está la consola de la ventana? Cada máquina
+        // tiene el suyo; los de las demás se ven deshabilitados.
+        let pin_btn = |w: f32, here: bool| -> Element<'_, Message> {
+            let (pin_on, can_pin) = (pin_on && here, can_pin && here);
             let icon = iced::widget::svg(iced::widget::svg::Handle::from_memory(ICON_SIZE)).width(14).height(14).style(move |theme: &Theme, _| iced::widget::svg::Style { color: Some(if pin_on { theme.palette().primary } else { theme.extended_palette().background.base.text.scale_alpha(0.7) }) });
             let b = button(container(icon).center_x(Length::Fill)).width(w).padding([4, 0]).style(if pin_on { side_selected } else { menu_button }).on_press_maybe(can_pin.then_some(Message::TogglePin(id)));
             iced::widget::tooltip(b, container(text(pin_tip.clone()).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into()
@@ -2953,7 +2970,7 @@ impl App {
             let mut strip = column![
                 button(centered("»".into(), 13)).width(24).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
                 button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, None, None))),
-                pin_btn(24.0),
+                pin_btn(24.0, local),
             ]
             .spacing(4);
             for (i, c) in list.iter().enumerate() {
@@ -2998,6 +3015,7 @@ impl App {
                 strip = strip.push(container(separator()).width(24));
                 strip = strip.push(container(head).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
                 strip = strip.push(container(plus).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+                strip = strip.push(container(pin_btn(24.0, here.as_deref() == Some(m.id.as_str()))).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
                 for (i, c) in m.consoles.iter().flatten().enumerate() {
                     let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                     let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
@@ -3040,9 +3058,9 @@ impl App {
         ]
         .spacing(2);
         // Solo el tamaño (dueño, 2026-10-07): quién lo tiene ya lo dice el ⤢ encendido y su aviso.
-        if let Some((_, c)) = cur {
+        if let Some((_, c)) = cur.filter(|_| local) {
             items = items.push(
-                row![text(format!("{}×{}", c.cols, c.rows)).size(12).width(Length::Fill), pin_btn(28.0)]
+                row![text(format!("{}×{}", c.cols, c.rows)).size(12).width(Length::Fill), pin_btn(28.0, true)]
                     .align_y(iced::Alignment::Center)
                     .padding(iced::Padding { left: 8.0, ..Default::default() }),
             );
@@ -3117,6 +3135,18 @@ impl App {
                 ]
                 .align_y(iced::Alignment::Center)
                 .padding(iced::Padding { left: 8.0, top: 0.0, right: 4.0 + ARROW_W, bottom: 0.0 }),
+            );
+            // El tamaño, bajo el «+» de CADA máquina (dueño, 2026-10-13): el de la consola de esta
+            // ventana si está en esa máquina; si no, el botón se ve deshabilitado.
+            let on_it = here.as_deref() == Some(m.id.as_str());
+            let size = match cur.filter(|_| on_it) {
+                Some((_, c)) => format!("{}×{}", c.cols, c.rows),
+                None => t("Tamaño", "Size"),
+            };
+            items = items.push(
+                row![text(size).size(12).width(Length::Fill), pin_btn(28.0, on_it)]
+                    .align_y(iced::Alignment::Center)
+                    .padding(iced::Padding { left: 8.0, top: 0.0, right: 4.0 + ARROW_W, bottom: 0.0 }),
             );
             for (i, c) in m.consoles.iter().flatten().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
