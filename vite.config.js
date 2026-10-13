@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import { execSync } from 'node:child_process'
 import { copyFileSync, mkdirSync } from 'node:fs'
+import prerender from '@dotrino/prerender/vite'
 
 // Inyecta <meta name="commit"> con el hash del build (§3): permite verificar qué
 // versión sirve el dominio y diagnosticar cachés viejas de SW/CDN.
@@ -34,7 +35,9 @@ function spaRoutes () {
 // PWA viven en public/ y se copian tal cual a la raíz de dist/.
 export default defineConfig({
   base: '/',
-  plugins: [commitMeta(), spaRoutes()],
+  plugins: [
+    // El HTML llega con contenido para quien lo lee sin ejecutar JavaScript.
+    prerender(), commitMeta(), spaRoutes()],
   // @dotrino/vault declara @dotrino/identity y @dotrino/proxy-client como peerDeps:
   // deduplicar para que use LA copia de esta app (una sola instancia; y no arrastre
   // otra versión por el symlink `file:` en desarrollo).
