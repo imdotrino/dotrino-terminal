@@ -77,6 +77,8 @@ const FAR_EVERY: u32 = 3;
 const FAR_SILENT_EVERY: u32 = 20;
 /// El primer cliente con `dotrino-terminal vscode`.
 const VSCODE_CLIENT: (u32, u32, u32) = (0, 20, 0);
+/// El primer cliente con `dotrino-terminal claude`.
+const CLAUDE_CLIENT: (u32, u32, u32) = (0, 44, 0);
 
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
@@ -746,6 +748,8 @@ enum Message {
     /// Poner (`true`) o quitar (`false`) Dotrino Terminal como terminal embebida de VS Code y
     /// sus variantes, con el perfil de la ventana.
     Vscode(window::Id, bool),
+    /// Poner (o quitar) en Claude Code el skill y los hooks que mantienen la tarjeta de la consola.
+    Claude(window::Id, bool),
     /// Escribe en la consola de la ventana la orden que instala (o actualiza) el cliente.
     InstallClient(window::Id),
     /// Lo que contestó el cliente al arrancar sobre versiones nuevas (`None`: no se supo).
@@ -2286,6 +2290,17 @@ impl App {
                 );
                 self.run_aside(id, script, "VS Code".to_string())
             }
+            Message::Claude(id, set) => {
+                // Como VS Code: en ESTA ventana y en otra TTY, con la salida a la vista hasta Enter.
+                let Ok(launch) = self.launch.clone() else { return Task::none() };
+                let args = if set { "claude" } else { "claude --off" };
+                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
+                let script = format!(
+                    "PATH={}; export PATH; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
+                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
+                );
+                self.run_aside(id, script, "Claude Code".to_string())
+            }
             Message::Enroll(id) => {
                 let _ = self.reload_profiles();
                 let linked_before = linked_names(&self.profiles);
@@ -2668,6 +2683,14 @@ impl App {
         profiles.push(Item::new(entry(t("Quitar de la terminal de VS Code", "Remove from VS Code's terminal"), "", can_vscode.then_some(Message::Vscode(id, false)))));
         if self.launch.is_ok() && !vscode_ready {
             profiles.push(Item::new(note(t("Para VS Code hace falta dotrino-terminal 0.20.0 o más reciente: actualízalo aquí abajo.", "VS Code needs dotrino-terminal 0.20.0 or newer: update it just below."))));
+        }
+        // Claude Code mantiene la tarjeta «de qué va» de la consola en la que corre.
+        let claude_ready = self.launch.as_ref().ok().and_then(|l| l.version).is_some_and(|v| v >= CLAUDE_CLIENT);
+        let can_claude = !linking && claude_ready;
+        profiles.push(Item::new(entry(t("Notas con Claude Code: instalar", "Notes with Claude Code: install"), "", can_claude.then_some(Message::Claude(id, true)))));
+        profiles.push(Item::new(entry(t("Notas con Claude Code: quitar", "Notes with Claude Code: remove"), "", can_claude.then_some(Message::Claude(id, false)))));
+        if self.launch.is_ok() && !claude_ready {
+            profiles.push(Item::new(note(t("Para las notas con Claude Code hace falta dotrino-terminal 0.44.0 o más reciente: actualízalo aquí abajo.", "Notes with Claude Code need dotrino-terminal 0.44.0 or newer: update it just below."))));
         }
         // Sin el cliente no hay perfiles ni enrolar: se ve deshabilitado, y la razón a la vista.
         profiles.push(Item::new(entry(t("Enrolar…", "Enroll…"), "", (!linking && self.launch.is_ok()).then_some(Message::Enroll(id)))));

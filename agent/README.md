@@ -50,6 +50,7 @@ dotrino-terminal profiles [--json]       # los perfiles (agentes con nombre) de 
 dotrino-terminal link [--name <n>]       # enlazar un perfil con tu bóveda
 dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para su agente; mismo aparato)
 dotrino-terminal vscode [--name <n>]     # la terminal embebida de VS Code abre consolas de aquí (--off lo deshace)
+dotrino-terminal claude                  # Claude Code mantiene la tarjeta de su consola: skill + hooks en ~/.claude (--off lo deshace, --status lo dice)
 dotrino-terminal desktop update [--check] # actualiza la app de escritorio: baja, verifica la firma e instala
 dotrino-terminal service install|uninstall|status [--name <n>]  # el agente como servicio del usuario
 ```
@@ -121,8 +122,11 @@ programa que corre dentro (`--task`). En la tarjeta la tarea se ve y se quita, n
 Sin `--id`, es la consola en la que corre la orden: el agente pone su id en
 `DOTRINO_TERMINAL_CONSOLE`. Vive en memoria, como la consola: se va con ella. Hasta 4000 caracteres.
 
-Para que un agente de IA la mantenga al día, el paquete trae un skill de Claude Code en
-`skills/dotrino-terminal-note/`: se copia a `~/.claude/skills/`.
+Para que un agente de IA la mantenga al día, el paquete trae un skill de Claude Code
+(`skills/dotrino-terminal-note/`) y tres hooks (`skills/hooks/`): uno recuerda la tarjeta en cada
+mensaje, otro apunta qué herramientas se usan y el tercero no deja terminar un turno con la tarjeta
+vieja. `dotrino-terminal claude` los pone en `~/.claude` y los engancha en su `settings.json` sin
+tocar lo demás (`claude.js`); `--off` quita exactamente eso. Fuera de una consola no hacen nada.
 
 ## Imágenes desde otro aparato
 

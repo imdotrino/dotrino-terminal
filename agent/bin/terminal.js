@@ -126,6 +126,9 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal vscode [--name <n>]       make the integrated terminal of VS Code (and VS Code
                                              Insiders, VSCodium and Cursor) open consoles from here
   dotrino-terminal vscode --off              undo it
+  dotrino-terminal claude                    make Claude Code keep the card of the console it runs
+                                             in up to date (installs a skill and three hooks in ~/.claude)
+  dotrino-terminal claude --off              undo it (--status says whether it is set)
   dotrino-terminal desktop update            update the desktop app (the window): downloads the
                                              new version, checks its signature and installs it
                                              (--check only looks for one)
@@ -246,6 +249,41 @@ function vscode () {
     console.log(`  ${d.name.padEnd(18)} ${what}  ${d.settings}`)
   }
   if (!off) console.log(t('\nLas terminales nuevas del editor ya abren aquí. Si actualizas o cambias de Node, vuelve a correr esta orden.', '\nNew terminals in the editor now open here. If you update or switch Node, run this command again.'))
+}
+
+/**
+ * `dotrino-terminal claude`: que Claude Code mantenga la tarjeta «de qué va» de su consola (el
+ * skill y los hooks, `claude.js`). `--off` lo quita; `--status` dice si está puesto.
+ */
+async function claude () {
+  const { configureClaude, claudeStatus, HOOKS } = await import('../claude.js')
+  if (args.includes('--status')) {
+    const s = claudeStatus()
+    const all = s.skill && s.hooks.length === HOOKS.length && s.wired.length === HOOKS.length
+    const none = !s.skill && !s.hooks.length && !s.wired.length
+    if (args.includes('--json')) { console.log(JSON.stringify({ installed: all, ...s })); return }
+    console.log(all ? t('Instalado: Claude Code mantiene la tarjeta de sus consolas.', 'Installed: Claude Code keeps the card of its consoles.')
+      : none ? t('No está instalado. Se pone con: dotrino-terminal claude', 'Not installed. Set it with: dotrino-terminal claude')
+        : t('A medias: vuelve a correr «dotrino-terminal claude» para dejarlo entero.', 'Half set: run "dotrino-terminal claude" again to complete it.'))
+    return
+  }
+  const off = args.includes('--off')
+  let done
+  try { done = configureClaude({ off }) } catch (e) {
+    if (e.code === 'no-claude') die(t('no encontré Claude Code en esta cuenta (no existe ~/.claude). Ábrelo una vez y repite.', 'could not find Claude Code in this account (~/.claude does not exist). Open it once and try again.'))
+    if (e.code === 'bad-settings') die(t(`no se pudo leer la configuración de Claude Code y no se tocó nada: ${e.message}`, `could not read Claude Code's settings and nothing was changed: ${e.message}`))
+    throw e
+  }
+  const what = off
+    ? (done.changed ? t('quitado', 'removed') : t('no estaba', 'was not set'))
+    : (done.changed ? t('instalado', 'installed') : t('ya estaba', 'already set'))
+  console.log(`  Claude Code  ${what}`)
+  if (!off) {
+    console.log(`    ${done.skill}`)
+    for (const h of done.hooks) console.log(`    ${h}`)
+    console.log(`    ${done.settings}`)
+    console.log(t('\nLas sesiones NUEVAS de Claude Code dentro de una consola de Dotrino Terminal ya mantienen su tarjeta. Fuera de una consola no hace nada.', '\nNEW Claude Code sessions inside a Dotrino Terminal console now keep its card. Outside a console it does nothing.'))
+  }
 }
 
 /**
@@ -851,7 +889,11 @@ function interactive (conn, first, dir) {
         if (ch === 'p') { conn.send({ type: 'resize', ...size() }); conn.send({ type: 'take' }); continue }
         if (ch === 'n') {
           if (send) { input(send); send = '' }
-          switchTo({ type: 'open', cwd: first.cwd || path.resolve(process.cwd()) })
+          // En otra máquina (`--machine`) la carpeta de aquí no existe: sin `--cwd`, la consola
+          // nueva abre en su carpeta de inicio. Mandar la de aquí hacía que la rechazara
+          // (`bad-cwd`) y la ventana acababa en otra consola en vez de en una nueva.
+          const where = opt('--machine') ? (first.cwd ? { cwd: first.cwd } : {}) : { cwd: first.cwd || path.resolve(process.cwd()) }
+          switchTo({ type: 'open', ...where })
           continue
         }
         send += ch === DETACH_PREFIX ? ch : DETACH_PREFIX + ch
@@ -888,6 +930,7 @@ try {
   if (cmd === 'rename') { await rename(); process.exit(0) }
   if (cmd === 'lock') { await lock(); process.exit(0) }
   if (cmd === 'vscode') { vscode(); process.exit(0) }
+  if (cmd === 'claude') { await claude(); process.exit(0) }
   if (cmd === 'desktop') { await desktop(); process.exit(0) }
   if (cmd === 'updates') { await updates(); process.exit(0) }
   if (cmd === 'service') { await service(); process.exit(0) }
