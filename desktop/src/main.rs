@@ -2889,19 +2889,22 @@ impl App {
                 let tipped: Element<'_, Message> = iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(arrowed(if local { draggable(&c.id, tipped, Length::Fixed(24.0)) } else { tipped }, is_mine));
             }
-            // Las otras máquinas: sus iniciales (clic: consola nueva allí) y un botón por consola.
+            // Las otras máquinas: sus iniciales (de dónde son las consolas; no es un botón), un «+»
+            // explícito para abrir una consola allí (dueño, 2026-10-13) y un botón por consola.
             // Abren en ESTA ventana, como las de aquí (dueño, 2026-10-10).
             for m in &others {
                 let label = m.label();
-                let state = if m.locked { t("pide su clave · clic: escribirla", "asks for its code · click: type it") } else if m.consoles.is_none() { t("no contesta", "not answering") } else { t("clic: consola nueva allí", "click: new console there") };
-                let head = button(centered(label.chars().take(2).collect::<String>(), 11))
-                    .width(24)
-                    .padding([3, 0])
-                    .style(menu_button)
-                    .on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
-                let head: Element<'_, Message> = iced::widget::tooltip(head, container(text(format!("{label} · {}\n{state}", m.id)).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                let state = if m.locked { Some(t("pide su clave", "asks for its code")) } else if m.consoles.is_none() { Some(t("no contesta", "not answering")) } else { None };
+                let head = centered(label.chars().take(2).collect::<String>(), 11);
+                let about = match state { Some(s) => format!("{label} · {}\n{s}", m.id), None => format!("{label} · {}", m.id) };
+                let head: Element<'_, Message> = iced::widget::tooltip(container(head).width(24).padding([3, 0]), container(text(about).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                // Con clave, el «+» es por donde se escribe (la pide la terminal al pasar allí).
+                let (sign, what) = if m.locked { (">", t("Escribir la clave de", "Type the code of")) } else { ("+", t("Consola nueva en", "New console on")) };
+                let plus = button(centered(sign.into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
+                let plus: Element<'_, Message> = iced::widget::tooltip(plus, container(text(format!("{what} {label}")).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(container(separator()).width(24));
                 strip = strip.push(container(head).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+                strip = strip.push(container(plus).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
                 for (i, c) in m.consoles.iter().flatten().enumerate() {
                     let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                     let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
@@ -3001,27 +3004,27 @@ impl App {
             let entry = container(entry_row).padding(iced::Padding { right: 4.0, ..Default::default() });
             items = items.push(arrowed(entry.into(), is_mine));
         }
-        // LAS OTRAS MÁQUINAS de la cuenta: su nombre, «+» (consola nueva allí) y sus consolas.
+        // LAS OTRAS MÁQUINAS de la cuenta: su nombre (un título: dice de dónde son las consolas),
+        // debajo «Nueva consola +» en su propia fila, como la de aquí (dueño, 2026-10-13), y sus consolas.
         // Abren en ESTA ventana y se cierran con su «×», como las de aquí (dueño, 2026-10-10).
         for m in &others {
             let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.65)) };
             let state = if m.locked { Some(t("pide su clave", "asks for its code")) } else if m.consoles.is_none() { Some(t("no contesta", "not answering")) } else { None };
             let mut head = column![text(m.label()).size(13)];
             head = head.push(text(match state { Some(s) => format!("{} · {s}", m.id), None => m.id.clone() }).size(11).style(dim));
-            let far_head = row![
-                head.width(Length::Fill),
-                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None))),
-            ]
-            .align_y(iced::Alignment::Center)
-            .padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 });
             items = items.push(container(separator()).padding(iced::Padding { top: 6.0, right: ARROW_W, ..Default::default() }));
-            items = items.push(far_head);
-            // Con clave: un botón que lo dice. La clave se teclea en la terminal de esta ventana (la
-            // pide el cliente al pasar a esa máquina) y vale hasta que el agente de aquí se reinicie.
-            if m.locked {
-                let unlock = button(text(t("Escribir la clave", "Type its code")).size(12)).padding([3, 10]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
-                items = items.push(container(unlock).padding(iced::Padding { left: 8.0, top: 4.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
-            }
+            items = items.push(container(head).padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
+            // Con clave, en vez de «Nueva consola»: la clave se teclea en la terminal de esta ventana
+            // (la pide el cliente al pasar a esa máquina) y vale hasta que el agente de aquí se reinicie.
+            let (what, sign) = if m.locked { (t("Escribir la clave", "Type its code"), ">") } else { (t("Nueva consola", "New console"), "+") };
+            items = items.push(
+                row![
+                    text(what).size(12).width(Length::Fill),
+                    button(text(sign).size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None))),
+                ]
+                .align_y(iced::Alignment::Center)
+                .padding(iced::Padding { left: 8.0, top: 0.0, right: 4.0 + ARROW_W, bottom: 0.0 }),
+            );
             for (i, c) in m.consoles.iter().flatten().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
