@@ -81,6 +81,8 @@ const FAR_SILENT_EVERY: u32 = 20;
 const VSCODE_CLIENT: (u32, u32, u32) = (0, 20, 0);
 /// El primer cliente con `dotrino-terminal claude`.
 const CLAUDE_CLIENT: (u32, u32, u32) = (0, 44, 0);
+/// El primer cliente con `agents` y `restart`: dice qué versión corre cada agente y lo reinicia.
+const AGENTS_CLIENT: (u32, u32, u32) = (0, 45, 0);
 
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
@@ -563,6 +565,9 @@ enum Pending {
     Attach(String),
     /// Abrir una nueva.
     New,
+    /// El agente se va a reiniciar (se cierran todas sus consolas): cuando el cliente caiga, la
+    /// ventana sigue, con una consola nueva en el agente que arranca.
+    Reopen,
     /// Cerrar la ventana en cuanto el cliente haya soltado su consola (una de segundo plano: si
     /// la ventana la abrió, cerrarla sin soltarla la mataría).
     Close,
@@ -582,6 +587,70 @@ enum Notice {
     Offer(Vec<String>),
     /// La app se actualizó en el disco: la que corre sigue siendo la anterior.
     Restart,
+    /// dotrino-terminal se actualizó y hay agentes que siguen con la versión anterior: para usar
+    /// la nueva hay que pararlos, y eso cierra todas sus terminales.
+    Agents(Stale),
+}
+
+/// Los agentes de esta máquina que corren con una versión que ya no es la instalada.
+#[derive(Clone, Debug, PartialEq)]
+struct Stale {
+    /// La versión instalada, que es la que usarían al reiniciarse.
+    installed: String,
+    /// Cuántas consolas tienen abiertas entre todos.
+    consoles: u64,
+    /// Por qué no se pudieron parar, si ya se intentó.
+    failed: Option<String>,
+}
+
+/// Pregunta al cliente si algún agente va por detrás de lo instalado. `None`: ninguno, o no se
+/// pudo saber (queda en el registro).
+fn check_agents(launch: Launch) -> Option<Stale> {
+    if !launch.version.is_some_and(|v| v >= AGENTS_CLIENT) {
+        return None;
+    }
+    let out = std::process::Command::new(&launch.program).args(["agents", "--json"]).env("PATH", &launch.path).stdin(std::process::Stdio::null()).output();
+    let out = match out {
+        Ok(o) if o.status.success() => o,
+        Ok(o) => {
+            log(&format!("agents: the client could not say (exit {:?}): {}", o.status.code(), String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("")));
+            return None;
+        }
+        Err(e) => {
+            log(&format!("agents: could not run the client: {e}"));
+            return None;
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_slice(&out.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            log(&format!("agents: unreadable answer: {e}"));
+            return None;
+        }
+    };
+    let stale: Vec<&serde_json::Value> = v["agents"].as_array()?.iter().filter(|a| a["stale"].as_bool() == Some(true)).collect();
+    if stale.is_empty() {
+        return None;
+    }
+    log(&format!("agents: {} behind the installed {}", stale.len(), v["installed"].as_str().unwrap_or("?")));
+    Some(Stale { installed: v["installed"].as_str()?.to_string(), consoles: stale.iter().filter_map(|a| a["consoles"].as_u64()).sum(), failed: None })
+}
+
+/// Para los agentes que van por detrás (cierra sus consolas). `Err`: por qué no se pudo.
+fn restart_agents(launch: Launch) -> Result<(), String> {
+    let out = std::process::Command::new(&launch.program)
+        .args(["restart", "--stale", "--yes"])
+        .env("PATH", &launch.path)
+        .env_remove("DOTRINO_TERMINAL_PROFILE_DIR")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let why = String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("").to_string();
+    log(&format!("agents: restart failed (exit {:?}): {why}", out.status.code()));
+    Err(why)
 }
 
 /// El binario de esta app en el disco (Linux lo nombra «… (deleted)» si ya lo cambiaron).
@@ -668,6 +737,8 @@ struct Win {
     attach: Option<String>,
     /// Lo que toca cuando el cliente termine de soltar la consola (panel lateral).
     pending: Option<Pending>,
+    /// Esta ventana espera a que su cliente caiga por el reinicio del agente (`RestartAgents`).
+    reopening: bool,
     /// ⤢ recién pulsado: la consola (id) cuyo tamaño tomó esta ventana, y cuándo. Durante
     /// `TOOK_SIZE_FOR` la ventana se comporta ya como dueña del tamaño, sin esperar a que la lista
     /// lo confirme: la de otra máquina tarda varios segundos en llegar y parecía que no hacía nada.
@@ -718,6 +789,9 @@ struct App {
     far_why: HashMap<String, String>,
     /// El aviso que flota sobre las ventanas: hay versión nueva, o la app ya se actualizó.
     notice: Option<Notice>,
+    /// Agentes que van por detrás de lo instalado: se ofrece cerrarlos cuando no hay otro aviso
+    /// delante (primero actualizar, después reiniciar la app, y al final esto).
+    stale: Option<Stale>,
     /// Cómo era el binario de la app al arrancar: si cambia tras actualizar, hay versión nueva
     /// instalada y se ofrece reiniciar.
     exe_stamp: Option<(u64, std::time::SystemTime)>,
@@ -788,6 +862,13 @@ enum Message {
     NoticeUpdate(window::Id),
     /// El aviso tras actualizar: reiniciar la app con la versión nueva.
     RestartApp,
+    /// Lo que contestó el cliente sobre los agentes que van por detrás de lo instalado.
+    AgentsChecked(Option<Stale>),
+    /// El aviso: cerrar todas las terminales para que el agente arranque con la versión nueva.
+    RestartAgents,
+    AgentsRestarted(Result<(), String>),
+    /// Las ventanas cuyo cliente no cayó con el reinicio dejan de esperarlo.
+    ReopenExpired,
     /// ¿Apareció ya el cliente? (mientras se espera a que se instale)
     CheckClient,
     Copy(window::Id),
@@ -1343,7 +1424,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, applying: HashMap::new(), rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, stale: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, applying: HashMap::new(), rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1374,7 +1455,11 @@ impl App {
         let check = match (&app.launch, &cli.command) {
             (Ok(launch), None) => {
                 let launch = launch.clone();
-                Task::perform(async move { tokio::task::spawn_blocking(move || check_updates(launch)).await.ok().flatten() }, Message::UpdatesChecked)
+                let again = launch.clone();
+                Task::batch([
+                    Task::perform(async move { tokio::task::spawn_blocking(move || check_updates(launch)).await.ok().flatten() }, Message::UpdatesChecked),
+                    Self::ask_agents(again),
+                ])
             }
             _ => Task::none(),
         };
@@ -1419,7 +1504,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None });
+        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, reopening: false, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -1534,6 +1619,11 @@ impl App {
     /// Corre `script` en ESTA ventana, en otra TTY, y al acabar la ventana vuelve a su consola.
     /// Con una consola del agente a la vista se le pide al cliente que la suelte (Ctrl+] d) y,
     /// cuando sale, `ended` arranca el script: así no se pierde.
+    /// Por detrás: ¿algún agente sigue con una versión anterior a la instalada?
+    fn ask_agents(launch: Launch) -> Task<Message> {
+        Task::perform(async move { tokio::task::spawn_blocking(move || check_agents(launch)).await.ok().flatten() }, Message::AgentsChecked)
+    }
+
     fn run_aside(&mut self, id: window::Id, script: String, what: String) -> Task<Message> {
         let back = self.mine(id);
         let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
@@ -1969,13 +2059,13 @@ impl App {
         }
         let keys = match &next {
             Pending::Attach(cid) => format!("\x1da{cid}\r"),
-            Pending::New => "\x1dn".to_string(),
+            Pending::New | Pending::Reopen => "\x1dn".to_string(),
             Pending::Close | Pending::Update { .. } | Pending::Far { .. } => "\x1dd".to_string(),
         };
         win.showing = match &next {
             Pending::Attach(cid) => Some(cid.clone()),
             Pending::Far { attach, .. } => attach.clone(),
-            Pending::New | Pending::Close | Pending::Update { .. } => None,
+            Pending::New | Pending::Reopen | Pending::Close | Pending::Update { .. } => None,
         };
         match win.term.as_mut() {
             Some(term) => {
@@ -2102,7 +2192,10 @@ impl App {
                         win.showing = attach.clone();
                         win.attach = attach;
                     }
-                    _ => win.attach = None,
+                    _ => {
+                        win.attach = None;
+                        win.showing = None;
+                    }
                 }
                 self.start(id, Mode::Console);
                 self.focus_soon(id)
@@ -2142,8 +2235,17 @@ impl App {
                     self.exe_stamp = now;
                     self.notice = Some(Notice::Restart);
                 }
+                // Y el cliente pudo cambiar: si el agente que corre quedó atrás, se ofrece
+                // cerrar sus terminales (después de lo de reiniciar la app, si toca).
+                let ask = match resolve() {
+                    Ok(launch) => {
+                        self.launch = Ok(launch.clone());
+                        Self::ask_agents(launch)
+                    }
+                    Err(_) => Task::none(),
+                };
                 self.start(id, Mode::Console);
-                self.focus_soon(id)
+                Task::batch([self.focus_soon(id), ask])
             }
             // Terminó el enlace: si quedó un perfil enlazado nuevo, la ventana pasa a él; si
             // no (se canceló, falló), vuelve al que tenía.
@@ -2245,7 +2347,7 @@ impl App {
                         return Task::none();
                     }
                 };
-                let ok = t("Listo: dotrino-terminal está al día. El agente que ya corría sigue con la versión anterior hasta que se reinicie.", "Done: dotrino-terminal is up to date. An agent that was already running keeps the old version until it restarts.");
+                let ok = t("Listo: dotrino-terminal está al día. El agente que ya corría sigue con la versión anterior hasta que se reinicie: al volver a tu consola, la app te ofrece hacerlo.", "Done: dotrino-terminal is up to date. An agent that was already running keeps the old version until it restarts: back in your console, the app offers to do it.");
                 let fail = t("No se pudo. Si dice EACCES, tu npm instala en una carpeta del sistema: usa nvm, o instálalo con sudo.", "It failed. If it says EACCES, your npm installs into a system folder: use nvm, or install it with sudo.");
                 let no_npm = t("No encuentro npm: instala Node 20 o más reciente (https://nodejs.org).", "Can't find npm: install Node 20 or newer (https://nodejs.org).");
                 let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
@@ -2270,7 +2372,69 @@ impl App {
                 Task::none()
             }
             Message::NoticeLater => {
+                // Lo que se deja para después es el aviso a la vista; detrás puede esperar el
+                // de los agentes, que va el último.
+                if matches!(self.notice, Some(Notice::Agents(_))) {
+                    self.stale = None;
+                }
+                self.notice = self.stale.clone().map(Notice::Agents);
+                Task::none()
+            }
+            Message::AgentsChecked(found) => {
+                self.stale = found;
+                match (&self.notice, &self.stale) {
+                    (None, Some(st)) => self.notice = Some(Notice::Agents(st.clone())),
+                    // Ya no hay ninguno atrás (se reiniciaron por otro lado): el aviso sobra.
+                    (Some(Notice::Agents(_)), None) => self.notice = None,
+                    _ => {}
+                }
+                Task::none()
+            }
+            Message::RestartAgents => {
                 self.notice = None;
+                let Ok(launch) = self.launch.clone() else { return Task::none() };
+                // Las ventanas no se cierran: al caer su cliente abren una consola nueva, que es
+                // la que levanta el agente con la versión instalada.
+                let ids: Vec<window::Id> = self.windows.keys().copied().collect();
+                for id in ids {
+                    let mine = self.mine(id);
+                    let Some(win) = self.windows.get_mut(&id) else { continue };
+                    if matches!(win.mode, Mode::Console) && win.profile.is_some() && win.term.is_some() && win.pending.is_none() {
+                        // La consola de OTRA máquina no se cierra (su agente no se toca): la
+                        // ventana vuelve a ella en cuanto el agente de aquí arranque.
+                        win.pending = Some(match win.machine.clone() {
+                            Some(m) => Pending::Far { machine: Some(m), attach: mine },
+                            None => Pending::Reopen,
+                        });
+                        win.reopening = true;
+                    }
+                }
+                Task::perform(async move { tokio::task::spawn_blocking(move || restart_agents(launch)).await.unwrap_or_else(|e| Err(e.to_string())) }, Message::AgentsRestarted)
+            }
+            Message::AgentsRestarted(done) => {
+                match done {
+                    // Una ventana de un perfil cuyo agente no se tocó sigue en su consola: pasado
+                    // un rato, lo que quedó esperando se olvida.
+                    Ok(()) => {
+                        self.stale = None;
+                        later(15_000, Message::ReopenExpired)
+                    }
+                    // No se paró nada: las ventanas siguen en su consola, y se dice por qué.
+                    Err(why) => {
+                        if let Some(st) = self.stale.as_mut() {
+                            st.failed = Some(why);
+                        }
+                        self.notice = self.stale.clone().map(Notice::Agents);
+                        self.handle(Message::ReopenExpired)
+                    }
+                }
+            }
+            Message::ReopenExpired => {
+                for win in self.windows.values_mut() {
+                    if std::mem::take(&mut win.reopening) {
+                        win.pending = None;
+                    }
+                }
                 Task::none()
             }
             Message::NoticeUpdate(id) => {
@@ -2951,6 +3115,19 @@ impl App {
                 t("Reiniciar la app", "Restart the app"),
                 Message::RestartApp,
             ),
+            Notice::Agents(st) => {
+                let mut lines = vec![
+                    t(&format!("El agente de esta máquina sigue con la versión anterior. Para usar la {} hay que cerrar todas sus terminales.", st.installed), &format!("This machine's agent keeps the old version. Using {} means closing all its terminals.", st.installed)),
+                    match st.consoles {
+                        0 => t("Ahora no tiene ninguna abierta.", "It has none open right now."),
+                        n => t(&format!("Se cierran {n}, con lo que esté corriendo en ellas: las de estas ventanas, las de tu editor y las que miran tus otros aparatos."), &format!("{n} will be closed, with whatever runs in them: the ones in these windows, in your editor and the ones your other devices are looking at.")),
+                    },
+                ];
+                if let Some(why) = &st.failed {
+                    lines.push(format!("{}: {why}", t("No se pudo", "It failed")));
+                }
+                (t("dotrino-terminal se actualizó", "dotrino-terminal was updated"), lines, t("Cerrar todas las terminales", "Close all terminals"), Message::RestartAgents)
+            }
         };
         let mut body = column![text(title).size(16)].spacing(6);
         for l in lines {

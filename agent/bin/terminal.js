@@ -19,6 +19,10 @@
  *   dotrino-terminal desktop update [--check]  actualiza la app de escritorio (la ventana)
  *   dotrino-terminal updates [--json] [--desktop <versión>]
  *                                              qué versiones nuevas hay (del cliente y de la app)
+ *   dotrino-terminal agents [--json]           qué agente corre en cada perfil y con qué versión
+ *   dotrino-terminal restart [--name <n>] [--stale] [--yes]
+ *                                              para el agente (cierra sus consolas) para que arranque
+ *                                              con la versión instalada
  *   dotrino-terminal service install|uninstall|status [--name <n>]
  *                                              el agente como servicio: arranca solo con la máquina
  *
@@ -91,6 +95,11 @@ if (args.includes('-h') || args.includes('--help')) {
                                              (--check solo mira si hay una)
   dotrino-terminal updates [--json]          dice si hay versión nueva de dotrino-terminal y de la app
                                              (--desktop <versión> es la app que tienes; no instala nada)
+  dotrino-terminal agents [--json]           qué agente corre en cada perfil, con qué versión y si va
+                                             por detrás de la instalada
+  dotrino-terminal restart [--name <n>]      para el agente para que arranque con la versión instalada
+                                             (cierra TODAS sus consolas; --stale: solo los que van por
+                                             detrás, en todos los perfiles; --yes no pregunta)
   dotrino-terminal service install [--name <n>]   deja el agente como servicio de tu usuario: arranca
                                              solo al encender la máquina, sin abrir ninguna ventana
   dotrino-terminal service uninstall [--name <n>] lo quita (para el agente: cierra sus consolas)
@@ -134,6 +143,11 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
                                              (--check only looks for one)
   dotrino-terminal updates [--json]          say whether there is a new version of dotrino-terminal and of
                                              the app (--desktop <version> is the app you have; installs nothing)
+  dotrino-terminal agents [--json]           which agent runs in each profile, its version and whether
+                                             it is behind the installed one
+  dotrino-terminal restart [--name <n>]      stop the agent so it starts with the installed version
+                                             (closes ALL its consoles; --stale: only the ones behind,
+                                             in every profile; --yes does not ask)
   dotrino-terminal service install [--name <n>]   run the agent as a service of your user: it starts
                                              by itself when the machine boots, with no window open
   dotrino-terminal service uninstall [--name <n>] remove it (stops the agent: closes its consoles)
@@ -187,6 +201,9 @@ async function agent (dir) {
   // Un agente vivo sin socket es uno anterior a las ventanas (< 0.6.0): no se levanta otro
   // encima (tendrían la misma llave), se dice.
   const pid = Number((() => { try { return fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8') } catch (_) { return '' } })())
+  // Un agente que se está yendo (`dotrino-terminal restart`) cierra su socket un instante antes
+  // de terminar: se le da ese instante antes de decir que es uno viejo.
+  for (const t0 = Date.now(); pid && alive(pid) && Date.now() - t0 < 3000;) await new Promise((r) => setTimeout(r, 100))
   if (pid && alive(pid)) {
     throw new Error(t(`hay un agente corriendo (pid ${pid}) que no acepta ventanas: es anterior a la 0.6.0. Reinícialo con la versión nueva.`,
       `an agent is running (pid ${pid}) that does not accept windows: it predates 0.6.0. Restart it with the new version.`))
@@ -362,6 +379,89 @@ async function openConsoles (dir) {
   conn.close()
   if (r.type === 'fail') throw new Error(`${r.message} (${r.code})`)
   return r.list.length
+}
+
+/** Lo que se espera a que un agente diga su versión: uno anterior a la 0.45.0 no contesta. */
+const VERSION_WAIT_MS = 1500
+
+/**
+ * Los agentes de esta máquina, uno por perfil: si corre, con qué versión y cuántas consolas.
+ * `stale`: corre con una versión que no es la instalada (el paquete se actualizó y él sigue con
+ * la anterior hasta que se reinicie). `version: null`: no la dijo, así que es anterior a la 0.45.0.
+ */
+async function agentStates () {
+  const out = []
+  for (const p of await listProfiles()) {
+    let conn
+    try { conn = await connectLocal(p.dir) } catch (e) {
+      if (e.code !== 'ENOAGENT') throw e
+      out.push({ name: p.name, running: false, version: null, consoles: 0, stale: false })
+      continue
+    }
+    const v = await Promise.race([request(conn, { type: 'version' }, 'version'), new Promise((resolve) => setTimeout(() => resolve(null), VERSION_WAIT_MS))])
+    const l = await request(conn, { type: 'list' }, 'consoles')
+    conn.close()
+    if (l.type === 'fail') throw new Error(`${l.message} (${l.code})`)
+    const version = v && v.type === 'version' ? v.version : null
+    out.push({ name: p.name, running: true, version, consoles: l.list.length, stale: version !== VERSION })
+  }
+  return out
+}
+
+/** `dotrino-terminal agents`: qué agente corre en cada perfil y si va por detrás de lo instalado. */
+async function agents () {
+  const list = await agentStates()
+  if (args.includes('--json')) { console.log(JSON.stringify({ installed: VERSION, agents: list })); return }
+  for (const a of list) {
+    const what = !a.running ? t('parado', 'stopped')
+      : `${a.version || t('anterior a la 0.45.0', 'older than 0.45.0')} · ${a.consoles} ${t('consola(s)', 'console(s)')}${a.stale ? t(` · instalada la ${VERSION}: reinícialo con «dotrino-terminal restart --name ${a.name}»`, ` · ${VERSION} is installed: restart it with "dotrino-terminal restart --name ${a.name}"`) : ''}`
+    console.log(`  ${a.name.padEnd(16)} ${what}`)
+  }
+}
+
+/**
+ * `dotrino-terminal restart`: para el agente para que arranque con la versión instalada. Cierra
+ * TODAS sus consolas (las de las ventanas, las de un editor y las que miran otros aparatos), así
+ * que pregunta antes. `--stale`: solo los que van por detrás de lo instalado, en todos los perfiles.
+ */
+async function restart () {
+  const stale = args.includes('--stale')
+  const asked = opt('--name')
+  if (asked !== undefined && !isValidName(asked)) die(t(`nombre de perfil no válido: ${asked}`, `invalid profile name: ${asked}`))
+  const only = stale && asked === undefined ? null : path.basename(resolveInstance(LABEL, asked).dir)
+  const targets = (await agentStates()).filter((a) => a.running && (only === null || a.name === only) && (!stale || a.stale))
+  if (!targets.length) { console.log(stale ? t('Ningún agente va por detrás de lo instalado.', 'No agent is behind what is installed.') : t('Ese perfil no tiene un agente corriendo.', 'That profile has no agent running.')); return }
+  const dirOf = (name) => resolveInstance(LABEL, name).dir
+  // ¿Corre esta orden DENTRO de una consola de uno de esos agentes? Pararlo la cerraría a mitad
+  // de camino: el trabajo lo hace un proceso aparte.
+  const inside = targets.some((a) => !!process.env.DOTRINO_TERMINAL_PROFILE_DIR && samePath(process.env.DOTRINO_TERMINAL_PROFILE_DIR, dirOf(a.name)))
+  const open = targets.reduce((n, a) => n + a.consoles, 0)
+  if (open && !args.includes('--yes')) {
+    const ok = await ask(t(`Se van a cerrar ${open} consola(s)${inside ? ', esta incluida' : ''}. ¿Seguir? [s/N] `, `${open} console(s) will be closed${inside ? ', this one included' : ''}. Continue? [y/N] `))
+    if (!/^[sy]/i.test(ok)) die(t('No se reinició nada.', 'Nothing was restarted.'))
+  }
+  if (inside && !args.includes('--detached-step')) {
+    const self = fileURLToPath(import.meta.url)
+    spawn(process.execPath, [self, ...args.filter((a) => a !== '--yes'), '--yes', '--detached-step'], { detached: true, stdio: 'ignore', env: process.env }).unref()
+    console.log(t('Reiniciando. Esta consola se va a cerrar.', 'Restarting. This console is about to close.'))
+    return
+  }
+  const { serviceStatus } = await import('../service.js')
+  for (const a of targets) {
+    const dir = dirOf(a.name)
+    const pid = Number((() => { try { return fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8') } catch (_) { return '' } })())
+    if (!pid || !alive(pid)) die(t(`el agente de «${a.name}» contesta pero no dejó su pid: páralo a mano.`, `the agent of "${a.name}" answers but left no pid: stop it by hand.`))
+    process.kill(pid, 'SIGTERM')
+    for (const t0 = Date.now(); alive(pid);) {
+      if (Date.now() - t0 > 5000) die(t(`el agente de «${a.name}» (pid ${pid}) no se detuvo: páralo a mano.`, `the agent of "${a.name}" (pid ${pid}) did not stop: stop it by hand.`))
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    let service = false
+    try { service = serviceStatus({ name: a.name }).installed } catch (e) { if (e.code !== 'no-user-systemd' && e.code !== 'unsupported-platform') throw e }
+    console.log(service
+      ? t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Su servicio lo vuelve a levantar con la ${VERSION}.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). Its service starts it again with ${VERSION}.`)
+      : t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Arranca con la ${VERSION} al abrir una ventana.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). It starts with ${VERSION} when you open a window.`))
+  }
 }
 
 /** El agente como servicio del usuario (systemd en Linux, launchd en macOS). */
@@ -933,6 +1033,8 @@ try {
   if (cmd === 'claude') { await claude(); process.exit(0) }
   if (cmd === 'desktop') { await desktop(); process.exit(0) }
   if (cmd === 'updates') { await updates(); process.exit(0) }
+  if (cmd === 'agents') { await agents(); process.exit(0) }
+  if (cmd === 'restart') { await restart(); process.exit(0) }
   if (cmd === 'service') { await service(); process.exit(0) }
   if (cmd === 'note') { await note(); process.exit(0) }
   const dir = opt('--dir') || dataDir(opt('--name'))

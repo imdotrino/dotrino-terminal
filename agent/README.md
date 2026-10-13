@@ -52,6 +52,8 @@ dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para 
 dotrino-terminal vscode [--name <n>]     # la terminal embebida de VS Code abre consolas de aquí (--off lo deshace)
 dotrino-terminal claude                  # Claude Code mantiene la tarjeta de su consola: skill + hooks en ~/.claude (--off lo deshace, --status lo dice)
 dotrino-terminal desktop update [--check] # actualiza la app de escritorio: baja, verifica la firma e instala
+dotrino-terminal agents [--json]          # con qué versión corre el agente de cada perfil
+dotrino-terminal restart [--name <n>]     # para el agente para que arranque con la versión instalada (cierra sus consolas; --stale: solo los atrasados)
 dotrino-terminal service install|uninstall|status [--name <n>]  # el agente como servicio del usuario
 ```
 

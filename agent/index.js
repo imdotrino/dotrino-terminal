@@ -45,6 +45,7 @@ import { makeFar } from './far.js'
 import { makeUploads } from './uploads.js'
 
 const require = createRequire(import.meta.url)
+const { version: VERSION } = require('./package.json')
 
 /** Cuánto se espera al canal directo antes de mandar el historial por el proxio. */
 export const HISTORY_WAIT_MS = 8000
@@ -186,6 +187,8 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
       return
     }
     if (!mayPass()) return
+    // Qué versión corre: tras actualizar el paquete, el agente en marcha sigue con la anterior.
+    if (msg.type === 'version') { session.send({ type: 'version', version: VERSION }); return }
     if (msg.type === 'list') { session.send({ type: 'consoles', list: hub.list() }); return }
     if (msg.type === 'open') {
       takeSize(msg)
