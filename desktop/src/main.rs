@@ -2836,7 +2836,7 @@ impl App {
             // Abren en ESTA ventana, como las de aquí (dueño, 2026-10-10).
             for m in &others {
                 let label = m.label();
-                let state = if m.locked { t("pide su clave", "asks for its code") } else if m.consoles.is_none() { t("no contesta", "not answering") } else { t("clic: consola nueva allí", "click: new console there") };
+                let state = if m.locked { t("pide su clave · clic: escribirla", "asks for its code · click: type it") } else if m.consoles.is_none() { t("no contesta", "not answering") } else { t("clic: consola nueva allí", "click: new console there") };
                 let head = button(centered(label.chars().take(2).collect::<String>(), 11))
                     .width(24)
                     .padding([3, 0])
@@ -2956,6 +2956,12 @@ impl App {
             .padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 });
             items = items.push(container(separator()).padding(iced::Padding { top: 6.0, right: ARROW_W, ..Default::default() }));
             items = items.push(far_head);
+            // Con clave: un botón que lo dice. La clave se teclea en la terminal de esta ventana (la
+            // pide el cliente al pasar a esa máquina) y vale hasta que el agente de aquí se reinicie.
+            if m.locked {
+                let unlock = button(text(t("Escribir la clave", "Type its code")).size(12)).padding([3, 10]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
+                items = items.push(container(unlock).padding(iced::Padding { left: 8.0, top: 4.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
+            }
             for (i, c) in m.consoles.iter().flatten().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), c.host.as_deref());
