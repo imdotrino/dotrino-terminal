@@ -237,3 +237,42 @@ test('`dotrino-terminal note` DENTRO de una consola cambia la nota de ESA consol
     fs.rmSync(home, { recursive: true, force: true })
   }
 })
+
+test('cerrar la ventana SUELTA la consola (sigue viva), salvo en la terminal de VS Code, donde la CIERRA', async () => {
+  const { connectLocal } = await import('../local.js')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dtc-'))
+  const dir = path.join(home, 'terminal-agent/p')
+  fs.mkdirSync(dir, { recursive: true })
+  const base = { ...process.env, DOTRINO_AGENT_HOME: home, DOTRINO_NO_UPDATE_NOTICE: '1', SHELL: '/bin/sh' }
+  delete base.TERM_PROGRAM
+  const until = async (fn, ms = 8000) => { const t = Date.now() + ms; while (Date.now() < t) { if (await fn()) return true; await sleep(50) } return false }
+  let conn = null
+  const list = () => new Promise((resolve) => {
+    const on = (m) => { if (m.type === 'consoles') { conn.off?.('message', on); resolve(m.list) } }
+    conn.on('message', on); conn.send({ type: 'list' })
+  })
+  /** Abre una ventana, espera a que su consola responda y la cierra como lo hace un emulador (SIGHUP). */
+  const openAndClose = async (env, mark) => {
+    const term = pty.spawn(process.execPath, [CLIENT, 'open', '--name', 'p'], { cols: 80, rows: 24, env })
+    let out = ''
+    term.onData((d) => { out += d })
+    term.write(`echo ${mark}-$((1+1))\r`)
+    assert.ok(await until(() => out.includes(`${mark}-2`)), 'la consola arranca')
+    let gone = false
+    term.onExit(() => { gone = true })
+    term.kill('SIGHUP')
+    assert.ok(await until(() => gone), 'el cliente termina')
+  }
+  try {
+    await openAndClose(base, 'APP')
+    conn = await connectLocal(dir)
+    await sleep(300)
+    assert.equal((await list()).length, 1, 'una ventana cualquiera: la consola sigue viva')
+    await openAndClose({ ...base, TERM_PROGRAM: 'vscode' }, 'CODE')
+    assert.ok(await until(async () => (await list()).length === 1), 'la de VS Code se cerró con su terminal; la otra sigue')
+  } finally {
+    try { conn?.close() } catch (_) {}
+    try { process.kill(Number(fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8').trim())) } catch (_) {}
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})

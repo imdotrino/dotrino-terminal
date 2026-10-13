@@ -865,7 +865,19 @@ function interactive (conn, first, dir) {
   for (const b of early.splice(0)) onKeys(b)
   out.on('resize', () => conn.send({ type: 'resize', ...size() }))
   // La ventana se cerró: el agente ve caer la conexión y suelta la consola (sigue viva).
-  for (const sig of ['SIGHUP', 'SIGTERM']) process.on(sig, () => { conn.close(); process.exit(0) })
+  // SALVO en la terminal integrada de VS Code (y Cursor, VSCodium: `TERM_PROGRAM=vscode`): allí
+  // no hay panel de consolas con el que volver a ella ni cerrarla, así que cada terminal cerrada
+  // dejaba una consola que nadie mira (dueño, 2026-10-13). Cerrar la terminal CIERRA su consola.
+  // Una ventana de la app (`--tag`) nunca: aunque la app se lanzara desde una terminal de VS Code.
+  const ownsConsole = process.env.TERM_PROGRAM === 'vscode' && !opt('--tag')
+  for (const sig of ['SIGHUP', 'SIGTERM']) {
+    process.on(sig, () => {
+      if (!ownsConsole || !consoleId) { conn.close(); process.exit(0) }
+      conn.send({ type: 'close' })
+      // Que la orden salga antes de soltar la conexión.
+      setTimeout(() => { conn.close(); process.exit(0) }, 150)
+    })
+  }
 
   conn.send({ ...first, ...size() })
 }

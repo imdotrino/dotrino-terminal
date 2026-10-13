@@ -76,7 +76,9 @@ Solo esta máquina necesita la 0.38: las otras atienden como a cualquier aparato
 VS Code Insiders, VSCodium y Cursor (los que haya, Linux y macOS) y lo deja por defecto; conserva
 los comentarios y el resto del archivo (`editors.js`, con `jsonc-parser`). El perfil apunta a Node
 y al script por su ruta, porque un editor lanzado desde el escritorio no hereda el PATH de la shell:
-al cambiar de Node se vuelve a correr.
+al cambiar de Node se vuelve a correr. En esa terminal (`TERM_PROGRAM=vscode`, sin `--tag`) cerrar
+la pestaña CIERRA la consola: el editor no tiene panel de consolas, y soltarla dejaba una consola
+que nadie mira por cada pestaña cerrada. En cualquier otra ventana se suelta y sigue viva.
 
 Enlazar pide una terminal interactiva: se pega la invitación de `dotrino-vault pair` y
 se aprueba con `dotrino-vault approve <código>`. Después puede correr como servicio
