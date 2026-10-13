@@ -103,8 +103,9 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   cliente queda en espera: Ctrl+] n abre una, Ctrl+] a<id> pasa a una; lo tecleado ahí se descarta). Solo crean consola el «+» y una ventana
   nueva (o un cambio de perfil) cuando no hay ninguna libre. En el panel (plegado y abierto),
   un **punto verde** en la esquina superior derecha de una consola dice que está abierta en una
-  ventana de la app en ESTA máquina (`watchers` con `origin: 'local'` y etiqueta `desktop-…`: esta
-  ventana u otra); lo remoto y la terminal de VS Code no cuentan. En una consola de OTRA máquina
+  ventana de ESTA máquina (`watchers` con `origin: 'local'`: una ventana de la app, o la terminal de
+  VS Code); lo remoto no cuenta. Parpadea solo si la muestra una ventana de la app (etiqueta
+  `desktop-…`), que es la que puede darla por vista. En una consola de OTRA máquina
   el punto sale igual si la muestra una ventana de aquí (allí es `remote`, con la etiqueta
   `desktop-<pid>-…` de un proceso de la app vivo en esta máquina). El punto parpadea si la consola terminó sin atender (`doneAt`) y
   deja de hacerlo cuando su ventana tiene el foco (`App::seen`, solo de la app: el borde verde de

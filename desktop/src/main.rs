@@ -219,14 +219,16 @@ mod tests {
     use super::{drop_target, panel_lines};
 
     #[test]
-    fn the_green_dot_is_only_for_a_console_a_window_of_the_app_shows() {
+    fn the_green_dot_blinks_only_for_a_console_a_window_of_the_app_shows() {
         let c = |watchers: &str| -> super::ConsoleInfo { serde_json::from_str(&format!(r#"{{"id":"a","watchers":{watchers}}}"#)).unwrap() };
-        assert!(c(r#"[{"origin":"local","tag":"desktop-1-1"}]"#).attended());
-        // La terminal de VS Code o un `attach` suelto: espectador local, sin ventana de la app.
-        assert!(!c(r#"[{"origin":"local"}]"#).attended());
-        assert!(!c(r#"[{"origin":"local","tag":"vscode"}]"#).attended());
-        assert!(!c(r#"[{"origin":"remote","device":"phone","tag":"desktop-1-1"}]"#).attended());
-        assert!(!c("[]").attended());
+        assert!(c(r#"[{"origin":"local","tag":"desktop-1-1"}]"#).in_an_app_window());
+        // La terminal de VS Code o un `attach` suelto: atendida (lleva el punto), pero sin ventana
+        // de la app que la dé por vista: no parpadea.
+        assert!(c(r#"[{"origin":"local"}]"#).open_in_a_window());
+        assert!(!c(r#"[{"origin":"local"}]"#).in_an_app_window());
+        assert!(!c(r#"[{"origin":"local","tag":"vscode"}]"#).in_an_app_window());
+        assert!(!c(r#"[{"origin":"remote","device":"phone","tag":"desktop-1-1"}]"#).in_an_app_window());
+        assert!(!c("[]").in_an_app_window());
         // Una consola de OTRA máquina que una ventana de aquí muestra: allí es «remote», con la
         // etiqueta de este proceso. La de un proceso que no existe (otra máquina) no cuenta.
         let mine = format!(r#"[{{"origin":"remote","device":"me","tag":"desktop-{}-1"}}]"#, std::process::id());
@@ -421,7 +423,7 @@ impl ConsoleInfo {
 const BUSY_COLOR: Color = Color::from_rgb(0.961, 0.761, 0.420);
 const DONE_COLOR: Color = Color::from_rgb(0.478, 0.843, 0.761);
 
-/// Verde = atendida: abierta en una ventana de la app en ESTA máquina (ver `attended`).
+/// Verde = atendida: abierta en una ventana de ESTA máquina (de la app, o la terminal de VS Code).
 const OPEN_COLOR: Color = Color::from_rgb(0.298, 0.851, 0.392);
 
 impl ConsoleInfo {
@@ -430,10 +432,12 @@ impl ConsoleInfo {
         self.watchers.iter().any(|w| w.origin == "local")
     }
 
-    /// ¿Está ATENDIDA: la muestra una ventana de la app (esta u otra abierta en esta máquina)? Es lo
-    /// que dice el punto verde. Un espectador local sin etiqueta de la app (la terminal integrada de
-    /// VS Code, `dotrino-terminal attach` en otra terminal) no cuenta: no hay ventana a la que ir.
-    fn attended(&self) -> bool {
+    /// ¿La muestra una ventana de la APP (esta u otra abierta en esta máquina)? Solo ahí PARPADEA el
+    /// punto: el parpadeo se apaga cuando esa ventana tiene el foco. Una consola atendida por la
+    /// terminal de VS Code (espectador local sin etiqueta de la app) lleva el punto verde, fijo:
+    /// está atendida (dueño, 2026-10-13), pero ninguna ventana de la app puede darla por vista, y
+    /// parpadearía para siempre.
+    fn in_an_app_window(&self) -> bool {
         self.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref().is_some_and(|t| t.starts_with("desktop-")))
     }
 
@@ -764,6 +768,8 @@ enum Message {
     Poll,
     Blink,
     Focused(window::Id),
+    /// Devolver el teclado a la terminal de la ventana (salvo que se esté editando la nota).
+    Refocus(window::Id),
     Unfocused(window::Id),
     /// Panel lateral: ver esta consola en la ventana.
     ShowConsole(window::Id, String),
@@ -1959,6 +1965,14 @@ impl App {
         }
     }
 
+    /// El teclado a la terminal, ahora y otra vez al poco. Al arrancar un cliente la terminal es un
+    /// componente NUEVO: si el foco se pide antes de que esté en pantalla, o un clic en el panel se
+    /// lo quita justo después, quedaba sorda hasta hacerle clic. Se notaba cuando el cliente pide
+    /// la clave de otra máquina nada más arrancar (dueño, 2026-10-13).
+    fn focus_soon(&self, id: window::Id) -> Task<Message> {
+        Task::batch([self.focus(id), later(250, Message::Refocus(id)), later(1000, Message::Refocus(id))])
+    }
+
     /// Cerrar una ventana NUNCA cierra una consola (dueño, 2026-10-08): la ventana SUELTA la que
     /// muestra (Ctrl+] d) y se va; la consola sigue viva en el agente. Una consola se cierra desde
     /// el panel («×» o «Cerrar consola»), o saliendo de su shell.
@@ -2034,7 +2048,7 @@ impl App {
                     _ => win.attach = None,
                 }
                 self.start(id, Mode::Console);
-                self.focus(id)
+                self.focus_soon(id)
             }
             Mode::Console => {
                 let current = win.profile.clone();
@@ -2053,7 +2067,7 @@ impl App {
                             win.profile = Some(new);
                         }
                         self.start(id, Mode::Console);
-                        self.focus(id)
+                        self.focus_soon(id)
                     }
                     None => self.close(id),
                 }
@@ -2072,7 +2086,7 @@ impl App {
                     self.notice = Some(Notice::Restart);
                 }
                 self.start(id, Mode::Console);
-                self.focus(id)
+                self.focus_soon(id)
             }
             // Terminó el enlace: si quedó un perfil enlazado nuevo, la ventana pasa a él; si
             // no (se canceló, falló), vuelve al que tenía.
@@ -2135,7 +2149,7 @@ impl App {
                 let free = if fresh { None } else { profile.as_deref().and_then(|p| self.free_console(p)) };
                 self.open_window_on(profile, cwd, free).1
             }
-            Message::Opened(id) => self.focus(id),
+            Message::Opened(id) => self.focus_soon(id),
             Message::Close(id) => self.request_close(id),
             Message::ForceClose(id) => {
                 if self.windows.contains_key(&id) { self.close(id) } else { Task::none() }
@@ -2159,7 +2173,7 @@ impl App {
                     win.attach = free;
                 }
                 self.start(id, Mode::Console);
-                self.focus(id)
+                self.focus_soon(id)
             }
             Message::InstallClient(id) => {
                 // En ESTA ventana, en otra TTY (dueño, 2026-10-07): la consola se suelta sin cerrarla,
@@ -2431,7 +2445,14 @@ impl App {
             Message::Focused(id) => {
                 self.focused = Some(id);
                 self.mark_seen();
-                Task::none()
+                // La ventana vuelve a tener el foco: el teclado va a su terminal.
+                self.handle(Message::Refocus(id))
+            }
+            Message::Refocus(id) => {
+                if self.windows.get(&id).is_some_and(|w| w.note_edit.is_some()) {
+                    return Task::none();
+                }
+                self.focus(id)
             }
             Message::Unfocused(id) => {
                 if self.focused == Some(id) {
@@ -2920,9 +2941,10 @@ impl App {
                     .padding([4, 0])
                     .style(console_button(is_mine, c.act()))
                     .on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
-                // El punto verde, y su parpadeo: solo en una consola atendida de ESTA máquina.
-                let open = is_mine || (local && c.attended());
-                let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c))).center_x(Length::Fill).into();
+                // El punto verde: una consola atendida en ESTA máquina (una ventana de la app, o la
+                // terminal de VS Code). Parpadea solo si la muestra una ventana de la app.
+                let open = is_mine || c.open_in_a_window();
+                let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c) && c.in_an_app_window())).center_x(Length::Fill).into();
                 let b = self.console_menu(id, None, c.id.clone(), is_mine, b);
                 let tip = match c.act() {
                     Act::Busy => format!("{tip} · {}", t("trabajando", "working")),
@@ -3042,7 +3064,7 @@ impl App {
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, None, c.id.clone()));
-            let pick = dotted(pick.into(), is_mine || (local && c.attended()), self.blink_off && self.blinks(c));
+            let pick = dotted(pick.into(), is_mine || c.open_in_a_window(), self.blink_off && self.blinks(c) && c.in_an_app_window());
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             let entry_row = self.console_menu(id, None, c.id.clone(), is_mine, entry_row);
             let entry_row = if local { draggable(&c.id, entry_row, Length::Fill) } else { entry_row };
@@ -3136,7 +3158,7 @@ impl App {
         let polling = self.windows.values().any(|w| w.sidebar && w.profile.is_some())
             .then(|| iced::time::every(std::time::Duration::from_millis(1500)).map(|_| Message::Poll));
         // El punto parpadea solo mientras haya alguno que deba: sin eso, nada se repinta de más.
-        let blinking = (polling.is_some() && self.consoles.values().flatten().any(|c| self.blinks(c) && c.attended())
+        let blinking = (polling.is_some() && self.consoles.values().flatten().any(|c| self.blinks(c) && c.in_an_app_window())
             || self.far.values().flatten().flat_map(|m| m.consoles.iter().flatten()).any(|c| self.blinks(c) && c.attended_from_here()))
             .then(|| iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::Blink));
         Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting).chain(polling).chain(blinking))
