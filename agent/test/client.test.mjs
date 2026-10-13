@@ -78,6 +78,13 @@ test('si OTRA pantalla le cierra la consola y no queda ninguna, la ventana sigue
     await sleep(300)
     assert.equal(exited, null, 'el cliente sigue vivo')
     assert.equal((await list()).length, 0, 'y no creó una consola nueva')
+    // Y desde ahí, elegir en el panel una consola que ya no existe tampoco termina el cliente
+    // (2026-10-13: la ventana que miraba otra máquina se cerraba, y la app con ella).
+    out = ''
+    term.write('\x1dadeadbeefdeadbeef\r')
+    assert.ok(await until(() => /No hay consolas|No open consoles/.test(out)), 'lo vuelve a decir')
+    await sleep(300)
+    assert.equal(exited, null, 'y sigue vivo, sin consola')
     term.write('echo PERDIDO\r')                                  // sin consola: no va a ningún sitio
     term.write('\x1dn')                                           // Ctrl+] n: ahora sí, una nueva
     assert.ok(await until(async () => (await list()).length === 1), 'se abre al pedirla')

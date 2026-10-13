@@ -917,6 +917,35 @@ function interactive (conn, first, dir) {
   let clean = false
   let switching = false                // se pidió pasar a otra consola y aún no contestó
   let recovering = false               // falló el cambio: se está repintando la que había
+  let wasEmpty = false                 // el cambio en curso se pidió desde una ventana sin consola
+  const showEmpty = () => {
+    empty = true
+    ready = false
+    shellTitle = ''; subject = ''; remote = new Set(); showTitle()
+    out.write(`\x1bc\x1b[2m${t('No hay consolas abiertas. Ctrl+] y luego n abre una.', 'No open consoles. Ctrl+] then n opens one.')}\x1b[0m\r\n`)
+  }
+  // LA CONSOLA DE ESTA VENTANA YA NO EXISTE. Pasa a una que YA existe: primero una que no mire
+  // nadie; si todas se miran, la primera igual. NUNCA crea una nueva (para no llenarse de
+  // consolas que nadie mira): si la máquina se quedó sin ninguna, la ventana se queda SIN
+  // consola (`empty`) y lo dice.
+  const lost = () => {
+    const closed = consoleId
+    consoleId = null
+    ready = false                      // lo que se teclee mientras tanto espera a la consola que venga
+    switching = false; recovering = false
+    request(conn, { type: 'list' }, 'consoles').then((r) => {
+      if (r.type !== 'consoles') return                // un `fail`: ya lo atendió el manejador
+      const rest = r.list.filter((c) => c.id !== closed)
+      // Desatendida EN ESTA MÁQUINA: que la mire otro aparato no la hace atendida aquí.
+      const other = rest.find((c) => !c.watchers.length) || rest.find((c) => !c.watchers.some((w) => w.origin === 'local')) || rest[0]
+      if (other) return switchTo({ type: 'attach', id: other.id })
+      // Mirando OTRA máquina que se quedó sin consolas: decir «no hay consolas» sería falso si
+      // en esta sí las hay (dueño, 2026-10-13). El cliente termina sin error y quien lo lanzó
+      // (la app) devuelve la ventana a las consolas de esta máquina.
+      if (opt('--machine')) return finish(0, t('Esa máquina ya no tiene consolas abiertas.', 'That machine has no open consoles left.'))
+      showEmpty()
+    })
+  }
   conn.on('message', (m) => {
     if (m.type === 'replay' && !clean) { clean = true; out.write('\x1b[H\x1b[2J') }
     if (m.type === 'out' || m.type === 'replay') { out.write(filter(m.data)); return }
@@ -932,37 +961,29 @@ function interactive (conn, first, dir) {
     if (m.type === 'meta') { onInfo(m.console); return }
     if (m.type === 'exit') {
       // LA CONSOLA SE CERRÓ, la cierre quien la cierre (otra pantalla, el panel, o `exit` tecleado
-      // aquí): cerrar una consola nunca cierra la ventana (dueño, 2026-10-08). Pasa a una consola
-      // que YA existe: primero una que no mire nadie; si todas se miran, la primera igual.
-      // NUNCA crea una nueva (para no llenarse de consolas que nadie mira): si la máquina se quedó
-      // sin ninguna, la ventana se queda SIN consola (`empty`) y lo dice.
-      {
-        const closed = consoleId
-        consoleId = null
-        ready = false                  // lo que se teclee mientras tanto espera a la consola que venga
-        request(conn, { type: 'list' }, 'consoles').then((r) => {
-          if (r.type !== 'consoles') return            // un `fail`: ya lo atendió el manejador de abajo
-          const rest = r.list.filter((c) => c.id !== closed)
-          // Desatendida EN ESTA MÁQUINA: que la mire otro aparato no la hace atendida aquí.
-          const other = rest.find((c) => !c.watchers.length) || rest.find((c) => !c.watchers.some((w) => w.origin === 'local')) || rest[0]
-          if (other) return switchTo({ type: 'attach', id: other.id })
-          empty = true
-          shellTitle = ''; subject = ''; remote = new Set(); showTitle()
-          out.write(`\x1bc\x1b[2m${t('No hay consolas abiertas. Ctrl+] y luego n abre una.', 'No open consoles. Ctrl+] then n opens one.')}\x1b[0m\r\n`)
-        })
-        return
-      }
+      // aquí): cerrar una consola nunca cierra la ventana (dueño, 2026-10-08).
+      lost()
+      return
     }
     if (m.type === 'fail') {
+      // LA OTRA MÁQUINA SE REINICIÓ (alguien cerró todas sus terminales para estrenar versión):
+      // sus consolas ya no existen. Es lo mismo que cerrarlas una a una, así que la ventana
+      // sigue: pasa a una que haya, o se queda sin consola. Terminar aquí cerraba la ventana
+      // (y la app, si era la última) en la máquina que solo estaba mirando.
+      if (m.code === 'machine-restarted') { lost(); return }
       // FALLÓ UN CAMBIO DE CONSOLA (la que se pidió ya no existe: el panel de la app iba un
       // instante por detrás). El agente rechaza ANTES de soltar la actual, así que esta ventana
       // sigue en la suya: se vuelve a pintar y se sigue. Terminar aquí cerraba la ventana entera
-      // por elegir una entrada caducada. Solo es fatal si falla al arrancar, o al repintar.
+      // por elegir una entrada caducada. Solo es fatal si falla al arrancar.
       if (switching && consoleId && !recovering) {
         switching = false; recovering = true
         conn.send({ type: 'attach', id: consoleId, ...size(), ...tag() })
         return
       }
+      // Lo mismo desde una ventana SIN consola: no había ninguna que soltar, sigue sin ella.
+      if (switching && wasEmpty) { switching = false; showEmpty(); return }
+      // Y si la que había tampoco se pudo repintar (se cerró entre medias): a otra, o sin consola.
+      if (recovering && m.code === 'no-console') { recovering = false; lost(); return }
       finish(1, `dotrino-terminal: ${m.message} (${m.code})`)
     }
   })
@@ -981,6 +1002,7 @@ function interactive (conn, first, dir) {
   // Cambiar de consola SIN salir: por la misma conexión, y con la pantalla en limpio para que la
   // repetición de la otra consola no se pinte encima. Lo tecleado mientras tanto se guarda.
   const switchTo = (msg) => {
+    wasEmpty = empty
     empty = false
     ready = false
     switching = true

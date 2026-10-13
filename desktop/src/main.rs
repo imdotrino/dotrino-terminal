@@ -2297,6 +2297,21 @@ impl App {
                         self.start(id, Mode::Console);
                         self.focus_soon(id)
                     }
+                    // Miraba OTRA máquina y su cliente terminó (esa máquina cerró todas sus
+                    // terminales, o dejó de contestar): la ventana no se cierra, vuelve a las
+                    // consolas de ESTA máquina. Primero una que nadie mire; si no hay ninguna,
+                    // abre una, como una ventana nueva.
+                    None if self.windows.get(&id).is_some_and(|w| w.machine.is_some()) => {
+                        let local = current.as_ref().and_then(|p| self.profile_dir(p)).and_then(|d| agent_list(&d)).unwrap_or_default();
+                        let pick = local.iter().find(|c| c.watchers.is_empty()).or(local.first()).map(|c| c.id.clone());
+                        if let Some(win) = self.windows.get_mut(&id) {
+                            win.machine = None;
+                            win.showing = pick.clone();
+                            win.attach = pick;
+                        }
+                        self.start(id, Mode::Console);
+                        self.focus_soon(id)
+                    }
                     None => self.close(id),
                 }
             }
