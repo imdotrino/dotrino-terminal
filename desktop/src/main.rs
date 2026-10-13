@@ -219,6 +219,17 @@ mod tests {
     use super::{drop_target, panel_lines};
 
     #[test]
+    fn the_green_dot_is_only_for_a_console_a_window_of_the_app_shows() {
+        let c = |watchers: &str| -> super::ConsoleInfo { serde_json::from_str(&format!(r#"{{"id":"a","watchers":{watchers}}}"#)).unwrap() };
+        assert!(c(r#"[{"origin":"local","tag":"desktop-1-1"}]"#).attended());
+        // La terminal de VS Code o un `attach` suelto: espectador local, sin ventana de la app.
+        assert!(!c(r#"[{"origin":"local"}]"#).attended());
+        assert!(!c(r#"[{"origin":"local","tag":"vscode"}]"#).attended());
+        assert!(!c(r#"[{"origin":"remote","device":"phone","tag":"desktop-1-1"}]"#).attended());
+        assert!(!c("[]").attended());
+    }
+
+    #[test]
     fn a_new_window_takes_a_console_no_window_of_this_machine_shows_before_making_one() {
         let c = |id: &str, watchers: &str| -> super::ConsoleInfo { serde_json::from_str(&format!(r#"{{"id":"{id}","watchers":{watchers}}}"#)).unwrap() };
         let local = r#"[{"origin":"local","tag":"desktop-1-1"}]"#;
@@ -391,13 +402,20 @@ impl ConsoleInfo {
 const BUSY_COLOR: Color = Color::from_rgb(0.961, 0.761, 0.420);
 const DONE_COLOR: Color = Color::from_rgb(0.478, 0.843, 0.761);
 
-/// Verde = abierta en una ventana de ESTA máquina.
+/// Verde = atendida: abierta en una ventana de la app en ESTA máquina (ver `attended`).
 const OPEN_COLOR: Color = Color::from_rgb(0.298, 0.851, 0.392);
 
 impl ConsoleInfo {
     /// ¿La muestra alguna ventana de esta máquina (esta incluida)? Lo abierto en otro aparato no cuenta.
     fn open_in_a_window(&self) -> bool {
         self.watchers.iter().any(|w| w.origin == "local")
+    }
+
+    /// ¿Está ATENDIDA: la muestra una ventana de la app (esta u otra abierta en esta máquina)? Es lo
+    /// que dice el punto verde. Un espectador local sin etiqueta de la app (la terminal integrada de
+    /// VS Code, `dotrino-terminal attach` en otra terminal) no cuenta: no hay ventana a la que ir.
+    fn attended(&self) -> bool {
+        self.watchers.iter().any(|w| w.origin == "local" && w.tag.as_deref().is_some_and(|t| t.starts_with("desktop-")))
     }
 }
 
@@ -2800,7 +2818,8 @@ impl App {
                     .padding([4, 0])
                     .style(console_button(is_mine, c.act()))
                     .on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
-                let open = is_mine || c.open_in_a_window();
+                // El punto verde, y su parpadeo: solo en una consola atendida de ESTA máquina.
+                let open = is_mine || (local && c.attended());
                 let b: Element<'_, Message> = container(dotted(b.into(), open, self.blink_off && self.blinks(c))).center_x(Length::Fill).into();
                 let b = if local { self.console_menu(id, c.id.clone(), is_mine, b) } else { b };
                 let tip = match c.act() {
@@ -2916,7 +2935,7 @@ impl App {
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, None, c.id.clone()));
-            let pick = dotted(pick.into(), is_mine || c.open_in_a_window(), self.blink_off && self.blinks(c));
+            let pick = dotted(pick.into(), is_mine || (local && c.attended()), self.blink_off && self.blinks(c));
             let entry_row: Element<'_, Message> = row![pick, kill].align_y(iced::Alignment::Center).into();
             let entry_row = if local { draggable(&c.id, self.console_menu(id, c.id.clone(), is_mine, entry_row), Length::Fill) } else { entry_row };
             let entry = container(entry_row).padding(iced::Padding { right: 4.0, ..Default::default() });
@@ -3001,7 +3020,7 @@ impl App {
         let polling = self.windows.values().any(|w| w.sidebar && w.profile.is_some())
             .then(|| iced::time::every(std::time::Duration::from_millis(1500)).map(|_| Message::Poll));
         // El punto parpadea solo mientras haya alguno que deba: sin eso, nada se repinta de más.
-        let blinking = (polling.is_some() && self.consoles.values().flatten().any(|c| self.blinks(c) && c.open_in_a_window()))
+        let blinking = (polling.is_some() && self.consoles.values().flatten().any(|c| self.blinks(c) && c.attended()))
             .then(|| iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::Blink));
         Subscription::batch(terms.chain([window::close_requests().map(Message::Close), iced::event::listen_with(shortcut)]).chain(waiting).chain(polling).chain(blinking))
     }
