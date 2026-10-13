@@ -284,7 +284,9 @@ mod tests {
 
     #[test]
     fn the_ring_is_a_sound_the_player_can_read() {
-        assert!(rodio::Decoder::new(std::io::Cursor::new(super::RING)).is_ok());
+        for sound in [super::RING_LOW, super::RING_STANDARD, super::RING_HIGH] {
+            assert!(rodio::Decoder::new(std::io::Cursor::new(sound)).is_ok());
+        }
     }
 
     #[test]
@@ -1119,8 +1121,23 @@ fn save_last_profile(name: &str) {
 /// EL TRINO: el sonido de todos los avisos de Dotrino (`sound/trinos/trino-01a.wav` en la raíz del
 /// ecosistema, el original). El mismo que tocan la web (`@dotrino/notifications/ring`) y las apps
 /// del teléfono (`DotrinoRing`).
-const RING: &[u8] = include_bytes!("../assets/trino.wav");
+///
+/// Tres versiones del mismo trino (dueño, 2026-10-13): `high` es el original, `standard` va 8 dB
+/// por debajo y `low` 16. La app toca la `low`: el original sonaba fortísimo junto a una terminal.
+/// `DOTRINO_TERMINAL_RING=low|standard|high` elige otra.
+const RING_LOW: &[u8] = include_bytes!("../assets/trino-low.wav");
+const RING_STANDARD: &[u8] = include_bytes!("../assets/trino-standard.wav");
+const RING_HIGH: &[u8] = include_bytes!("../assets/trino-high.wav");
 const RING_VOLUME: f32 = 0.6;
+
+/// El trino que toca esta app.
+fn ring_sound() -> &'static [u8] {
+    match std::env::var("DOTRINO_TERMINAL_RING").as_deref() {
+        Ok("high") => RING_HIGH,
+        Ok("standard") => RING_STANDARD,
+        _ => RING_LOW,
+    }
+}
 
 /// Las consolas que ACABAN de terminar: estaban en la lista anterior y su `doneAt` es otro. Una que
 /// aparece ya terminada (al abrir la app, o al llegar la lista de otra máquina) no es una noticia.
@@ -1182,9 +1199,13 @@ fn play_ring() {
 fn ring_now() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = rodio::DeviceSinkBuilder::open_default_sink()?;
     out.log_on_drop(false);
-    let player = rodio::play(out.mixer(), std::io::Cursor::new(RING))?;
+    // La salida recién abierta se come el principio de lo que se le dé, y al soltarla se corta lo
+    // que aún no salió de su búfer: el trino se oía recortado. Un respiro antes y otro después.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let player = rodio::play(out.mixer(), std::io::Cursor::new(ring_sound()))?;
     player.set_volume(RING_VOLUME);
     player.sleep_until_end();
+    std::thread::sleep(std::time::Duration::from_millis(300));
     Ok(())
 }
 
