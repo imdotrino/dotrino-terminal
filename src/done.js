@@ -1,33 +1,38 @@
-// ¿Acaba de TERMINAR una consola? Lo que decide cuándo suena el trino. El agente marca cada
-// consola con `doneAt` cuando termina su tarea (o toca la campana) y lo quita cuando alguien la
-// atiende; aquí solo se mira si ese `doneAt` es NUEVO respecto a lo que ya se sabía.
+// ¿Cuándo suena el trino? El agente marca cada consola con `doneAt` cuando termina su tarea (o
+// toca la campana) y lo quita cuando alguien la atiende. El trino NO suena en ese momento (ahí la
+// consola solo pasa a verde): suena cuando lleva `RING_AFTER_MS` así y nadie la ha atendido
+// (dueño, 2026-10-13). Si se atiende antes, o termina otra vez, esa cuenta ya no vale.
 //
-// La primera lista de una máquina no suena: lo que ya estaba terminado al abrir la app no es
-// una noticia. Lo que suena es lo que termina mientras miras.
+// Lo que ya llevaba más de ese tiempo terminado al abrir la app no es una noticia: no suena.
 
-/** Tracks the `doneAt` of every console seen, per machine. */
-export function doneWatcher () {
+export const RING_AFTER_MS = 60_000
+
+/**
+ * Tracks the `doneAt` of every console seen, per machine, and calls `onRing` when one has stayed
+ * finished and unattended for `afterMs`.
+ * @param {{ onRing: () => void, afterMs?: number, now?: () => number, setTimer?: typeof setTimeout }} opts
+ */
+export function doneWatcher ({ onRing, afterMs = RING_AFTER_MS, now = Date.now, setTimer = setTimeout }) {
   const known = new Map()   // `${machine}\n${console id}` → its doneAt
-  const primed = new Set()  // machines whose first list has already been read
-  const note = (machine, c, quiet) => {
+  const note = (machine, c) => {
     const key = `${machine}\n${c.id}`
-    if (c.doneAt == null) { known.delete(key); return false }
-    if (known.get(key) === c.doneAt) return false
+    if (c.doneAt == null) { known.delete(key); return }
+    if (known.get(key) === c.doneAt) return
     known.set(key, c.doneAt)
-    return !quiet
+    const age = now() - c.doneAt
+    if (age > afterMs) return                       // already old when first seen
+    const at = c.doneAt
+    // Still finished with that same `doneAt` when the time is up: nobody attended it.
+    setTimer(() => { if (known.get(key) === at) onRing() }, Math.max(0, afterMs - age))
   }
   return {
-    /** The whole list of a machine. True when some console finished since the last look. */
+    /** The whole list of a machine. */
     list (machine, list) {
-      const first = !primed.has(machine)
-      primed.add(machine)
       const alive = new Set(list.map((c) => `${machine}\n${c.id}`))
       for (const key of known.keys()) if (key.startsWith(`${machine}\n`) && !alive.has(key)) known.delete(key)
-      let fresh = false
-      for (const c of list) if (note(machine, c, first)) fresh = true
-      return fresh
+      for (const c of list) note(machine, c)
     },
     /** One console, as the machine pushes it to whoever is watching it. */
-    one (machine, c) { return note(machine, c, false) },
+    one (machine, c) { note(machine, c) },
   }
 }

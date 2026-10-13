@@ -250,19 +250,29 @@ mod tests {
     }
 
     #[test]
-    fn a_console_rings_when_it_finishes_not_when_it_shows_up_finished() {
+    fn the_ring_sounds_a_minute_after_a_console_finished_if_nobody_attended_it() {
         let c = |id: &str, done: &str| -> super::ConsoleInfo { serde_json::from_str(&format!(r#"{{"id":"{id}","n":1,"title":"t","doneAt":{done}}}"#)).unwrap() };
         let lists = |v: Vec<super::ConsoleInfo>| -> std::collections::HashMap<String, Vec<super::ConsoleInfo>> { [("p".to_string(), v)].into_iter().collect() };
-        let empty = std::collections::HashMap::new();
-        // Al abrir la app: ya estaba terminada, no es una noticia.
-        assert!(super::just_done(&empty, &lists(vec![c("a", "10")])).is_empty());
-        // Termina mientras se mira: suena, y con el mismo `doneAt` no vuelve a sonar.
-        assert_eq!(super::just_done(&lists(vec![c("a", "null")]), &lists(vec![c("a", "20")])), vec![("a".to_string(), 20)]);
-        assert!(super::just_done(&lists(vec![c("a", "20")]), &lists(vec![c("a", "20")])).is_empty());
-        // Otro «terminó» de la misma consola: otra vez.
-        assert_eq!(super::just_done(&lists(vec![c("a", "20")]), &lists(vec![c("a", "30")])), vec![("a".to_string(), 30)]);
-        // Atendida (sin `doneAt`): nada.
-        assert!(super::just_done(&lists(vec![c("a", "20")]), &lists(vec![c("a", "null")])).is_empty());
+        let mut rung = std::collections::HashMap::new();
+        let done_at = 1_000_000u64;
+        let list = lists(vec![c("a", "1000000")]);
+        // Al pasar a verde no suena, ni a los 59 s.
+        assert!(super::due_rings(&list, &rung, done_at).is_empty());
+        assert!(super::due_rings(&list, &rung, done_at + 59_000).is_empty());
+        // Al minuto, sí; y por ese mismo «terminó» no vuelve a sonar.
+        assert_eq!(super::due_rings(&list, &rung, done_at + 60_000), vec![("a".to_string(), done_at)]);
+        rung.insert("a".to_string(), done_at);
+        assert!(super::due_rings(&list, &rung, done_at + 61_500).is_empty());
+        // Otro «terminó» de la misma consola: otra vez, a SU minuto.
+        let again = lists(vec![c("a", "1100000")]);
+        assert!(super::due_rings(&again, &rung, 1_100_000 + 10_000).is_empty());
+        assert_eq!(super::due_rings(&again, &rung, 1_100_000 + 60_000), vec![("a".to_string(), 1_100_000)]);
+        // Atendida antes del minuto (sin `doneAt`): nada.
+        assert!(super::due_rings(&lists(vec![c("a", "null")]), &std::collections::HashMap::new(), done_at + 60_000).is_empty());
+        // Ya llevaba mucho terminada cuando se abrió la app: no es una noticia.
+        assert!(super::due_rings(&list, &std::collections::HashMap::new(), done_at + 600_000).is_empty());
+        // El reloj de la otra máquina va adelantado: no revienta ni suena.
+        assert!(super::due_rings(&list, &std::collections::HashMap::new(), done_at - 5_000).is_empty());
     }
 
     #[test]
@@ -690,6 +700,8 @@ struct App {
     next_tag: u64,
     /// El medio ciclo apagado del punto que parpadea (consola que terminó y nadie ha atendido).
     blink_off: bool,
+    /// Por qué «terminó» ya sonó el trino en este proceso: consola (id) → su `doneAt`.
+    rung: HashMap<String, u64>,
     /// La ventana que tiene el foco.
     focused: Option<window::Id>,
     /// Lo que ya se vio: la consola (id) y el `doneAt` que tenía cuando su ventana tuvo el foco.
@@ -1139,15 +1151,23 @@ fn ring_sound() -> &'static [u8] {
     }
 }
 
-/// Las consolas que ACABAN de terminar: estaban en la lista anterior y su `doneAt` es otro. Una que
-/// aparece ya terminada (al abrir la app, o al llegar la lista de otra máquina) no es una noticia.
-fn just_done(old: &HashMap<String, Vec<ConsoleInfo>>, new: &HashMap<String, Vec<ConsoleInfo>>) -> Vec<(String, u64)> {
-    let before: HashMap<&str, Option<u64>> = old.values().flatten().map(|c| (c.id.as_str(), c.done_at)).collect();
-    new.values()
+/// Cuánto lleva una consola terminada (en verde) cuando suena el trino. Al terminar NO suena: ahí
+/// solo cambia de color. Suena si pasado este tiempo nadie la ha atendido (dueño, 2026-10-13).
+const RING_AFTER_MS: u64 = 60_000;
+/// Hasta cuándo se da por «acaba de cumplir el minuto». Lo que ya llevaba más que esto terminado
+/// cuando se vio por primera vez (al abrir la app) no es una noticia.
+const RING_WINDOW_MS: u64 = 60_000;
+
+/// Las consolas a las que les toca sonar AHORA: siguen terminadas con el mismo `doneAt`, ese
+/// `doneAt` cumplió `RING_AFTER_MS`, y por él todavía no se sonó (`rung`: consola → `doneAt`).
+fn due_rings(lists: &HashMap<String, Vec<ConsoleInfo>>, rung: &HashMap<String, u64>, now_ms: u64) -> Vec<(String, u64)> {
+    lists
+        .values()
         .flatten()
         .filter_map(|c| {
             let at = c.done_at?;
-            (*before.get(c.id.as_str())? != Some(at)).then(|| (c.id.clone(), at))
+            let age = now_ms.checked_sub(at)?;
+            (age >= RING_AFTER_MS && age < RING_AFTER_MS + RING_WINDOW_MS && rung.get(&c.id) != Some(&at)).then(|| (c.id.clone(), at))
         })
         .collect()
 }
@@ -1282,7 +1302,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1664,9 +1684,13 @@ impl App {
         for list in fresh.values_mut() {
             list.retain(|c| !self.dying.contains(&c.id));
         }
-        // Una consola que acaba de terminar suena con el trino: una vez, por muchas que terminen
-        // a la vez y por muchas ventanas que haya.
-        let done = just_done(&self.consoles, &fresh);
+        // Una consola que lleva un minuto terminada sin atender suena con el trino: una vez, por
+        // muchas que lo cumplan a la vez y por muchas ventanas que haya.
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let done = due_rings(&fresh, &self.rung, now_ms);
+        self.rung.extend(done.iter().cloned());
+        // La que ya se miró (su ventana tuvo el foco desde que terminó) está atendida: no suena.
+        let done: Vec<(String, u64)> = done.into_iter().filter(|(id, at)| self.seen.get(id) != Some(at)).collect();
         if !done.is_empty() {
             let mine = match ring_dir() {
                 Some(dir) => done.iter().filter(|(id, at)| claim_ring(&dir, id, *at)).count() > 0,
