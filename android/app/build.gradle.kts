@@ -39,7 +39,7 @@ android {
         applicationId = "com.dotrino.terminal"
         minSdk = 31
         targetSdk = 36
-        versionCode = 44
+        versionCode = 45
         versionName = "0.13.0"
     }
 

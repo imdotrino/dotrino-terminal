@@ -124,7 +124,7 @@ class DemoConsolesActivity : Activity() {
                     if (on) c.chosenBy = "phone" else if (c.chosenBy == "phone") c.chosenBy = null
                     applySize(c); meta(c)
                 }
-                "input" -> reply(buildJsonObject { put("type", "out"); put("data", (payload["data"] as JsonPrimitive).content.replace("\r", "\r\n$ ")) })
+                "input" -> reply(buildJsonObject { put("type", "out"); put("data", (payload["data"] as JsonPrimitive).content.replace("\r", "\r\n$ ").replace("\u007f", "\b \b")) })
                 "kill" -> { consoles.removeAll { it.id == (payload["id"] as JsonPrimitive).content }; list() }
                 // The panel's order, as the agent keeps it: `id` goes right before `before` (or last).
                 "move" -> {

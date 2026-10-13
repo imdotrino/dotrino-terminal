@@ -457,8 +457,10 @@ class TerminalView(context: Context) : View(context) {
     override fun onCheckIsTextEditor() = true
 
     override fun onCreateInputConnection(out: EditorInfo): InputConnection {
-        // «Visible password»: the keyboard does not predict, correct nor compose — each key arrives as typed.
-        out.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        // Plain text without suggestions, NOT «visible password»: in a password field the keyboard
+        // hides its whole toolbar (clipboard, emoji, GIF), so its image button never shows. What the
+        // keyboard composes meanwhile is kept in step key by key ([sync]).
+        out.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         out.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
         // This field takes images: without saying so the keyboard shows its image button disabled.
         out.contentMimeTypes = arrayOf("image/*")
@@ -471,16 +473,23 @@ class TerminalView(context: Context) : View(context) {
                 take(info.contentUri) { if (granted) info.releasePermission() }
                 return true
             }
-            private fun flush() {
-                val e = editable ?: return
-                val s = e.toString()
-                if (s.isNotEmpty()) { e.clear(); type(s.replace('\n', '\r')) }
+            /** What of the word being composed is already in the console. */
+            private var sent = ""
+            /** Makes the console say [now] where it said [sent]: Backspace over what changed, then the rest. */
+            private fun sync(now: String) {
+                val keep = sent.commonPrefixWith(now).length
+                repeat(sent.codePointCount(keep, sent.length)) { key("backspace") }
+                if (now.length > keep) type(now.substring(keep).replace('\n', '\r'))
+                sent = now
             }
-            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean { super.commitText(text, newCursorPosition); flush(); return true }
-            override fun finishComposingText(): Boolean { super.finishComposingText(); flush(); return true }
+            private fun settle() { sent = ""; editable?.clear() }
+            override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean { sync(text?.toString() ?: ""); return true }
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean { sync(text?.toString() ?: ""); settle(); return true }
+            override fun finishComposingText(): Boolean { settle(); return true }
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
                 // The keyboard deleting «the character before the cursor» is the Backspace key.
                 repeat(max(1, beforeLength)) { key("backspace") }
+                settle()
                 return true
             }
             override fun sendKeyEvent(event: KeyEvent): Boolean {

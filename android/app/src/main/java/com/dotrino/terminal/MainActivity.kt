@@ -616,6 +616,7 @@ class MainActivity : Activity() {
     // starts OPEN (owner, 2026-10-10); folded it is one line — the task. Folding is remembered.
 
     private var aboutCard: LinearLayout? = null
+    private var aboutSays: List<Any?>? = null
     private var aboutFolded: Boolean
         get() = prefs.getBoolean("aboutFolded", false)
         set(v) { prefs.edit().putBoolean("aboutFolded", v).apply() }
@@ -639,8 +640,14 @@ class MainActivity : Activity() {
         val box = aboutCard ?: return
         val tab = active ?: return
         val c = tab.current
+        val shown = c != null && tab.state == Consoles.Tab.State.OPEN
+        // Built again only when what it says changed: the panel asks the machine every 2 s, and
+        // rebuilding the card each time threw away a selection being made in its text.
+        val says = if (!shown) null else listOf(box.hashCode(), aboutFolded, I18n.lang, c!!.id, c.n, c.title, where(tab, c), c.task, c.note)
+        if (says == aboutSays && box.childCount > 0 == shown) return
+        aboutSays = says
         box.removeAllViews()
-        if (c == null || tab.state != Consoles.Tab.State.OPEN) { box.visibility = View.GONE; return }
+        if (c == null || !shown) { box.visibility = View.GONE; return }
         box.visibility = View.VISIBLE
         val glass = (0xC8 shl 24) or (col(R.color.t_panel2) and 0xFFFFFF)
         if (aboutFolded) {
@@ -667,7 +674,7 @@ class MainActivity : Activity() {
             addView(label("${c.n}", 12f, col(R.color.t_on_accent), bold = true).apply { background = rounded(col(R.color.t_accent), px(5)); setPadding(px(6), 0, px(6), 0) })
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL; setPadding(px(7), 0, px(4), 0)
-                addView(label(c.title.ifBlank { t("about.untitled") }, 12f, bold = true).apply { tag = "about-title"; maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END })
+                addView(label(c.title.ifBlank { t("about.untitled") }, 12f, bold = true).apply { tag = "about-title"; maxLines = 3; setTextIsSelectable(true) })
                 addView(label(where(tab, c), 11f, col(R.color.t_muted)).apply { tag = "about-where" })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(label("–", 15f, col(R.color.t_muted)).apply {
@@ -679,7 +686,7 @@ class MainActivity : Activity() {
             box.addView(line(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(1)).apply { topMargin = px(6); bottomMargin = px(6) })
             box.addView(LinearLayout(this).apply {
                 isBaselineAligned = false
-                addView(label(task, 12f).apply { tag = "about-task"; maxLines = 8; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(label(task, 12f).apply { tag = "about-task"; maxLines = 8; setTextIsSelectable(true) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(label("×", 16f, col(R.color.t_muted)).apply {
                     tag = "about-task-del"; contentDescription = t("about.taskDel")
                     setPadding(px(10), 0, px(6), px(4)); setOnClickListener { tab.clearTask() }
@@ -689,7 +696,8 @@ class MainActivity : Activity() {
         box.addView(line(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(1)).apply { topMargin = px(6); bottomMargin = px(6) })
         val note = c.note
         box.addView(label(when { note == null -> t("about.old"); note.isEmpty() -> t("about.empty"); else -> note }, 12f, col(if (note.isNullOrEmpty()) R.color.t_muted else R.color.t_text)).apply {
-            tag = "about-note"; maxLines = 10; ellipsize = android.text.TextUtils.TruncateAt.END
+            // Selectable, as the console is: a long press picks the text, and the system offers to copy it.
+            tag = "about-note"; maxLines = 10; setTextIsSelectable(!note.isNullOrEmpty())
         }, LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT))
         // A machine that keeps no notes: the button shows, off (the line above says why).
         box.addView(LinearLayout(this).apply {
@@ -793,7 +801,7 @@ class MainActivity : Activity() {
     private fun composeBar(): View {
         val input = android.widget.EditText(this).apply {
             tag = "compose-input"; hint = t("compose.hint"); isSingleLine = true
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
             typeface = android.graphics.Typeface.MONOSPACE; setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
             setTextColor(col(R.color.t_text)); setHintTextColor(col(R.color.t_muted))
@@ -896,11 +904,11 @@ class MainActivity : Activity() {
             tab.onImage = { path, problem ->
                 if (path != null) {
                     val typed = Images.typedPath(path) + " "
-                    // As a paste: a program that asked for bracketed paste (Claude Code) takes a
-                    // pasted path as a file. With the writing line on, it goes into the line.
-                    if (active === tab && composing && composeInput != null) composeInput!!.append(typed)
-                    else if (active === tab && view != null) view!!.paste(typed)
-                    else tab.input(typed)
+                    // As a paste, and straight to the console even with the writing line on: a
+                    // program that asked for bracketed paste (Claude Code) takes a PASTED path as a
+                    // file («[Image #1]»); typed, it stays a path.
+                    if (active === tab && view != null) view!!.paste(typed)
+                    else tab.input(if (tab.terminal.bracketedPaste) "\u001b[200~$typed\u001b[201~" else typed)
                     toast(t("image.sent"))
                 } else toast(t(when (problem) { "timeout" -> "image.old"; "too-big" -> "image.big"; "not-image" -> "image.not"; "lost" -> "image.lost"; else -> "image.fail" }))
             }

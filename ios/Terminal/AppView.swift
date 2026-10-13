@@ -415,8 +415,9 @@ private struct ConsoleScreen: View {
                 if let path {
                     let typed = Images.typedPath(path) + " "
                     // As a paste: a program that asked for bracketed paste (Claude Code) takes a
-                    // pasted path as a file. With the writing line on, it goes into the line.
-                    if composing, let f = composeBox.field { f.insertText(typed) } else if let v = view { v.paste(typed) } else { tab.input(typed) }
+                    // PASTED path as a file («[Image #1]»); typed, it stays a path. So it goes straight
+                    // to the console, also with the writing line on.
+                    if let v = view { v.paste(typed) } else { tab.input(typed) }
                     show(t("image.sent"))
                 } else {
                     show(t(problem == "timeout" ? "image.old" : problem == "too-big" ? "image.big" : problem == "not-image" ? "image.not" : problem == "lost" ? "image.lost" : "image.fail"))
@@ -508,7 +509,7 @@ private struct ConsoleScreen: View {
                         .background(RoundedRectangle(cornerRadius: 5).fill(Palette.accent))
                     VStack(alignment: .leading, spacing: 1) {
                         Text(c.title.isEmpty ? t("about.untitled") : c.title).font(.caption.bold()).foregroundColor(Palette.text).lineLimit(3)
-                            .accessibilityIdentifier("about-title")
+                            .textSelection(.enabled).accessibilityIdentifier("about-title")
                         Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -519,7 +520,7 @@ private struct ConsoleScreen: View {
                     Rectangle().fill(Palette.line).frame(height: 1)
                     HStack(alignment: .top, spacing: 6) {
                         Text(task).font(.caption).foregroundColor(Palette.text).lineLimit(8)
-                            .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("about-task")
+                            .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).accessibilityIdentifier("about-task")
                         Button { tab.clearTask() } label: { Text("×").foregroundColor(Palette.muted).padding(.horizontal, 8) }
                             .accessibilityLabel(t("about.taskDel")).accessibilityIdentifier("about-task-del")
                     }
@@ -528,7 +529,7 @@ private struct ConsoleScreen: View {
                 Rectangle().fill(Palette.line).frame(height: 1)
                 Text(c.note == nil ? t("about.old") : c.note!.isEmpty ? t("about.empty") : c.note!)
                     .font(.caption).foregroundColor((c.note ?? "").isEmpty ? Palette.muted : Palette.text).lineLimit(10)
-                    .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("about-note")
+                    .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).accessibilityIdentifier("about-note")
                 // A machine that keeps no notes: the button shows, off (the line above says why).
                 Button { noteDraft = c.note ?? ""; editing = c } label: {
                     Text(t((c.note ?? "").isEmpty ? "about.add" : "about.edit")).font(.caption.bold()).foregroundColor(Palette.text)
