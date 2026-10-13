@@ -306,8 +306,7 @@ async function desktop () {
   if (!r.ok) {
     const why = {
       'could-not-check': t(`No se pudo mirar (${r.reason}). No es que estés al día: es que no se sabe.`, `Could not check (${r.reason}). That does not mean you are up to date: it is unknown.`),
-      NO_GH: t('NO se instala nada: falta GitHub CLI (gh), que es con lo que se comprueba la firma. Instálalo (https://cli.github.com; no hace falta iniciar sesión) y repite.', 'Nothing is installed: GitHub CLI (gh) is missing, and it is what checks the signature. Install it (https://cli.github.com; no login needed) and try again.'),
-      GH_TOO_OLD: t('NO se instala nada: este gh es anterior a la 2.49 y no sabe comprobar firmas. Actualiza GitHub CLI y repite.', 'Nothing is installed: this gh predates 2.49 and cannot check signatures. Update GitHub CLI and try again.'),
+      NO_VERIFIER: t('NO se instala nada: a este programa le falta la pieza que comprueba la firma. Reinstálalo con: npm install -g @dotrino/terminal-agent', 'Nothing is installed: this program is missing the piece that checks the signature. Reinstall it with: npm install -g @dotrino/terminal-agent'),
       'not-writable': t(`NO se instala nada: no puedo escribir donde está la app (${r.reason}). Bájala de https://terminal.dotrino.com/`, `Nothing is installed: I cannot write where the app is (${r.reason}). Get it from https://terminal.dotrino.com/`)
     }[r.code] || t(`NO se instala nada: ${r.reason}`, `Nothing is installed: ${r.reason}`)
     die(r.file ? `${why}\n${t('El archivo, ya comprobado, quedó en', 'The file, already checked, is at')} ${r.file}` : why)
