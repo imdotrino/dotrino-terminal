@@ -1,74 +1,31 @@
-/* Tema «Cool & Cozy» del ecosistema, variante oscura: la terminal es oscura siempre. */
-
-@font-face {
-  font-family: 'Quicksand';
-  src: url('/fonts/quicksand.woff2') format('woff2');
-  font-weight: 300 700;
-  font-display: swap;
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'Quicksand';
-  src: url('/fonts/quicksand-ext.woff2') format('woff2');
-  font-weight: 300 700;
-  font-display: swap;
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
+/* Colores y fuentes del ecosistema (@dotrino/theme, CONVENCIONES §5): claro u oscuro lo
+   elige el usuario con el sol/luna. La consola (xterm) y lo que flota sobre ella son
+   oscuros siempre: es una terminal (color-scheme: dark en .term-wrap y .about). */
 :root {
-  --bg: #0f1416;          /* surface */
-  --well: #181c1e;        /* surface-container-low */
-  --panel: #1c2022;       /* surface-container */
-  --panel-high: #262a2d;  /* surface-container-high */
-  --brand: #81cfff;       /* primary */
-  --on-brand: #003549;    /* on-primary */
-  --brand-soft: #004c6b;  /* primary-container */
-  --text: #dfe3e6;        /* on-surface */
-  --muted: #bfc8cf;       /* on-surface-variant */
-  --line: #3f484e;        /* outline-variant */
-  --ok: #7ad7c2;          /* secondary */
-  --busy: #f5c26b;        /* ámbar: una consola trabajando */
-  --err: #ffb4ab;         /* error */
-  color-scheme: dark;
+  --bg: var(--dt-bg);
+  --well: var(--dt-bg-2);
+  --panel: var(--dt-surface);
+  --panel-high: var(--dt-surface-3);
+  --brand: var(--dt-accent);
+  --on-brand: var(--dt-accent-ink);
+  --brand-soft: var(--dt-accent-soft);
+  --text: var(--dt-text);
+  --muted: var(--dt-text-dim);
+  --line: var(--dt-line);
+  --ok: var(--dt-ok);
+  --busy: var(--dt-busy);
+  --err: var(--dt-error);
+  --term-bg: #0f1416;   /* el fondo de la consola, igual que el de xterm (main.js) */
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'Quicksand', system-ui, sans-serif;
+  font-family: var(--dt-font);
   display: flex; flex-direction: column; min-height: 100vh;
 }
 
-/* El header lo provee <dotrino-topbar> (@dotrino/topbar). Lo tematizamos con las
-   variables del componente para que combine con la estética de la terminal. */
-dotrino-topbar {
-  --dotrino-topbar-bg: var(--panel);
-  --dotrino-topbar-border: var(--line);
-  --dotrino-topbar-text: var(--text);
-  --dotrino-topbar-muted: var(--muted);
-  --dotrino-topbar-accent: var(--brand);
-}
-/* Tarjeta de perfil (@dotrino/profile) — el modal se abre desde el botón de perfil
-   del topbar. Se tematiza con --ccp-* al tema oscuro de la terminal (si no, cae a la
-   paleta crema clara por defecto del componente y desentona). */
-dotrino-profile {
-  --ccp-bg: var(--panel);      /* #171331 — superficie del modal */
-  --ccp-bg-2: var(--well);         /* elevado: footer, chips */
-  --ccp-bg-3: var(--panel-high);         /* paneles, chip de pubkey, hovers, perfil activo */
-  --ccp-bg-4: #313538;         /* estrellas vacías, hover de refrescar */
-  --ccp-border: var(--line);   /* #2a2350 */
-  --ccp-text: var(--text);     /* #e7e3ff */
-  --ccp-muted: var(--muted);   /* #9a92c4 */
-  --ccp-accent: var(--brand);  /* #7c3aed */
-  --ccp-accent-2: var(--brand-soft);
-  --ccp-accent-text: var(--on-brand);
-  --ccp-input-bg: var(--bg);   /* #0e0b1a — inputs como pozos oscuros */
-  --ccp-gold: #facc15;         /* estrellas (más brillante para fondo oscuro) */
-  --ccp-derived: #cbb98a;
-  --ccp-affinity: #2dd4bf;
-  --ccp-online: #4ade80;
-  --ccp-radius: 14px;
-}
 
 /* Botones propios de la app en el slot "end" (Desconectar / Instalar). */
 .tb-action { padding: 6px 12px; font-size: 14px; background: transparent; }
@@ -80,7 +37,7 @@ dotrino-profile {
 }
 .modal { max-width: 420px; }
 .machine-code { width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px 12px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
-.machine-code-why { color: #ffd98a; }
+.machine-code-why { color: var(--dt-busy); }
 .modal-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
 button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line); padding: 8px 14px; background: var(--panel); color: inherit; }
 button.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); font-weight: 600; }
@@ -119,11 +76,11 @@ textarea { width: 100%; min-height: 92px; margin: 12px 0; background: var(--well
 .machine:hover { background: var(--panel-high); border-color: var(--brand); }
 /* Punto de estado (presencia por ping/pong): comprobando / en línea / desconectada */
 .mdot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
-.mdot.conn { background: #d9a441; animation: pulse 1s infinite; }
-.mdot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(122, 215, 194, .18); }
-.mdot.off { background: #6b7378; }
+.mdot.conn { background: var(--busy); animation: pulse 1s infinite; }
+.mdot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+.mdot.off { background: var(--dt-text-faint); }
 .machine-x { border: 1px solid var(--brand); border-left: none; border-radius: 0 10px 10px 0; background: var(--panel); color: var(--muted); padding: 0 12px; font-size: 1rem; line-height: 1; }
-.machine-x:hover { background: #3a2a2a; color: #fff; border-color: #e5484d; }
+.machine-x:hover { background: var(--dt-error-soft); color: var(--dt-error-ink); border-color: var(--dt-error); }
 button.primary.danger { background: #e5484d; border-color: #e5484d; }
 .setup { background: var(--well); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-top: 10px; }
 .setup pre { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; font-size: .85rem; }
@@ -138,15 +95,15 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .tab.on { background: var(--panel); border-color: var(--brand); }
 .tab .tlabel { font-weight: 600; }
 .tab .x { opacity: .6; padding: 0 2px; border-radius: 4px; }
-.tab .x:hover { opacity: 1; background: #3a2a2a; }
+.tab .x:hover { opacity: 1; background: var(--dt-error-soft); }
 .tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-.tab .dot.conn { background: #d9a441; animation: pulse 1s infinite; }
+.tab .dot.conn { background: var(--busy); animation: pulse 1s infinite; }
 .tab .dot.ok { background: var(--ok); }
 .tab .dot.err { background: var(--err); }
 @keyframes pulse { 50% { opacity: .3; } }
 
 .terms { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.term-wrap { flex: 1; min-height: 240px; border: 1px solid var(--line); border-radius: 0 10px 10px 10px; overflow: hidden; display: flex; }
+.term-wrap { color-scheme: dark; flex: 1; min-height: 240px; background: var(--term-bg); border: 1px solid var(--line); border-radius: 0 10px 10px 10px; overflow: hidden; display: flex; }
 /* La consola puede ser más grande que esta pantalla (otra pantalla tiene el tamaño): se desplaza. */
 .term { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 /* Los PANELES de una pestaña (split): un árbol de divisiones; el divisor se arrastra. */
@@ -174,7 +131,7 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 @media (pointer: coarse) { .pane-tools { opacity: .55; } }
 /* «De qué va»: una tarjeta que flota arriba a la derecha de cada consola, con su título y su nota.
    Translúcida: deja ver lo que la consola escribe debajo, y se afirma al pasar por ella. */
-.about { position: absolute; top: 32px; right: 18px; z-index: 2; width: min(300px, calc(100% - 70px)); max-height: calc(100% - 48px); overflow: auto;
+.about { color-scheme: dark; position: absolute; top: 32px; right: 18px; z-index: 2; width: min(300px, calc(100% - 70px)); max-height: calc(100% - 48px); overflow: auto;
   display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 12px; font-size: 12px; line-height: 1.4;
   background: rgba(28, 32, 34, .62); border: 1px solid rgba(129, 207, 255, .28); color: var(--text);
   -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); box-shadow: 0 6px 18px rgba(0, 0, 0, .35); transition: background .15s; }
@@ -274,7 +231,7 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 .home .lead { font-size: 1.1rem; line-height: 1.6; color: var(--text); margin: 0 0 22px; max-width: 640px; }
 .home-cta { display: flex; flex-wrap: wrap; gap: 10px; }
 a.btn { display: inline-block; text-decoration: none; color: inherit; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 10px 16px; font-weight: 600; }
-a.btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+a.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
 .home-how { color: var(--muted); margin: 12px 0 28px; }
 .home a:not(.btn) { color: var(--text); text-underline-offset: 3px; }
 .home-points { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }

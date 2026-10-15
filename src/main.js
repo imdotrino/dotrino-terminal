@@ -8,6 +8,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import '@dotrino/theme/theme.css'
 import './style.css'
 import '@dotrino/topbar' // barra superior estándar (marca+volver+idioma+perfil+support)
 import '@dotrino/install' // botón «Instalar app»: captura beforeinstallprompt al importarse
