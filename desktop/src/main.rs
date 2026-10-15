@@ -1306,16 +1306,18 @@ fn save_last_profile(name: &str) {
     let _ = std::fs::write(file, name);
 }
 
-/// EL TRINO: el sonido de todos los avisos de Dotrino (`sound/trinos/trino-01a.wav` en la raíz del
-/// ecosistema, el original). El mismo que tocan la web (`@dotrino/notifications/ring`) y las apps
-/// del teléfono (`DotrinoRing`).
+/// EL TRINO DE TERMINADO: lo que suena cuando una consola terminó. Es OTRO trino que el de los
+/// avisos de Dotrino (`trino-01a`): `sound/trinos/trino-02b.wav` en la raíz del ecosistema, para
+/// que de oído se distinga «terminó» de «te avisan» (dueño, 2026-10-14). El mismo que tocan la web
+/// (`playDone` de `@dotrino/notifications/ring`) y las apps del teléfono (`DotrinoRing.playDone`).
 ///
-/// Tres versiones del mismo trino (dueño, 2026-10-13): `high` es el original, `standard` va 8 dB
-/// por debajo y `low` 16. La app toca la `low`: el original sonaba fortísimo junto a una terminal.
-/// `DOTRINO_TERMINAL_RING=low|standard|high` elige otra.
-const RING_LOW: &[u8] = include_bytes!("../assets/trino-low.wav");
-const RING_STANDARD: &[u8] = include_bytes!("../assets/trino-standard.wav");
-const RING_HIGH: &[u8] = include_bytes!("../assets/trino-high.wav");
+/// Tres versiones del mismo trino (dueño, 2026-10-13): `high` es el original, y `standard` y `low`
+/// van al mismo nivel que las del trino de aviso (`trino-01a` menos 8 y 16 dB: este original es
+/// 3,5 dB más suave, así que aquí son -4,5 y -12,5 dB). La app toca la `low`: el original sonaba
+/// fortísimo junto a una terminal. `DOTRINO_TERMINAL_RING=low|standard|high` elige otra.
+const RING_LOW: &[u8] = include_bytes!("../assets/done-low.wav");
+const RING_STANDARD: &[u8] = include_bytes!("../assets/done-standard.wav");
+const RING_HIGH: &[u8] = include_bytes!("../assets/done-high.wav");
 const RING_VOLUME: f32 = 0.6;
 
 /// El trino que toca esta app.

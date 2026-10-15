@@ -19,7 +19,7 @@ import { panelLines, dropTarget } from './panel.js'
 import { clampRatio, splitLeaf, removeLeaf, layoutIds, restoreSaved } from './layout.js'
 import { doneWatcher } from './done.js'
 import { prepareImage, imageIn } from './image.js'
-import { playRing } from '@dotrino/notifications/ring'
+import { playDone } from '@dotrino/notifications/ring'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { pubkeyId } from '@dotrino/identity/capabilities'
 
@@ -842,7 +842,8 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   // Una consola que termina (o toca la campana) suena con el trino, una vez. Lo que la máquina
   // empuja de la consola que miras y la lista de las demás pasan por el mismo sitio.
-  const ring = () => playRing().catch((e) => console.warn('ring: could not play', e.name))
+  // El trino de TERMINADO, no el de aviso: de oído se distingue «terminó» de «te avisan».
+  const ring = () => playDone().catch((e) => console.warn('ring: could not play', e.name))
   const done = doneWatcher({ onRing: ring })
 
   async function refresh (s) {

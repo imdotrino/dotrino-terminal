@@ -65,8 +65,9 @@ class MainActivity : Activity() {
         I18n.load(this)
         setContentView(shell())
         Consoles.onChange = { refresh() }
-        // A console that finishes while the app is open sounds with the trino, whatever is on screen.
-        Consoles.onDone = { DotrinoRing.play(applicationContext) }
+        // A console that finishes while the app is open sounds with the "done" trino (not the
+        // notification one, so they can be told apart by ear), whatever is on screen.
+        Consoles.onDone = { DotrinoRing.playDone(applicationContext) }
         boot()
     }
 
