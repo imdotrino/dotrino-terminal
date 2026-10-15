@@ -388,6 +388,8 @@ object Consoles {
         private var off: (() -> Unit)? = null
         private var offError: (() -> Unit)? = null
         private var fresh = true                                      // the next replay starts a clean screen
+        private var wantId: String? = null                            // the console asked for (null: a new one)
+        private var leftId: String? = null                            // the console just left, until the agent answers
         private var choosing = false                                  // waiting for the list to pick a free console
         private var resuming = false                                  // coming back to the console it had, over a new session
         private var trying: String? = null                            // the code sent, waiting for the agent's answer
@@ -442,6 +444,7 @@ object Consoles {
 
         private fun send(type: String, id: String?, keep: Boolean = false) {
             fresh = true
+            leftId = consoleId.takeIf { it != id }; wantId = id
             saidCols = screenCols; saidRows = screenRows
             channel?.send(buildJsonObject {
                 put("type", type); if (id != null) put("id", id)
@@ -475,10 +478,11 @@ object Consoles {
                     onChange()
                 }
                 // The screen as the agent keeps it, in pieces: a clean emulator first, then the pieces.
-                "replay" -> { if (fresh) { terminal.feed("\u001bc"); fresh = false }; feed(m) }
-                "out" -> feed(m)
+                "replay" -> { if (!wanted(m)) return; if (fresh) { terminal.feed("\u001bc"); fresh = false }; feed(m) }
+                "out" -> { if (wanted(m)) feed(m) }
                 "attached" -> {
                     consoleId = (m["id"] as? JsonPrimitive)?.content
+                    wantId = consoleId; leftId = null
                     (m["console"] as? JsonObject)?.let(::consoleOf)?.let { upsert(it); follow(it) }
                     state = State.OPEN; note = null; resuming = false
                     // The size went in the `attach`; it may have changed while attaching. The agent
@@ -558,6 +562,16 @@ object Consoles {
         private fun follow(info: ConsoleInfo) {
             if (info.cols <= 0 || info.rows <= 0) return
             if (info.cols != terminal.cols || info.rows != terminal.rows) { terminal.resize(info.cols, info.rows); onOutput() }
+        }
+
+        /**
+         * Is what arrived of the console on screen (or the one asked for)? What the console just
+         * left still sends arrives late at times (its history comes in pieces) and, painted, it
+         * covered the new one's screen (2026-10-14). An older agent puts no `id`: that passes.
+         */
+        private fun wanted(m: JsonObject): Boolean {
+            val id = (m["id"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return true
+            return if (wantId != null) id == wantId else id != leftId
         }
 
         private fun feed(m: JsonObject) {

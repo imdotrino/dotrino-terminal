@@ -330,6 +330,8 @@ final class Tab: ObservableObject, Identifiable {
     private var channel: Channel?
     private var offs: [() -> Void] = []
     private var fresh = true                      // the next replay starts a clean screen
+    private var wantId: String?                   // the console asked for (nil: a new one)
+    private var leftId: String?                   // the console just left, until the agent answers
     private var choosing = false                  // waiting for the list to pick a free console
     private var trying: String?                   // the code sent, waiting for the agent's answer
     private var triedKept = false                 // the remembered code was already sent on this lock
@@ -368,6 +370,7 @@ final class Tab: ObservableObject, Identifiable {
 
     private func send(_ type: String, _ id: String?, keep: Bool = false) {
         fresh = true
+        leftId = consoleId != id ? consoleId : nil; wantId = id
         saidCols = screenCols; saidRows = screenRows
         var o: [String: JSON] = ["type": .string(type), "cols": .int(Int64(screenCols)), "rows": .int(Int64(screenRows))]
         if let id { o["id"] = .string(id) }
@@ -392,11 +395,13 @@ final class Tab: ObservableObject, Identifiable {
             if let c = current { follow(c) }
         // The screen as the agent keeps it, in pieces: a clean emulator first, then the pieces.
         case "replay":
+            guard wanted(m) else { return }
             if fresh { terminal.feed("\u{1b}c"); fresh = false }
             feed(m)
-        case "out": feed(m)
+        case "out": if wanted(m) { feed(m) }
         case "attached":
             consoleId = m["id"]?.string
+            wantId = consoleId; leftId = nil
             if let c = m["console"].flatMap(consoleOf) { upsert(c); follow(c) }
             state = .open; note = nil
             // The size went in the `attach`; it may have changed while attaching. The agent follows
@@ -468,6 +473,14 @@ final class Tab: ObservableObject, Identifiable {
     private func follow(_ c: ConsoleInfo) {
         guard c.cols > 0, c.rows > 0 else { return }
         if c.cols != terminal.cols || c.rows != terminal.rows { terminal.resize(c.cols, c.rows); onOutput() }
+    }
+
+    /// Is what arrived of the console on screen (or the one asked for)? What the console just left
+    /// still sends arrives late at times (its history comes in pieces) and, painted, it covered the
+    /// new one's screen (2026-10-14). An older agent puts no `id`: that passes.
+    private func wanted(_ m: JSON) -> Bool {
+        guard let id = m["id"]?.string else { return true }
+        return wantId != nil ? id == wantId : id != leftId
     }
 
     private func feed(_ m: JSON) {

@@ -57,7 +57,7 @@ export class AgentClient {
   async connect () {
     this.rc.on('message', (p) => {
       if (!p || typeof p !== 'object') return
-      if (p.type === 'out' || p.type === 'replay') { this.onData(p.data); return }
+      if (p.type === 'out' || p.type === 'replay') { if (this._wanted(p.id)) this.onData(p.data); return }
       if (p.type === 'exit') {
         // `closedBy: 'other'`: la cerró otra pantalla (no esta, ni la shell por su cuenta).
         const closed = this.consoleId
@@ -149,9 +149,21 @@ export class AgentClient {
 
   /** Abre una consola nueva y se engancha: toma el tamaño de esta pantalla. Devuelve `{ id, console }`. */
   async open (cols, rows) {
+    this._left = this.consoleId; this._want = null
     const p = await this._ask({ type: 'open', cols, rows }, 'attached')
-    this.consoleId = p.id
+    this.consoleId = p.id; this._want = p.id; this._left = null
     return p
+  }
+
+  /**
+   * ¿Es de la consola que se mira (o se pidió) lo que llega? Lo de la que se acaba de dejar
+   * llega tarde a veces (su historial va en trozos) y, pintado, tapa la pantalla de la nueva.
+   * Un agente viejo no pone `id`: eso pasa.
+   */
+  _wanted (id) {
+    if (id == null) return true
+    if (this._want != null) return id === this._want
+    return id !== this._left
   }
 
   /**
@@ -161,8 +173,9 @@ export class AgentClient {
    * reconexión no es abrirla ni cambiarse a ella, y no toca el tamaño.
    */
   async attach (id, cols, rows, { keep = false } = {}) {
+    this._left = this.consoleId !== id ? this.consoleId : null; this._want = id
     const p = await this._ask({ type: 'attach', id, cols, rows, ...(keep ? { keep: true } : {}) }, 'attached')
-    this.consoleId = p.id
+    this.consoleId = p.id; this._want = p.id; this._left = null
     return p
   }
 

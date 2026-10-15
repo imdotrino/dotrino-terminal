@@ -70,6 +70,29 @@ final class TabTests: XCTestCase {
         XCTAssertEqual(ch.last("resize")?["rows"]?.int, 11, "the size it has NOW")
     }
 
+    func testWhatTheConsoleJustLeftStillSendsIsNotPainted() {
+        let (t, ch) = tab()
+        t.handle(consoles(console("a", 1, 50, 20), console("b", 2, 50, 20)))
+        t.handle(attached(console("a", 1, 50, 20, watchers: 1, by: me)))
+        t.handle(["type": "replay", "id": "a", "data": "AAA"])
+        t.switchTo("b")
+        // Its history arrives late, in pieces, and starts with a reset: it must not touch the screen.
+        t.handle(["type": "replay", "id": "a", "data": "\u{1b}cLATE-A"])
+        t.handle(attached(console("b", 2, 50, 20, watchers: 1, by: me)))
+        t.handle(["type": "replay", "id": "b", "data": "BBB"])
+        t.handle(["type": "out", "id": "a", "data": "MORE-A"])
+        t.handle(["type": "out", "id": "b", "data": "-b"])
+        // An older agent puts no id: that passes.
+        t.handle(["type": "out", "data": "!"])
+        XCTAssertEqual(t.terminal.text(0).trimmingCharacters(in: .whitespaces), "BBB-b!")
+        // Opening a NEW one: nothing more of the one left, whatever the new one's id turns out to be.
+        t.switchTo(nil)
+        t.handle(["type": "out", "id": "b", "data": "LATE-B"])
+        t.handle(["type": "replay", "id": "c", "data": "CCC"])
+        XCTAssertEqual(t.terminal.text(0).trimmingCharacters(in: .whitespaces), "CCC")
+        _ = ch
+    }
+
     func testTheEmulatorFollowsTheConsoleSizeNotTheScreen() {
         let (t, ch) = tab()
         t.handle(consoles())

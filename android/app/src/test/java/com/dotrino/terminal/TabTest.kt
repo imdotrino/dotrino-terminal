@@ -113,6 +113,28 @@ class TabTest {
         assertTrue("the screen of b only", t.terminal.text(0).startsWith("BBB"))
     }
 
+    @Test fun whatTheConsoleJustLeftStillSendsIsNotPainted() {
+        val (t, ch) = tab()
+        ch.agent(consoles(console("a", 1, 50, 20), console("b", 2, 50, 20)))
+        ch.agent(attached(console("a", 1, 50, 20, watchers = 1, by = me)))
+        ch.agent(buildJsonObject { put("type", "replay"); put("id", "a"); put("data", "AAA") })
+        t.switchTo("b")
+        // Its history arrives late, in pieces, and starts with a reset: it must not touch the screen.
+        ch.agent(buildJsonObject { put("type", "replay"); put("id", "a"); put("data", "\u001bcLATE-A") })
+        ch.agent(attached(console("b", 2, 50, 20, watchers = 1, by = me)))
+        ch.agent(buildJsonObject { put("type", "replay"); put("id", "b"); put("data", "BBB") })
+        ch.agent(buildJsonObject { put("type", "out"); put("id", "a"); put("data", "MORE-A") })
+        ch.agent(buildJsonObject { put("type", "out"); put("id", "b"); put("data", "-b") })
+        // An older agent puts no id: that passes.
+        ch.agent(buildJsonObject { put("type", "out"); put("data", "!") })
+        assertEquals("BBB-b!", t.terminal.text(0).trim())
+        // Opening a NEW one: nothing more of the one left, whatever the new one's id turns out to be.
+        t.switchTo(null)
+        ch.agent(buildJsonObject { put("type", "out"); put("id", "b"); put("data", "LATE-B") })
+        ch.agent(buildJsonObject { put("type", "replay"); put("id", "c"); put("data", "CCC") })
+        assertEquals("CCC", t.terminal.text(0).trim())
+    }
+
     @Test fun theSizeButtonTakesTheSizeNow() {
         val (t, ch) = tab()
         ch.agent(consoles())

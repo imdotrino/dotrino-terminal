@@ -23,7 +23,7 @@
  *                       orden; cada trozo se acusa con `filed`, y el último trae la `path` donde
  *                       quedó en esta máquina: uploads.js)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
- *                     { type:'replay', id, data, last } · { type:'out', data } ·
+ *                     { type:'replay', id, data, last } · { type:'out', id, data } ·
  *                     { type:'exit', code, closedBy? } · { type:'fail', code, message, retryMs? } ·
  *                     { type:'unlocked' } · { type:'noted', console } ·
  *                     { type:'filed', up, seq, path? }
@@ -116,7 +116,8 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
   const viewer = {
     origin,
     device: session.device || null,
-    onOut: (data) => { session.send({ type: 'out', data }) },
+    // Con el `id` de la consola: lo que llega tarde de una consola que ya se dejó, el cliente lo tira.
+    onOut: (data) => { session.send({ type: 'out', id: current ? current.id : null, data }) },
     // `closedBy: 'other'`: la cerró otra pantalla (no esta, ni la shell por su cuenta).
     onExit: (code, why) => { current = null; session.send({ type: 'exit', code, ...(why?.byOther ? { closedBy: 'other' } : {}) }) },
     onMeta: (info) => { session.send({ type: 'meta', console: info }) }
@@ -154,10 +155,13 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     // Volver a engancharse tras una reconexión (`keep`) no es abrir ni cambiarse: no toca el tamaño.
     // Pero si el tamaño era de esta misma pantalla, lo sigue siendo (y se le sigue el teclado, el giro).
     if (!keep) c.take(viewer); else c.resume(viewer)
-    // La pantalla va en trozos: el proxio corta los mensajes a 1 MB.
+    // La pantalla va en trozos: el proxio corta los mensajes a 1 MB. Si entre trozo y trozo la
+    // sesión pidió otra consola, esta ya no es la suya: lo que falta no se manda.
     for (let i = 0; i < snapshot.length || i === 0; i += REPLAY_CHUNK) {
+      if (current !== c) return
       await session.send({ type: 'replay', id: c.id, data: snapshot.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= snapshot.length })
     }
+    if (current !== c) return
     await session.send({ type: 'attached', id: c.id, fresh, console: c.info() })
     // Sin esperarlo (pintar no espera a nada), y un fallo aquí no puede tumbar el agente: se dice.
     if (later) sendHistory(c).catch((e) => console.error('[terminal-agent] could not send the history of console', c.id, '-', e?.message || e))
@@ -172,7 +176,10 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     if (current !== c) return                    // ya mira otra, o se fue
     const full = await c.history(viewer)
     if (full == null || current !== c) return
+    // Cada trozo vuelve a mirar: el historial de A seguía saliendo entero después de cambiarse a
+    // B, y como empieza por un reinicio de la terminal, A tapaba a B en la pantalla (2026-10-14).
     for (let i = 0; i < full.length; i += REPLAY_CHUNK) {
+      if (current !== c) return
       await session.send({ type: 'replay', id: c.id, data: full.slice(i, i + REPLAY_CHUNK), last: i + REPLAY_CHUNK >= full.length })
     }
   }
