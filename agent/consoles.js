@@ -23,8 +23,49 @@ const { SerializeAddon } = require('@xterm/addon-serialize')
 
 /** Líneas de historial que se guardan y se devuelven al volver. */
 export const SCROLLBACK = 1000
-/** Tamaño máximo de cada trozo de la repetición: el proxio corta los mensajes a 1 MB. */
-export const REPLAY_CHUNK = 64 * 1024
+/**
+ * Lo más que puede medir, EN JSON, lo que va en un mensaje al aparato. El tope de verdad es el
+ * del canal directo: werift (el agente) y libwebrtc (Android, iOS, Chrome) se quedan en 64 KiB
+ * por mensaje cuando el otro no dice más, y uno mayor NO sale por ahí: el pilar lo manda por el
+ * proxio, que da la vuelta por internet, y llega DESPUÉS del mensaje pequeño que sí fue directo.
+ * Con trozos de 64 KB (122 KB sellados) el historial llegaba desordenado: la pantalla quedaba a
+ * medio historial, o con la pantalla pintada dos veces (2026-10-15, la tablet). Lo sellado es el
+ * JSON en base64 (×1,34) más el sobre: 40 KB de JSON son unos 55 KB por el canal.
+ */
+export const PIECE_JSON_MAX = 40 * 1024
+
+/**
+ * Corta `data` en trozos que, puestos en JSON, no pasen de `max` bytes. Mide lo que cuesta cada
+ * carácter al serializarlo (un ESC son 6, una comilla 2, un acento 2 o 3) en vez de contar
+ * caracteres: una pantalla llena de colores es casi todo escapes. No parte un par sustituto.
+ * Devuelve al menos un trozo (vacío si `data` está vacío).
+ * @param {string} data
+ * @param {number} [max]
+ * @returns {string[]}
+ */
+export function pieces (data, max = PIECE_JSON_MAX) {
+  const out = []
+  let start = 0; let cost = 0
+  for (let i = 0; i < data.length; i++) {
+    const c = data.charCodeAt(i)
+    let w
+    if (c < 0x20) w = (c === 8 || c === 9 || c === 10 || c === 12 || c === 13) ? 2 : 6
+    else if (c === 0x22 || c === 0x5c) w = 2
+    else if (c < 0x80) w = 1
+    else if (c < 0x800) w = 2
+    else if (c >= 0xd800 && c <= 0xdfff) w = 2       // cada mitad del par: 4 bytes entre las dos
+    else w = 3
+    if (cost + w > max && i > start) {
+      // No partir un par sustituto: si lo anterior es la mitad alta, se queda con la baja.
+      const prev = data.charCodeAt(i - 1)
+      const cut = (prev >= 0xd800 && prev <= 0xdbff) ? i - 1 : i
+      if (cut > start) { out.push(data.slice(start, cut)); start = cut; cost = 0; i = cut - 1; continue }
+    }
+    cost += w
+  }
+  out.push(data.slice(start))
+  return out
+}
 
 // ¿ESTÁ TRABAJANDO? Lo que el panel enseña con un color por consola. UNA regla, sin leer lo que
 // dice la pantalla ni el título (dueño, 2026-10-06): si el TÍTULO o el CONTENIDO cambian de

@@ -35,7 +35,7 @@ function slowSession ({ sendMs = 30, direct = () => true } = {}) {
 test('la salida lleva el id de su consola, y al cambiarse no sigue saliendo lo de la anterior', async () => {
   const hub = makeHub(loadPty(), { shell: '/bin/sh' })
   try {
-    // La consola A, con historial de sobra (varios trozos de REPLAY_CHUNK).
+    // La consola A, con historial de sobra (varios trozos de `pieces`).
     const a = hub.create({ cols: 80, rows: 24, origin: 'remote' })
     const b = hub.create({ cols: 80, rows: 24, origin: 'remote' })
     const probe = slowSession({ sendMs: 0 })
