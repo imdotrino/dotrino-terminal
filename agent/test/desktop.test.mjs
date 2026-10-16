@@ -137,3 +137,14 @@ test('Windows: el .exe que corre se aparta a .exe.old y el nuevo ocupa su sitio'
   assert.equal(install(path.join(empty, 'y.zip'), { kind: 'win' }, { exe, run: () => {} }).code, 'bad-zip')
   for (const d of [app, dl, empty]) fs.rmSync(d, { recursive: true, force: true })
 })
+
+test('con un Node que no carga el comprobador de firmas, no se instala y se dice cuál falta', async () => {
+  const r = await updateDesktop({
+    exe: '/x', current: '0.1.0',
+    latest: async () => ({ ok: true, version: '0.2.0', assets: [{ name: 'dotrino-terminal-desktop-0.2.0-linux-x64.tar.gz', url: 'u' }] }),
+    kindOf: () => ({ ok: true, kind: 'tar' }),
+    fetchVerifiedImpl: async () => { throw Object.assign(new Error('require() of ES Module'), { code: 'ERR_REQUIRE_ESM' }) },
+    installImpl: () => { throw new Error('no debe instalar') }
+  })
+  assert.equal(r.code, 'node-too-old')
+})

@@ -153,6 +153,15 @@ test('Windows: desde una sesión SSH el supervisor lo crea WMI, con la línea de
   assert.ok(ps.at(-1).includes(`CommandLine = '"C:\\it''s\\node.exe" "c.js" supervise --name work'`), ps.at(-1))
 })
 
+test('Windows: una cuenta normal por SSH (WMI dice que no) deja la entrada puesta y lo dice', () => {
+  const calls = []
+  const run = (cmd, args) => { calls.push(cmd); if (cmd === 'powershell.exe') throw Object.assign(new Error('x'), { stderr: 'Access denied' }) }
+  const r = installService({ name: 'work', node: 'n.exe', cli: 'c.js', dir: tmp(), platform: 'win32', run, spawn: spawner().spawn, env: { SSH_CLIENT: 'x' } })
+  assert.deepEqual([r.started, r.startReason], [false, 'Access denied'])
+  assert.equal(calls[0], 'reg', 'la entrada de Run se puso')
+  assert.equal(startService({ name: 'work', dir: tmp(), cli: 'c.js', platform: 'win32', run, spawn: spawner().spawn, env: { SSH_CLIENT: 'x' } }), false, 'la ventana levanta el suyo')
+})
+
 test('Windows: arrancar solo si hay entrada, y sin duplicar un supervisor vivo', () => {
   const dir = tmp()
   const none = recorder(() => true); const a = spawner()

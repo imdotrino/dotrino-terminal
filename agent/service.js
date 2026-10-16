@@ -139,15 +139,22 @@ const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`
  * al cerrarla mata todo lo que lanzó, y Node no puede pedir salirse de él. Ahí lo crea WMI
  * (`Win32_Process.Create`), que lo lanza fuera de la sesión, y con la misma línea que queda en
  * `HKCU\…\Run`: así se prueba también la que correrá al iniciar sesión.
+ *
+ * Una cuenta sin administrador no puede pedirle eso a WMI desde SSH. Entonces no queda nada
+ * corriendo ahora (lo que se lanzara moriría al cerrar la sesión) y se devuelve el motivo: la
+ * entrada de `Run` ya está puesta y lo arranca al iniciar sesión.
+ *
+ * @returns {{ ok: true } | { ok: false, reason: string }}
  */
 function spawnSupervisor ({ name, node, cli, spawn, run, env }) {
   if (env.SSH_CONNECTION || env.SSH_CLIENT) {
     const script = `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psQuote(runCommand({ name, node, cli }))} }; if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }`
-    must(run, 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
-    return
+    const r = quiet(run, 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
+    return r.ok ? { ok: true } : { ok: false, reason: r.reason }
   }
   const child = spawn(node, [cli, 'supervise', '--name', name], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...env, DOTRINO_SUPERVISOR: '1' } })
   child.unref()
+  return { ok: true }
 }
 
 /**
@@ -195,15 +202,15 @@ function stopSupervised (dir) {
  * Dos agentes con el mismo enlace son la misma llave, y parar ese cerraría sus consolas: el
  * servicio queda puesto y toma el relevo cuando ese agente termine o al próximo arranque.
  *
- * @returns {{ kind:'systemd'|'launchd'|'run-key', file:string, started:boolean, boot?:boolean, lingerReason?:string }}
+ * @returns {{ kind:'systemd'|'launchd'|'run-key', file:string, started:boolean, boot?:boolean, lingerReason?:string, startReason?:string }}
  */
 export function installService ({ name, node = process.execPath, cli, dir, running = false, pathEnv = process.env.PATH || '', platform = process.platform, home = os.homedir(), user = os.userInfo().username, uid = process.getuid?.(), run = execFileSync, spawn = childSpawn, env = process.env }) {
   const kind = platformOf({ platform, run })
   if (kind === 'run-key') {
     must(run, 'reg', ['add', RUN_KEY, '/v', runValue(name), '/t', 'REG_SZ', '/d', runCommand({ name, node, cli }), '/f'])
     if (running) return { kind, file: runKeyFile(name), started: false }
-    spawnSupervisor({ name, node, cli, spawn, run, env })
-    return { kind, file: runKeyFile(name), started: true }
+    const s = spawnSupervisor({ name, node, cli, spawn, run, env })
+    return { kind, file: runKeyFile(name), started: s.ok, ...(s.ok ? {} : { startReason: s.reason }) }
   }
   if (kind === 'launchd') {
     const file = plistPath(name, home)
@@ -238,8 +245,9 @@ export function startService ({ name, dir, node = process.execPath, cli, platfor
   if (platform === 'win32') {
     if (!hasRunKey(name, run)) return false
     const pid = readPid(supervisorPidFile(dir))
-    if (!(pid && alive(pid))) spawnSupervisor({ name, node, cli, spawn, run, env })
-    return true
+    if (pid && alive(pid)) return true
+    // Sin poder dejarlo corriendo (cuenta normal por SSH), lo levanta la ventana, como sin servicio.
+    return spawnSupervisor({ name, node, cli, spawn, run, env }).ok
   }
   if (platform === 'darwin') {
     const file = plistPath(name, home)

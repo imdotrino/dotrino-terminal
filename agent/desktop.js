@@ -201,6 +201,9 @@ export async function updateDesktop ({ exe, current, check = false, say = () => 
   try {
     let got
     try { got = await fetchVerifiedImpl(pick.asset, { repo: REPO, product: PRODUCT, version: current, dir }) } catch (e) {
+      // La comprobación (sigstore → @npmcli/agent) carga módulos ESM con `require()`: Node lo
+      // admite desde 20.19 y 22.12. Con uno anterior no hay con qué verificar, y se dice cuál falta.
+      if (e.code === 'ERR_REQUIRE_ESM') return fail('node-too-old', `Node ${process.version} cannot load the signature checker (needs 20.19 or 22.12 and later)`)
       return fail(e.code || 'download-failed', e.message)
     }
     // Lo que no pasa la verificación no se deja en el disco: nadie debe instalarlo a mano.

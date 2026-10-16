@@ -370,6 +370,7 @@ async function desktop () {
   if (!r.ok) {
     const why = {
       'could-not-check': t(`No se pudo mirar (${r.reason}). No es que estés al día: es que no se sabe.`, `Could not check (${r.reason}). That does not mean you are up to date: it is unknown.`),
+      'node-too-old': t(`NO se instala nada: con este Node (${process.version}) no se puede comprobar la firma. Hace falta Node 22.12 o más reciente (o 20.19): https://nodejs.org`, `Nothing is installed: this Node (${process.version}) cannot check the signature. It needs Node 22.12 or newer (or 20.19): https://nodejs.org`),
       NO_VERIFIER: t('NO se instala nada: a este programa le falta la pieza que comprueba la firma. Reinstálalo con: npm install -g @dotrino/terminal-agent', 'Nothing is installed: this program is missing the piece that checks the signature. Reinstall it with: npm install -g @dotrino/terminal-agent'),
       'not-writable': t(`NO se instala nada: no puedo escribir donde está la app (${r.reason}). Bájala de https://terminal.dotrino.com/`, `Nothing is installed: I cannot write where the app is (${r.reason}). Get it from https://terminal.dotrino.com/`)
     }[r.code] || t(`NO se instala nada: ${r.reason}`, `Nothing is installed: ${r.reason}`)
@@ -535,6 +536,7 @@ async function service () {
     try { r = installService({ name, cli, dir, running: own }) } catch (e) { explain(e) }
     console.log(t(`Servicio del perfil «${name}» puesto: ${r.file}`, `Service for profile "${name}" installed: ${r.file}`))
     if (r.started) console.log(t('El agente ya corre como servicio.', 'The agent now runs as a service.'))
+    else if (r.startReason) console.log(t(`Desde esta sesión SSH no se puede dejar corriendo ahora (${r.startReason}): arranca la próxima vez que inicies sesión en Windows.`, `It cannot be left running from this SSH session (${r.startReason}): it starts the next time you log in to Windows.`))
     else console.log(t('Ahora mismo corre un agente que levantó una ventana, y no se toca para no cerrar sus consolas. El servicio toma el relevo cuando ese termine o al próximo arranque.', 'Right now an agent started by a window is running, and it is left alone so its consoles stay open. The service takes over when it ends or at the next start.'))
     if (r.kind === 'launchd') console.log(t('Arranca solo cuando inicias sesión en esta Mac.', 'It starts by itself when you log in to this Mac.'))
     else if (r.kind === 'run-key') console.log(t('Arranca solo cuando inicias sesión en Windows.', 'It starts by itself when you log in to Windows.'))
