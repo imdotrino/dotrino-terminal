@@ -105,10 +105,10 @@ test('sin ningún editor se dice, y quitar donde no había nada no crea el archi
   assert.equal(fs.existsSync(path.join(dir, 'Code/User/settings.json')), false)
 })
 
-test('la carpeta de configuración: XDG en Linux, Application Support en macOS', () => {
-  assert.equal(configBase({ platform: 'linux', home: '/h', env: {} }), '/h/.config')
+test('la carpeta de configuración: XDG en Linux, Application Support en macOS, APPDATA en Windows', () => {
+  assert.equal(configBase({ platform: 'linux', home: '/h', env: {} }), path.join('/h', '.config'))
   assert.equal(configBase({ platform: 'linux', home: '/h', env: { XDG_CONFIG_HOME: '/x' } }), '/x')
-  assert.equal(configBase({ platform: 'darwin', home: '/h', env: {} }), '/h/Library/Application Support')
+  assert.equal(configBase({ platform: 'darwin', home: '/h', env: {} }), path.join('/h', 'Library', 'Application Support'))
   assert.equal(configBase({ platform: 'win32', home: '/h', env: { APPDATA: '/roaming' } }), '/roaming')
   assert.equal(platformKey('win32'), 'windows')
 })
