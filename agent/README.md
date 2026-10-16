@@ -182,13 +182,15 @@ de quien instala) y pide `loginctl enable-linger` para que arranque sin sesión;
 LaunchAgent (`~/Library/LaunchAgents/com.dotrino.terminal-agent.<perfil>.plist`); en Windows, el valor
 `DotrinoTerminalAgent-<perfil>` en `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, que al iniciar
 sesión corre `dotrino-terminal-agent supervise`: se vuelve a lanzar sin ventana y levanta el agente cada
-vez que sale (`supervisor.pid` en la carpeta del perfil). Ni el Programador de tareas ni un servicio de
+vez que sale (`supervisor.pid` en la carpeta del perfil). Desde una sesión SSH el supervisor lo crea
+WMI (`Win32_Process.Create`, con la misma línea): sshd mata al cerrar la sesión todo lo que lanzó. Ni el Programador de tareas ni un servicio de
 Windows: los dos piden derechos que una cuenta normal no tiene. Es de usuario
 para que el agente se siga actualizando solo (§15): con quien lo levante ya puede reiniciarse.
 Un agente que ya corre por su cuenta no se para (cerraría sus consolas): el servicio queda
 habilitado, y `dotrino-terminal`, cuando no encuentra agente, arranca el servicio en vez de
 levantar uno propio. Código en `service.js`; probado con systemd en un contenedor de Fedora,
-Windows de punta a punta en el runner `windows-latest` (`test/windows.test.mjs`), macOS solo con
+Windows de punta a punta en el runner `windows-latest` (`test/windows.test.mjs`) y en una VM de
+Windows 11 enlazada a una bóveda (`dotrino-test`, `npm run smoke:terminal-windows`), macOS solo con
 pruebas unitarias.
 
 ## Windows
@@ -198,4 +200,6 @@ Las ventanas locales no van por un socket Unix sino por una **tubería con nombr
 aleatorio y, junto con una llave, queda en `terminal.pipe` dentro de la carpeta del perfil. La ventana
 manda la llave en su primera línea (`{ type:'local-auth', key }`) y sin ella el agente corta sin
 contestar: la lista de tuberías la ve cualquier usuario de la máquina, la carpeta del perfil no.
-La app de escritorio (`desktop/`) todavía no tiene versión para Windows.
+En PowerShell, con la política de ejecución por defecto, npm deja `dotrino-terminal.ps1` y Windows
+no lo deja correr: se llama `dotrino-terminal.cmd` (o se permite con
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`). La app de escritorio (`desktop/`) todavía no tiene versión para Windows.
