@@ -13,6 +13,8 @@
  *     contraseña en esa misma ventana.
  *   · tarball — el binario es del usuario: se cambia por el nuevo, de forma atómica.
  *   · macOS — se cambia el `.app` entero.
+ *   · Windows — el `.exe` es del usuario (sale de un `.zip`). Un `.exe` que está corriendo no se
+ *     puede sobrescribir, pero sí renombrar: el viejo pasa a `.exe.old` y el nuevo ocupa su sitio.
  *
  * La ventana que ya corre sigue con la versión anterior hasta que se cierre y se vuelva a abrir.
  */
@@ -42,7 +44,7 @@ export const latestDesktop = (opts = {}) =>
  * gestor hay se equivoca con un tarball en una máquina con `dpkg`.
  *
  * @param {any} [o]
- * @returns {any} `{ ok:true, kind:'deb'|'rpm'|'tar'|'mac', app? }` o `{ ok:false, code, reason }`
+ * @returns {any} `{ ok:true, kind:'deb'|'rpm'|'tar'|'mac'|'win', app? }` o `{ ok:false, code, reason }`
  */
 export function installKind ({ exe, platform = process.platform, arch = process.arch, run = execFileSync, writable = canWrite } = {}) {
   if (!exe) return fail('no-exe', 'the desktop app was not found')
@@ -51,6 +53,11 @@ export function installKind ({ exe, platform = process.platform, arch = process.
     if (!m) return fail('not-a-bundle', `${exe} is not inside an .app bundle`)
     if (!writable(path.dirname(m[1]))) return fail('not-writable', `cannot write in ${path.dirname(m[1])}`)
     return { ok: true, kind: 'mac', app: m[1] }
+  }
+  if (platform === 'win32') {
+    if (arch !== 'x64') return fail('unsupported-arch', `there is no desktop app for ${arch}`)
+    if (!writable(path.dirname(exe))) return fail('not-writable', `cannot write in ${path.dirname(exe)}`)
+    return { ok: true, kind: 'win' }
   }
   if (platform !== 'linux') return fail('unsupported-platform', `there is no desktop app for ${platform}`)
   if (arch !== 'x64') return fail('unsupported-arch', `there is no desktop app for ${arch}`)
@@ -69,7 +76,8 @@ const MATCH = {
   deb: { kind: 'deb', re: /_amd64\.deb$/ },
   rpm: { kind: 'rpm', re: /\.x86_64\.rpm$/ },
   tar: { kind: 'tar', re: /-linux-x64\.tar\.gz$/ },
-  mac: { kind: 'mac', re: /-macos-universal\.zip$/ }
+  mac: { kind: 'mac', re: /-macos-universal\.zip$/ },
+  win: { kind: 'win', re: /-windows-x64\.zip$/ }
 }
 
 /** El archivo de la release que le toca a esa forma de instalación. */
@@ -145,6 +153,27 @@ export function install (file, how, { exe, run = execFileSync, uid = process.get
     } finally {
       fs.rmSync(work, { recursive: true, force: true })
     }
+  }
+  if (how.kind === 'win') {
+    const work = path.dirname(file)
+    // `tar` de Windows (bsdtar, desde Windows 10) desempaqueta un .zip.
+    try { run('tar', ['-xf', file, '-C', work], { stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) {
+      return fail('unpack-failed', `could not unpack the release: ${String(e.stderr || e.message).trim()}`, { file })
+    }
+    const name = `${BINARY}.exe`
+    const src = [path.join(work, name), ...fs.readdirSync(work).map((d) => path.join(work, d, name))].find((f) => fs.existsSync(f))
+    if (!src) return fail('bad-zip', `the zip has no ${name} inside`, { file })
+    // El .exe que corre no se puede pisar, pero sí apartar: la ventana abierta sigue con él. El
+    // `.old` de la vez anterior se borra si ya nadie lo usa.
+    const old = `${exe}.old`
+    try { fs.rmSync(old, { force: true }) } catch (_) { /* aún lo usa una ventana: se queda */ }
+    try {
+      fs.renameSync(exe, old)
+      try { fs.copyFileSync(src, exe) } catch (e) { fs.renameSync(old, exe); throw e }
+    } catch (e) {
+      return fail('install-failed', `could not replace the app: ${e.message}`, { file })
+    }
+    return { ok: true }
   }
   return fail('unknown-kind', `unknown install kind: ${how.kind}`)
 }

@@ -35,7 +35,7 @@ jobs:
           cache: npm
           cache-dependency-path: agent/package-lock.json
       - run: npm ci
-      - run: node --test test/windows.test.mjs test/service.test.mjs test/editors.test.mjs
+      - run: node --test test/windows.test.mjs test/service.test.mjs test/editors.test.mjs test/desktop.test.mjs
 
   release:
     needs: windows

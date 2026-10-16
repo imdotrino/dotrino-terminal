@@ -27,4 +27,4 @@ jobs:
           cache-dependency-path: agent/package-lock.json
       - run: npm ci
       - name: Windows (tubería, PowerShell, servicio)
-        run: node --test test/windows.test.mjs test/service.test.mjs test/editors.test.mjs
+        run: node --test test/windows.test.mjs test/service.test.mjs test/editors.test.mjs test/desktop.test.mjs

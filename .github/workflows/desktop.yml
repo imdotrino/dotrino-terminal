@@ -1,5 +1,5 @@
-# Publica la app de escritorio (la carpeta desktop/, Rust) DESDE CI: Linux (.deb, .rpm y .tar.gz) y
-# macOS (.app universal en un .zip), con la versión en el nombre de cada archivo (CONVENCIONES §11.5) y
+# Publica la app de escritorio (la carpeta desktop/, Rust) DESDE CI: Linux (.deb, .rpm y .tar.gz),
+# macOS (.app universal en un .zip) y Windows (.exe en un .zip), con la versión en el nombre de cada archivo (CONVENCIONES §11.5) y
 # atestiguados, para que quien la baje pueda verificarla (§15).
 #
 # Se dispara con un tag `desktop-vX.Y.Z` (el agente va por `agent-v*`, la PWA por cada push).
@@ -80,6 +80,35 @@ jobs:
         with:
           subject-path: desktop/dist/*.zip
       - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+
+  windows:
+    needs: linux        # la release la crea el de Linux; aquí solo se sube el archivo
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: desktop }
+      - run: cargo build --release --locked
+      - name: zip
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $d = "dotrino-terminal-desktop-$v-windows-x64"
+          New-Item -ItemType Directory -Force "dist/$d" | Out-Null
+          Copy-Item target/release/dotrino-terminal-desktop.exe "dist/$d/"
+          Compress-Archive -Path "dist/$d" -DestinationPath "dist/$d.zip" -Force
+      - uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: desktop/dist/*.zip
+      - name: Release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber

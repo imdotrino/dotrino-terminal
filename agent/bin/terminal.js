@@ -353,7 +353,7 @@ async function desktop () {
   if (args[1] !== 'update') die(t('uso: dotrino-terminal desktop update [--check]', 'usage: dotrino-terminal desktop update [--check]'))
   const { updateDesktop, BINARY } = await import('../desktop.js')
   const current = opt('--current')
-  const exe = opt('--exe') || findDesktop(BINARY)
+  const exe = opt('--exe') || findDesktop(process.platform === 'win32' ? `${BINARY}.exe` : BINARY)
   const check = args.includes('--check')
   if (!exe && !check) die(t(`no encontré ${BINARY} en esta máquina. Bájala de https://terminal.dotrino.com/`, `could not find ${BINARY} on this machine. Get it from https://terminal.dotrino.com/`))
   const say = (step, d) => {

@@ -1,4 +1,4 @@
-//! Dotrino Terminal — la app de escritorio (Linux y macOS).
+//! Dotrino Terminal — la app de escritorio (Linux, macOS y Windows).
 //!
 //! Cada ventana es una terminal nativa (`iced` + `iced_term`, sobre `alacritty_terminal`).
 //!
@@ -18,7 +18,11 @@
 //!   ven en la propia TTY. Al terminar, la ventana pasa al perfil recién enlazado.
 //! - Ctrl+Shift+N (Cmd+N en macOS) abre otra ventana con el mismo perfil; Ctrl+Shift+W la cierra.
 
+// Windows: una app de ventanas, no de consola (sin la ventana negra detrás).
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -52,6 +56,31 @@ fn main() -> iced::Result {
         .run()
 }
 
+/// Una orden externa. En Windows, sin abrir su ventana de consola: la app es de ventanas y cada
+/// `node` o `cmd` que lanzara sacaría una negra al frente.
+fn command(program: impl AsRef<OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// La carpeta del usuario: `HOME`, y en Windows `USERPROFILE`.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").or_else(|| if cfg!(windows) { std::env::var_os("USERPROFILE") } else { None }).filter(|h| !h.is_empty()).map(PathBuf::from)
+}
+
+/// Donde la app guarda lo suyo: `$XDG_CONFIG_HOME`, o `~/.config` (también en Windows: es la
+/// misma carpeta que mira el cliente, `os.homedir()/.config`).
+fn config_base() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| home_dir().map(|h| h.join(".config")))
+}
+
 /// Cómo se lanza el cliente en cada ventana.
 #[derive(Clone)]
 struct Launch {
@@ -59,6 +88,20 @@ struct Launch {
     path: String,
     /// La versión del cliente instalado (de su package.json), si se pudo leer.
     version: Option<(u32, u32, u32)>,
+}
+
+impl Launch {
+    /// Lo que corre en la TTY de una ventana. En Linux y macOS, el cliente tal cual. En Windows,
+    /// `node terminal.js`: el `dotrino-terminal.cmd` de npm metería un `cmd.exe` en medio, que
+    /// pregunta «¿Terminar el trabajo por lotes?» al salir.
+    fn pty(&self) -> Result<(String, Vec<String>), String> {
+        if !cfg!(windows) {
+            return Ok((self.program.to_string_lossy().into_owned(), Vec::new()));
+        }
+        let script = client_script(&self.program).filter(|s| s.is_file()).ok_or_else(|| format!("{}: {}", self.program.display(), t("no encuentro su terminal.js", "can't find its terminal.js")))?;
+        let node = self.program.parent().map(|d| d.join("node.exe")).filter(|n| n.is_file()).or_else(|| find_in(&self.path, "node")).ok_or_else(|| t("no encuentro node.exe en el PATH", "can't find node.exe in the PATH"))?;
+        Ok((node.to_string_lossy().into_owned(), vec![script.to_string_lossy().into_owned()]))
+    }
 }
 
 /// Desde qué versión de `dotrino-terminal` entiende el cliente los atajos con los que la app
@@ -89,11 +132,21 @@ const NET_CLIENT: (u32, u32, u32) = (0, 46, 0);
 /// La versión del cliente sin ejecutarlo (ejecutarlo podría levantar un agente): su package.json,
 /// junto al script al que apunta el enlace de npm (`…/@dotrino/terminal-agent/bin/terminal.js`).
 fn client_version(program: &Path) -> Option<(u32, u32, u32)> {
-    let real = std::fs::canonicalize(program).ok()?;
+    let real = client_script(program)?;
     let pkg = real.parent()?.parent()?.join("package.json");
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(pkg).ok()?).ok()?;
     let mut it = v["version"].as_str()?.split(['.', '-']).map(|n| n.parse::<u32>().ok());
     Some((it.next()??, it.next()??, it.next()??))
+}
+
+/// El script del cliente (`…/@dotrino/terminal-agent/bin/terminal.js`). En Linux y macOS, adonde
+/// apunta el enlace de npm. En Windows npm no enlaza: deja `dotrino-terminal.cmd` en su prefijo, y
+/// el paquete está en `node_modules` al lado.
+fn client_script(program: &Path) -> Option<PathBuf> {
+    if cfg!(windows) && program.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd")) {
+        return Some(program.parent()?.join("node_modules").join("@dotrino").join("terminal-agent").join("bin").join("terminal.js"));
+    }
+    std::fs::canonicalize(program).ok()
 }
 
 /// La carpeta de npm en la que vive el cliente que la app arranca (`<prefijo>/lib/node_modules/
@@ -102,7 +155,7 @@ fn client_version(program: &Path) -> Option<(u32, u32, u32)> {
 /// universal usa `~/.dotrino/npm`), y deja la versión nueva en una copia que nadie arranca.
 /// `None`: el cliente no cuelga de un `node_modules` (un checkout, `DOTRINO_TERMINAL_BIN`).
 fn client_prefix(program: &Path) -> Option<PathBuf> {
-    let real = std::fs::canonicalize(program).ok()?;
+    let real = client_script(program)?;
     // …/node_modules/@dotrino/terminal-agent/bin/terminal.js
     let modules = real.parent()?.parent()?.parent()?.parent()?;
     if modules.file_name()? != "node_modules" {
@@ -224,6 +277,14 @@ fn panel_lines(title: &str, cwd: Option<&str>, machine: Option<&str>) -> (Option
 fn user_at_host() -> Option<String> {
     static ME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     ME.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            let user = std::env::var("USERNAME").ok().filter(|u| !u.is_empty())?;
+            let host = std::env::var("COMPUTERNAME").ok().filter(|h| !h.is_empty())?;
+            Some(format!("{}@{}", user, host.to_lowercase()))
+        }
+        #[cfg(unix)]
+        {
         let user = std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).ok().filter(|u| !u.is_empty())?;
         let mut buf = [0u8; 256];
         // SAFETY: `buf` vive toda la llamada y se le pasa su tamaño; se lee hasta el primer NUL.
@@ -234,6 +295,7 @@ fn user_at_host() -> Option<String> {
         let host = String::from_utf8_lossy(&buf[..end]);
         let host = host.split('.').next().filter(|h| !h.is_empty())?;
         Some(format!("{user}@{host}"))
+        }
     })
     .clone()
 }
@@ -653,7 +715,7 @@ fn check_agents(launch: Launch) -> Option<Stale> {
     if !launch.version.is_some_and(|v| v >= AGENTS_CLIENT) {
         return None;
     }
-    let out = std::process::Command::new(&launch.program).args(["agents", "--json"]).env("PATH", &launch.path).stdin(std::process::Stdio::null()).output();
+    let out = command(&launch.program).args(["agents", "--json"]).env("PATH", &launch.path).stdin(std::process::Stdio::null()).output();
     let out = match out {
         Ok(o) if o.status.success() => o,
         Ok(o) => {
@@ -682,7 +744,7 @@ fn check_agents(launch: Launch) -> Option<Stale> {
 
 /// Para los agentes que van por detrás (cierra sus consolas). `Err`: por qué no se pudo.
 fn restart_agents(launch: Launch) -> Result<(), String> {
-    let out = std::process::Command::new(&launch.program)
+    let out = command(&launch.program)
         .args(["restart", "--stale", "--yes"])
         .env("PATH", &launch.path)
         .env_remove("DOTRINO_TERMINAL_PROFILE_DIR")
@@ -711,7 +773,7 @@ fn exe_stamp() -> Option<(u64, std::time::SystemTime)> {
 /// Pregunta al cliente qué versiones nuevas hay (la app no tiene red). `None`: no se pudo saber
 /// (sin cliente, uno anterior a `updates`, sin red); queda en el registro y no se inventa nada.
 fn check_updates(launch: Launch) -> Option<Vec<String>> {
-    let out = std::process::Command::new(&launch.program)
+    let out = command(&launch.program)
         .args(["updates", "--json", "--desktop", VERSION])
         .env("PATH", &launch.path)
         .stdin(std::process::Stdio::null())
@@ -1007,6 +1069,13 @@ fn t(es_text: &str, en_text: &str) -> String {
 
 /// La shell del usuario: `$SHELL`, y si no está (una app abierta desde el Finder de macOS),
 /// la de su cuenta del sistema (`getpwuid`). Si tampoco, se dice.
+#[cfg(windows)]
+fn user_shell() -> Result<String, String> {
+    // PowerShell 7 si está; si no, la que trae Windows.
+    Ok(std::env::var("PATH").ok().and_then(|p| find_in(&p, "pwsh")).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "powershell.exe".to_string()))
+}
+
+#[cfg(unix)]
 fn user_shell() -> Result<String, String> {
     if let Some(sh) = std::env::var("SHELL").ok().filter(|s| !s.is_empty()) {
         return Ok(sh);
@@ -1026,10 +1095,17 @@ fn user_shell() -> Result<String, String> {
 ///
 /// `.bashrc` puede imprimir cosas, así que el PATH va en una línea marcada. Sin entrada, para
 /// que no se quede esperando teclado, y con tope de tiempo: si la shell se cuelga, se dice.
+#[cfg(windows)]
+fn login_path() -> Result<String, String> {
+    // Una app de Windows hereda el PATH entero del usuario: no hay shell de inicio de sesión.
+    std::env::var("PATH").map_err(|_| t("no hay PATH", "there is no PATH"))
+}
+
+#[cfg(unix)]
 fn login_path() -> Result<String, String> {
     const MARK: &str = "__DOTRINO_PATH__";
     let shell = user_shell()?;
-    let mut child = Command::new(&shell)
+    let mut child = command(&shell)
         .args(["-l", "-i", "-c", &format!("printf '\\n{MARK}%s\\n' \"$PATH\"")])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -1053,7 +1129,18 @@ fn login_path() -> Result<String, String> {
 }
 
 fn find_in(path: &str, name: &str) -> Option<PathBuf> {
-    std::env::split_paths(path).map(|dir| dir.join(name)).find(|p| is_executable(p))
+    // Windows: el nombre sin extensión se busca con las de PATHEXT (`dotrino-terminal.cmd`).
+    let names: Vec<String> = if cfg!(windows) && Path::new(name).extension().is_none() {
+        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string()).split(';').filter(|e| !e.is_empty()).map(|e| format!("{name}{}", e.to_lowercase())).collect()
+    } else {
+        vec![name.to_string()]
+    };
+    std::env::split_paths(path).flat_map(|dir| names.iter().map(move |n| dir.join(n))).find(|p| is_executable(p))
+}
+
+#[cfg(windows)]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
 }
 
 #[cfg(unix)]
@@ -1081,7 +1168,7 @@ fn resolve() -> Result<Launch, String> {
 }
 
 fn load_profiles(launch: &Launch) -> Result<Vec<Profile>, String> {
-    let out = Command::new(&launch.program)
+    let out = command(&launch.program)
         .args(["profiles", "--json"])
         .env("PATH", &launch.path)
         .output()
@@ -1103,6 +1190,8 @@ fn terminal_font() -> iced_term::settings::FontSettings {
     let configured = std::env::var("DOTRINO_TERMINAL_FONT").ok().or_else(xfce_terminal_font).or_else(desktop_monospace_font);
     let (family, points) = configured.as_deref().and_then(parse_font_name).unwrap_or(if cfg!(target_os = "macos") {
         ("Menlo".to_string(), 12.0 * 72.0 / 96.0) // Terminal.app: 12 px
+    } else if cfg!(windows) {
+        ("Consolas".to_string(), 10.0) // la de la consola de Windows
     } else {
         ("DejaVu Sans Mono".to_string(), 9.0)
     });
@@ -1125,7 +1214,7 @@ fn terminal_font() -> iced_term::settings::FontSettings {
 /// Sin `fc-match` (macOS) se deja el nombre como vino.
 fn installed_monospace(family: &str) -> String {
     let ask = |pattern: &str| -> Option<(String, bool)> {
-        let out = Command::new("fc-match").args(["-f", "%{family[0]}|%{spacing}", pattern]).output().ok()?;
+        let out = command("fc-match").args(["-f", "%{family[0]}|%{spacing}", pattern]).output().ok()?;
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let (name, spacing) = s.split_once('|')?;
         // 90 = dual, 100 = mono, 110 = celda: todas valen para una rejilla.
@@ -1197,8 +1286,7 @@ fn hex6(c: &str) -> Option<String> {
 }
 
 fn xfce_terminalrc() -> Option<String> {
-    let home = std::env::var_os("HOME")?;
-    std::fs::read_to_string(PathBuf::from(home).join(".config/xfce4/terminal/terminalrc")).ok()
+    std::fs::read_to_string(home_dir()?.join(".config/xfce4/terminal/terminalrc")).ok()
 }
 
 fn xfce_terminal_font() -> Option<String> {
@@ -1212,7 +1300,7 @@ fn xfce_terminal_font() -> Option<String> {
 
 fn desktop_monospace_font() -> Option<String> {
     let run = |cmd: &str, args: &[&str]| -> Option<String> {
-        let out = Command::new(cmd).args(args).output().ok()?;
+        let out = command(cmd).args(args).output().ok()?;
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
         (out.status.success() && !s.is_empty()).then_some(s)
     };
@@ -1262,15 +1350,41 @@ impl Cli {
 }
 
 /// Un texto como UN argumento de `sh`, entre comillas simples (y las suyas escapadas).
+/// Una cadena entre comillas simples para la shell de las órdenes de la app: `sh` en Linux y
+/// macOS, PowerShell en Windows (ahí la comilla se dobla).
 fn sh_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
+    if cfg!(windows) { format!("'{}'", text.replace('\'', "''")) } else { format!("'{}'", text.replace('\'', "'\\''")) }
+}
+
+/// Cómo se corre un script de la app (una actualización, una orden del cliente a la vista).
+fn script_command(script: &str) -> (String, Vec<String>) {
+    if cfg!(windows) {
+        ("powershell.exe".to_string(), ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script].map(String::from).to_vec())
+    } else {
+        ("/bin/sh".to_string(), vec!["-c".to_string(), script.to_string()])
+    }
+}
+
+/// El script de una orden del cliente en su propia TTY: la enseña, la corre y espera Enter. `args`
+/// ya viene escapado con `sh_quote`. Sin la carpeta del perfil en el entorno: la orden no corre
+/// dentro de ninguna consola del agente, aunque la app se haya abierto desde una.
+fn client_aside_script(path: &str, program: &Path, args: &str, close: &str) -> String {
+    let program = sh_quote(&program.to_string_lossy());
+    if cfg!(windows) {
+        format!(
+            "$env:PATH = {}; Remove-Item Env:DOTRINO_TERMINAL_PROFILE_DIR -ErrorAction SilentlyContinue; Write-Host {}; & {program} {args}; Write-Host; Write-Host {}; [void][Console]::ReadLine()",
+            sh_quote(path), sh_quote(&format!("$ dotrino-terminal {args}")), sh_quote(close)
+        )
+    } else {
+        format!("PATH={}; export PATH; unset DOTRINO_TERMINAL_PROFILE_DIR; echo \"\\$ dotrino-terminal {args}\"; {program} {args}; echo; echo {}; read _", sh_quote(path), sh_quote(close))
+    }
 }
 
 /// El registro de la app: `~/.config/dotrino-terminal/desktop.log`. Una línea por hecho, con la
 /// hora. Se recorta al pasar de 256 KB (se queda la mitad más reciente).
 fn log(msg: &str) {
     use std::io::Write;
-    let Some(base) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))) else { return };
+    let Some(base) = config_base() else { return };
     let dir = base.join("dotrino-terminal");
     let _ = std::fs::create_dir_all(&dir);
     let file = dir.join("desktop.log");
@@ -1287,8 +1401,7 @@ fn log(msg: &str) {
 
 /// Dónde se recuerda el último perfil elegido en la app (una preferencia, nada más).
 fn last_profile_file() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("dotrino-terminal").join("last-profile"))
+    Some(config_base()?.join("dotrino-terminal").join("last-profile"))
 }
 
 fn last_profile() -> Option<String> {
@@ -1588,7 +1701,8 @@ impl App {
         }
         let plain = matches!(mode, Mode::Console) && win.profile.is_none();
         let spawn = if let Mode::Updating { script, .. } = &mode {
-            Ok(("/bin/sh".to_string(), vec!["-c".to_string(), script.clone()], HashMap::from([("TERM".to_string(), "xterm-256color".to_string())])))
+            let (program, args) = script_command(script);
+            Ok((program, args, HashMap::from([("TERM".to_string(), "xterm-256color".to_string())])))
         } else if let (true, Some(cmd)) = (plain, win.command.clone()) {
             // Una orden de `-x`/`-e`: tal cual, sin perfil. La ventana se cierra cuando acaba.
             let mut it = cmd.into_iter();
@@ -1598,11 +1712,12 @@ impl App {
             // Sin perfil: la shell del usuario, como cualquier terminal. En macOS las terminales
             // abren una shell de inicio de sesión; en Linux, una interactiva.
             user_shell().map(|sh| {
-                let args = if cfg!(target_os = "macos") { vec!["-l".to_string()] } else { Vec::new() };
+                let args = if cfg!(target_os = "macos") { vec!["-l".to_string()] } else if cfg!(windows) { vec!["-NoLogo".to_string()] } else { Vec::new() };
                 (sh, args, HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]))
             })
         } else {
-            self.launch.clone().map(|launch| {
+            self.launch.clone().and_then(|launch| {
+                let (program, mut command) = launch.pty()?;
                 let args = match &mode {
                     Mode::Linking { .. } => vec!["link".to_string()],
                     Mode::Updating { .. } => Vec::new(),   // ya resuelto arriba: no llega aquí
@@ -1627,7 +1742,8 @@ impl App {
                     // Si el cliente falla, que espere una tecla: la ventana se cierra cuando sale.
                     ("DOTRINO_TERMINAL_HOLD".to_string(), "1".to_string()),
                 ]);
-                (launch.program.to_string_lossy().into_owned(), args, env)
+                command.extend(args);
+                Ok((program, command, env))
             })
         };
         win.mode = mode;
@@ -1685,12 +1801,7 @@ impl App {
     fn client_aside(&mut self, id: window::Id, args: String, what: String) -> Task<Message> {
         let Ok(launch) = self.launch.clone() else { return Task::none() };
         let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
-        // Sin la carpeta del perfil en el entorno: la orden no corre dentro de ninguna consola
-        // del agente, aunque la app se haya abierto desde una.
-        let script = format!(
-            "PATH={}; export PATH; unset DOTRINO_TERMINAL_PROFILE_DIR; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
-            sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
-        );
+        let script = client_aside_script(&launch.path, &launch.program, &args, &close);
         self.run_aside(id, script, what)
     }
 
@@ -2240,7 +2351,7 @@ impl App {
         // nueva, una por cada ventana que había, y esta termina.
         if let (Some(again), Some(exe)) = (self.respawn.take(), exe_path()) {
             for (profile, cwd) in again {
-                let mut cmd = std::process::Command::new(&exe);
+                let mut cmd = command(&exe);
                 if let Some(p) = profile {
                     cmd.args(["--name", &p]);
                 }
@@ -2415,7 +2526,7 @@ impl App {
                 let fresh = matches!(message, Message::NewWindowFresh(_));
                 let from = from.and_then(|id| self.windows.get(&id));
                 let profile = from.and_then(|w| w.profile.clone());
-                let cwd = from.map(|w| w.cwd.clone()).or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
+                let cwd = from.map(|w| w.cwd.clone()).or_else(home_dir).unwrap_or_default();
                 let _ = self.reload_profiles();
                 let free = if fresh { None } else { profile.as_deref().and_then(|p| self.free_console(p)) };
                 self.open_window_on(profile, cwd, free).1
@@ -2471,10 +2582,15 @@ impl App {
                 let no_client = t("La app no se actualizó: hace falta dotrino-terminal para bajarla y comprobarla.", "The app was not updated: dotrino-terminal is needed to download and check it.");
                 // En la carpeta del cliente que la app arranca, no en la del npm del PATH.
                 let prefix = self.launch.as_ref().ok().and_then(|l| client_prefix(&l.program)).map(|p| format!(" --prefix {}", sh_quote(&p.to_string_lossy()))).unwrap_or_default();
-                let script = format!(
+                let script = if cfg!(windows) {
+                    format!(
+                        "$env:PATH = {}; if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {{ Write-Host '$ npm install -g{prefix} {CLIENT_PKG}@latest'; npm.cmd install -g{prefix} {CLIENT_PKG}@latest; if ($LASTEXITCODE -eq 0) {{ Write-Host; Write-Host {} }} else {{ Write-Host; Write-Host {} }} }} else {{ Write-Host {} }}; Write-Host; if (Get-Command dotrino-terminal.cmd -ErrorAction SilentlyContinue) {{ Write-Host '$ dotrino-terminal desktop update'; dotrino-terminal.cmd desktop update --current {VERSION} --exe {} }} else {{ Write-Host {} }}; Write-Host; Write-Host {}; [void][Console]::ReadLine()",
+                        sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&exe), sh_quote(&no_client), sh_quote(&close)
+                    )
+                } else { format!(
                     "PATH={}; export PATH; if command -v npm >/dev/null; then echo \"\\$ npm install -g{prefix} {CLIENT_PKG}@latest\"; npm install -g{prefix} {CLIENT_PKG}@latest && echo && echo {} || {{ echo; echo {}; }}; else echo {}; fi; echo; if command -v dotrino-terminal >/dev/null; then echo '$ dotrino-terminal desktop update'; dotrino-terminal desktop update --current {VERSION} --exe {}; else echo {}; fi; echo; echo {}; read _",
                     sh_quote(&path), sh_quote(&ok), sh_quote(&fail), sh_quote(&no_npm), sh_quote(&exe), sh_quote(&no_client), sh_quote(&close)
-                );
+                ) };
                 self.awaiting_client = true;
                 self.run_aside(id, script, t("Actualizar", "Update"))
             }
@@ -2787,17 +2903,11 @@ impl App {
             }
             Message::Network(id) => {
                 // Como VS Code: en ESTA ventana y en otra TTY, con la salida a la vista hasta Enter.
-                let Ok(launch) = self.launch.clone() else { return Task::none() };
                 let args = match self.windows.get(&id).and_then(|w| w.profile.clone()) {
                     Some(p) => format!("network --name {}", sh_quote(&p)),
                     None => "network".to_string(),
                 };
-                let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
-                let script = format!(
-                    "PATH={}; export PATH; echo \"\\$ dotrino-terminal {args}\"; {} {args}; echo; echo {}; read _",
-                    sh_quote(&launch.path), sh_quote(&launch.program.to_string_lossy()), sh_quote(&close)
-                );
-                self.run_aside(id, script, t("Red", "Network"))
+                self.client_aside(id, args, t("Red", "Network"))
             }
             Message::NoteSave(id) => {
                 let Some((cid, content)) = self.windows.get_mut(&id).and_then(|w| w.note_edit.take()) else { return Task::none() };
@@ -3710,26 +3820,110 @@ fn later(ms: u64, msg: Message) -> Task<Message> {
     Task::perform(tokio::time::sleep(std::time::Duration::from_millis(ms)), move |_| msg.clone())
 }
 
-/// Pregunta al agente de un perfil, por su socket local, qué consolas tiene. `None` si no hay
-/// agente escuchando (o no contesta a tiempo): entonces no tiene consolas.
-#[cfg(unix)]
-fn agent_list(dir: &Path) -> Option<Vec<ConsoleInfo>> {
-    use std::io::{BufRead, BufReader, Write};
-    let mut sock = std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")).ok()?;
-    sock.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok()?;
-    sock.write_all(b"{\"type\":\"list\"}\n").ok()?;
-    let mut reader = BufReader::new(sock);
-    let mut line = String::new();
+/// Una línea al agente de un perfil y lo que conteste, línea a línea, hasta que `each` decida o
+/// pase `timeout`. `None`: no hay agente escuchando, o no contestó a tiempo. El agente escucha en un
+/// socket Unix (`terminal.sock`) y, en Windows, en una tubería con nombre (ver `agent_connect`).
+fn agent_ask<R>(dir: &Path, msg: &[u8], timeout: std::time::Duration, mut each: impl FnMut(serde_json::Value) -> Option<R>) -> Option<R> {
+    let mut conn = agent_connect(dir)?;
+    conn.send(msg)?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buf = Vec::new();
     loop {
-        line.clear();
-        if reader.read_line(&mut line).ok()? == 0 {
+        while let Some(i) = buf.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=i).collect();
+            if let Some(r) = serde_json::from_slice(&line).ok().and_then(&mut each) {
+                return Some(r);
+            }
+        }
+        let left = deadline.checked_duration_since(std::time::Instant::now())?;
+        if !conn.read_some(&mut buf, left)? {
             return None;
         }
-        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
-        if v["type"] == "consoles" {
-            return serde_json::from_value(v["list"].clone()).ok();
+    }
+}
+
+/// La conexión con el agente de un perfil.
+struct AgentConn {
+    #[cfg(unix)]
+    sock: std::os::unix::net::UnixStream,
+    #[cfg(windows)]
+    pipe: std::fs::File,
+}
+
+/// Se conecta al agente de ese perfil. En Windows, la tubería y su llave están en `terminal.pipe`
+/// (la carpeta del perfil solo la lee el usuario) y la llave va en la primera línea.
+fn agent_connect(dir: &Path) -> Option<AgentConn> {
+    #[cfg(unix)]
+    {
+        Some(AgentConn { sock: std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")).ok()? })
+    }
+    #[cfg(windows)]
+    {
+        let rec: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("terminal.pipe")).ok()?).ok()?;
+        let pipe = std::fs::OpenOptions::new().read(true).write(true).open(rec["pipe"].as_str()?).ok()?;
+        let mut conn = AgentConn { pipe };
+        conn.send(format!("{}\n", serde_json::json!({ "type": "local-auth", "key": rec["key"].as_str()? })).as_bytes())?;
+        Some(conn)
+    }
+}
+
+impl AgentConn {
+    fn send(&mut self, bytes: &[u8]) -> Option<()> {
+        use std::io::Write;
+        #[cfg(unix)]
+        let out = &mut self.sock;
+        #[cfg(windows)]
+        let out = &mut self.pipe;
+        out.write_all(bytes).ok()
+    }
+
+    /// Lee lo que haya, esperando como mucho `wait`. `Some(false)`: el agente cerró; `None`: se
+    /// acabó el tiempo o falló.
+    fn read_some(&mut self, buf: &mut Vec<u8>, wait: std::time::Duration) -> Option<bool> {
+        use std::io::Read;
+        let mut chunk = [0u8; 16 * 1024];
+        #[cfg(unix)]
+        {
+            self.sock.set_read_timeout(Some(wait.max(std::time::Duration::from_millis(1)))).ok()?;
+            let n = self.sock.read(&mut chunk).ok()?;
+            buf.extend_from_slice(&chunk[..n]);
+            Some(n > 0)
+        }
+        // Una tubería abierta como archivo no tiene tope de espera: se mira si hay algo con
+        // PeekNamedPipe y solo entonces se lee, para no quedarse colgado.
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            let deadline = std::time::Instant::now() + wait;
+            loop {
+                let mut avail: u32 = 0;
+                // SAFETY: el handle es el de `self.pipe`, vivo toda la llamada; los punteros nulos
+                // son los argumentos opcionales que no se piden.
+                let ok = unsafe { windows_sys::Win32::System::Pipes::PeekNamedPipe(self.pipe.as_raw_handle() as _, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut avail, std::ptr::null_mut()) };
+                if ok == 0 {
+                    return Some(false);
+                }
+                if avail > 0 {
+                    let want = (avail as usize).min(chunk.len());
+                    let n = self.pipe.read(&mut chunk[..want]).ok()?;
+                    buf.extend_from_slice(&chunk[..n]);
+                    return Some(n > 0);
+                }
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         }
     }
+}
+
+/// Pregunta al agente de un perfil, por su socket local, qué consolas tiene. `None` si no hay
+/// agente escuchando (o no contesta a tiempo): entonces no tiene consolas.
+fn agent_list(dir: &Path) -> Option<Vec<ConsoleInfo>> {
+    agent_ask(dir, b"{\"type\":\"list\"}\n", std::time::Duration::from_millis(500), |v| {
+        (v["type"] == "consoles").then(|| serde_json::from_value(v["list"].clone()).ok()).flatten()
+    })
 }
 
 /// Lo que contestó el agente al preguntarle por las otras máquinas de la cuenta.
@@ -3743,37 +3937,23 @@ enum Far {
 
 /// Las otras máquinas de la cuenta, según el agente de este perfil. Contesta de memoria (él les
 /// pregunta por detrás), así que se le espera poco: si aún no lo sabe, la próxima vez.
-#[cfg(unix)]
 fn agent_machines(dir: &Path) -> Far {
-    use std::io::{BufRead, BufReader, Write};
-    let Ok(mut sock) = std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")) else { return Far::Silent };
-    if sock.set_read_timeout(Some(std::time::Duration::from_millis(250))).is_err() || sock.write_all(b"{\"type\":\"machines\"}\n").is_err() {
-        return Far::Silent;
-    }
-    let mut reader = BufReader::new(sock);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(n) if n > 0 => {}
-            _ => return Far::Silent,
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { return Far::Silent };
+    agent_ask(dir, b"{\"type\":\"machines\"}\n", std::time::Duration::from_millis(250), |v| {
         if v["type"] == "machines" {
-            return serde_json::from_value(v["list"].clone()).map(Far::List).unwrap_or(Far::Silent);
+            return Some(serde_json::from_value(v["list"].clone()).map(Far::List).unwrap_or(Far::Silent));
         }
         if v["type"] == "fail" {
-            return Far::No(v["code"].as_str().unwrap_or("far-error").to_string(), v["message"].as_str().unwrap_or("").to_string());
+            return Some(Far::No(v["code"].as_str().unwrap_or("far-error").to_string(), v["message"].as_str().unwrap_or("").to_string()));
         }
-    }
+        None
+    })
+    .unwrap_or(Far::Silent)
 }
 
 /// Le manda una orden al agente de un perfil, sin esperar respuesta.
-#[cfg(unix)]
 fn agent_send(dir: &Path, msg: &serde_json::Value) {
-    use std::io::Write;
-    if let Ok(mut sock) = std::os::unix::net::UnixStream::connect(dir.join("terminal.sock")) {
-        let _ = sock.write_all(format!("{msg}\n").as_bytes());
+    if let Some(mut conn) = agent_connect(dir) {
+        let _ = conn.send(format!("{msg}\n").as_bytes());
     }
 }
 

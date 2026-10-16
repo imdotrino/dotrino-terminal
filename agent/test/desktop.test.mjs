@@ -10,7 +10,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { installKind, assetFor, install, packageCommand, updateDesktop, BINARY } from '../desktop.js'
 
-const ASSETS = ['dotrino-terminal-desktop-0.3.0-1.x86_64.rpm', 'dotrino-terminal-desktop-0.3.0-linux-x64.tar.gz', 'dotrino-terminal-desktop-0.3.0-macos-universal.zip', 'dotrino-terminal-desktop_0.3.0-1_amd64.deb'].map((name) => ({ name, url: `https://x/${name}` }))
+const ASSETS = ['dotrino-terminal-desktop-0.3.0-1.x86_64.rpm', 'dotrino-terminal-desktop-0.3.0-linux-x64.tar.gz', 'dotrino-terminal-desktop-0.3.0-macos-universal.zip', 'dotrino-terminal-desktop_0.3.0-1_amd64.deb', 'dotrino-terminal-desktop-0.3.0-windows-x64.zip'].map((name) => ({ name, url: `https://x/${name}` }))
 const owner = (who) => (cmd) => { if (cmd !== who) throw new Error('not mine') }
 
 test('la forma de instalación sale de a quién pertenece el binario', () => {
@@ -25,13 +25,16 @@ test('la forma de instalación sale de a quién pertenece el binario', () => {
   assert.deepEqual([mac.kind, mac.app], ['mac', '/Applications/Dotrino Terminal.app'])
   assert.equal(installKind({ exe: '/tmp/dotrino-terminal-desktop', platform: 'darwin' }).code, 'not-a-bundle')
   assert.equal(installKind({ exe: null }).code, 'no-exe')
+  assert.equal(installKind({ exe: 'C:\\Users\\u\\Dotrino\\dotrino-terminal-desktop.exe', platform: 'win32', arch: 'x64', writable: () => true }).kind, 'win')
+  assert.equal(installKind({ exe: 'C:\\Program Files\\x.exe', platform: 'win32', arch: 'x64', writable: () => false }).code, 'not-writable')
 })
 
 test('cada forma baja su archivo', () => {
   assert.match(assetFor(ASSETS, 'deb').asset.name, /_amd64\.deb$/)
   assert.match(assetFor(ASSETS, 'rpm').asset.name, /\.x86_64\.rpm$/)
   assert.match(assetFor(ASSETS, 'tar').asset.name, /\.tar\.gz$/)
-  assert.match(assetFor(ASSETS, 'mac').asset.name, /\.zip$/)
+  assert.match(assetFor(ASSETS, 'mac').asset.name, /-macos-universal\.zip$/)
+  assert.match(assetFor(ASSETS, 'win').asset.name, /-windows-x64\.zip$/)
   assert.equal(assetFor([], 'deb').ok, false)
 })
 
@@ -110,4 +113,27 @@ test('verificado: se instala el archivo de esa máquina', async () => {
   assert.deepEqual([r.ok, r.updated, r.version], [true, true, '0.3.0'])
   assert.deepEqual(got, ['dotrino-terminal-desktop-0.3.0-1.x86_64.rpm', 'rpm'])
   assert.deepEqual(steps, ['latest', 'download', 'verified', 'install'])
+})
+
+test('Windows: el .exe que corre se aparta a .exe.old y el nuevo ocupa su sitio', () => {
+  const app = fs.mkdtempSync(path.join(os.tmpdir(), 'win-app-'))
+  const exe = path.join(app, `${BINARY}.exe`)
+  fs.writeFileSync(exe, 'viejo')
+  fs.writeFileSync(`${exe}.old`, 'de antes')
+  const dl = fs.mkdtempSync(path.join(os.tmpdir(), 'win-dl-'))
+  const file = path.join(dl, 'x-windows-x64.zip')
+  fs.writeFileSync(file, 'zip')
+  // `tar` falso: deja el .exe nuevo dentro de su carpeta, como el .zip de la release.
+  const run = (cmd, args) => {
+    assert.deepEqual([cmd, args[0]], ['tar', '-xf'])
+    fs.mkdirSync(path.join(dl, 'dotrino-terminal-desktop-0.3.0-windows-x64'))
+    fs.writeFileSync(path.join(dl, 'dotrino-terminal-desktop-0.3.0-windows-x64', `${BINARY}.exe`), 'nuevo')
+  }
+  assert.deepEqual(install(file, { kind: 'win' }, { exe, run }), { ok: true })
+  assert.equal(fs.readFileSync(exe, 'utf8'), 'nuevo')
+  assert.equal(fs.readFileSync(`${exe}.old`, 'utf8'), 'viejo')
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'win-dl-'))
+  fs.writeFileSync(path.join(empty, 'y.zip'), 'zip')
+  assert.equal(install(path.join(empty, 'y.zip'), { kind: 'win' }, { exe, run: () => {} }).code, 'bad-zip')
+  for (const d of [app, dl, empty]) fs.rmSync(d, { recursive: true, force: true })
 })
