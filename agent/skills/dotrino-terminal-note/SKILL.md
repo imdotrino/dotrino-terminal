@@ -59,7 +59,7 @@ dotrino-terminal note --task - --title 'Login de facturero' <<'EOF_TASK'
 Hecho: el formulario
 Ahora: la validación
 Falta: probar con firma real
-Modelo: Opus 5.5
+Modelo: Opus 5.5 · 83% 167min 82% 7d -4%
 EOF_TASK
 
 dotrino-terminal note --task ''                # quita tu tarea y tu título (lo del dueño se queda)
@@ -82,6 +82,10 @@ No hace falta decir qué consola: es la tuya.
 - **La última línea dice qué modelo eres**: `Modelo: Opus 5.5` (el nombre con el que te presentas,
   tal como lo dice tu contexto; no lo adivines ni pongas el identificador largo). Va siempre, en
   cada actualización: el dueño tiene varias consolas con modelos distintos y quiere verlo ahí.
+  **Al lado, el saldo de uso**: `Modelo: Opus 5.5 · 83% 167min 82% 7d -4%` (sesión restante,
+  minutos al reinicio, semana restante, días al reinicio, margen óptimo semanal). Sácalo en cada
+  actualización con `bash ~/.claude/usage-throttle/tts-synth.sh --compact`; no copies el de la
+  vez anterior. Si la orden no existe o no devuelve nada, solo `Modelo: …`.
 - En el idioma del usuario. Sin secretos, llaves ni rutas con credenciales: la nota la ven todos
   los aparatos de la cuenta.
 - Al terminar no la quites: di que terminó (`Terminado: …`).
