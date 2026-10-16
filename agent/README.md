@@ -77,7 +77,7 @@ La clave de una máquina se recuerda solo en memoria, cuando una ventana la escr
 Solo esta máquina necesita la 0.38: las otras atienden como a cualquier aparato.
 
 `dotrino-terminal vscode` escribe el perfil de terminal «Dotrino» en el `settings.json` de VS Code,
-VS Code Insiders, VSCodium y Cursor (los que haya, Linux y macOS) y lo deja por defecto; conserva
+VS Code Insiders, VSCodium y Cursor (los que haya, Linux, macOS y Windows) y lo deja por defecto; conserva
 los comentarios y el resto del archivo (`editors.js`, con `jsonc-parser`). El perfil apunta a Node
 y al script por su ruta, porque un editor lanzado desde el escritorio no hereda el PATH de la shell:
 al cambiar de Node se vuelve a correr. En esa terminal (`TERM_PROGRAM=vscode`, sin `--tag`) cerrar
@@ -179,9 +179,23 @@ En la app de escritorio: menú **Perfil → Poner o cambiar la clave… / Quitar
 `dotrino-terminal service install [--name <n>]` escribe una unidad de systemd **del usuario**
 (`~/.config/systemd/user/dotrino-terminal-agent-<perfil>.service`, `Restart=always`, con el `PATH`
 de quien instala) y pide `loginctl enable-linger` para que arranque sin sesión; en macOS, un
-LaunchAgent (`~/Library/LaunchAgents/com.dotrino.terminal-agent.<perfil>.plist`). Es de usuario
+LaunchAgent (`~/Library/LaunchAgents/com.dotrino.terminal-agent.<perfil>.plist`); en Windows, el valor
+`DotrinoTerminalAgent-<perfil>` en `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, que al iniciar
+sesión corre `dotrino-terminal-agent supervise`: se vuelve a lanzar sin ventana y levanta el agente cada
+vez que sale (`supervisor.pid` en la carpeta del perfil). Ni el Programador de tareas ni un servicio de
+Windows: los dos piden derechos que una cuenta normal no tiene. Es de usuario
 para que el agente se siga actualizando solo (§15): con quien lo levante ya puede reiniciarse.
 Un agente que ya corre por su cuenta no se para (cerraría sus consolas): el servicio queda
 habilitado, y `dotrino-terminal`, cuando no encuentra agente, arranca el servicio en vez de
 levantar uno propio. Código en `service.js`; probado con systemd en un contenedor de Fedora,
-macOS solo con pruebas unitarias.
+Windows de punta a punta en el runner `windows-latest` (`test/windows.test.mjs`), macOS solo con
+pruebas unitarias.
+
+## Windows
+
+El agente corre en Windows (≥ 0.47.0) y abre **PowerShell** (`powershell.exe`; otra con `--shell`).
+Las ventanas locales no van por un socket Unix sino por una **tubería con nombre**: su nombre es
+aleatorio y, junto con una llave, queda en `terminal.pipe` dentro de la carpeta del perfil. La ventana
+manda la llave en su primera línea (`{ type:'local-auth', key }`) y sin ella el agente corta sin
+contestar: la lista de tuberías la ve cualquier usuario de la máquina, la carpeta del perfil no.
+La app de escritorio (`desktop/`) todavía no tiene versión para Windows.

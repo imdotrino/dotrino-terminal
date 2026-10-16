@@ -3,7 +3,7 @@
 > **Parte del ecosistema [Dotrino](https://dotrino.com).**
 
 Una terminal para Linux y macOS cuyas ventanas también se abren desde el navegador de otro
-aparato de tu cuenta, y una shell real (`bash`, `zsh`…) de tus máquinas en ese navegador. Solo entran los aparatos que tu **acta**
+aparato de tu cuenta, y una shell real (`bash`, `zsh`…, o PowerShell en Windows: solo el agente, sin app de escritorio) de tus máquinas en ese navegador. Solo entran los aparatos que tu **acta**
 reconoce con permiso `sign`, y todo viaja cifrado de punta a punta por el proxio.
 No hay puertos abiertos ni contraseñas.
 
@@ -42,7 +42,8 @@ otra consola que ya exista (una nueva solo si no queda ninguna). Si el agente se
 pierden.
 
 El mismo protocolo sirve a las dos puntas: las ventanas locales (JSON por líneas en
-`~/.dotrino/agent/terminal-agent/<perfil>/terminal.sock`) y los aparatos remotos (dentro de la
+`~/.dotrino/agent/terminal-agent/<perfil>/terminal.sock`; en Windows, una tubería con nombre apuntada
+en `terminal.pipe`) y los aparatos remotos (dentro de la
 sesión cifrada).
 
 | Sentido | Payload |

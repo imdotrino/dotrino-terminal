@@ -20,7 +20,25 @@ permissions:
   attestations: write
 
 jobs:
+  # Windows antes de publicar: la tubería con nombre, PowerShell y el servicio de inicio de
+  # sesión solo se pueden probar ahí (`test/windows.test.mjs`).
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+      - run: npm ci
+      - run: node --test test/windows.test.mjs test/service.test.mjs test/editors.test.mjs
+
   release:
+    needs: windows
     runs-on: ubuntu-latest
     defaults:
       run:
