@@ -52,16 +52,8 @@ fn main() -> iced::Result {
     iced::daemon(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
-        .theme(|_: &App, _| app_theme())
+        .theme(|_: &App, _| Theme::Dark)
         .run()
-}
-
-/// El tema oscuro de iced con el acento cambiado: su `primary` es azul, y el texto azul sobre
-/// fondo oscuro no se lee (dueño, 2026-10-16: «no uses font azul en ningún lado»). El acento pasa
-/// a un gris claro; lo demás queda como el `Dark` de siempre.
-fn app_theme() -> Theme {
-    let dark = Theme::Dark.palette();
-    Theme::custom("Dotrino", iced::theme::Palette { primary: Color::from_rgb8(0xd6, 0xd6, 0xd6), ..dark })
 }
 
 /// Una orden externa. En Windows, sin abrir su ventana de consola: la app es de ventanas y cada
@@ -3600,7 +3592,7 @@ impl App {
             }
             // Sin otras máquinas por un motivo que se arregla: una «!» que lo dice al pasar.
             if let Some((why, true)) = self.far_notice(profile) {
-                let mark = text("!").size(13).width(Length::Fill).align_x(iced::alignment::Horizontal::Center).style(|theme: &Theme| text::Style { color: Some(theme.palette().primary) });
+                let mark = text("!").size(13).width(Length::Fill).align_x(iced::alignment::Horizontal::Center).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text) });
                 let b = button(mark).width(24).padding([3, 0]).style(menu_button);
                 let b: Element<'_, Message> = iced::widget::tooltip(b, container(text(why).size(12)).padding(6).max_width(320).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(container(separator()).width(24));
@@ -3673,7 +3665,7 @@ impl App {
             }
             // De qué va: la primera línea de su nota.
             if let Some(line) = [c.task.as_deref(), c.note.as_deref()].into_iter().flatten().flat_map(str::lines).map(str::trim).find(|l| !l.is_empty()) {
-                label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) }));
+                label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text) }));
             }
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
@@ -3729,7 +3721,7 @@ impl App {
                     label = label.push(text(l).size(12));
                 }
                 if let Some(line) = [c.task.as_deref(), c.note.as_deref()].into_iter().flatten().flat_map(str::lines).map(str::trim).find(|l| !l.is_empty()) {
-                    label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().primary.base.color) }));
+                    label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text) }));
                 }
                 let where_ = if is_mine { t("en esta ventana", "in this window") } else if c.watchers.is_empty() { t("suelta", "detached") } else { t("abierta", "open") };
                 let where_ = match c.act() {
