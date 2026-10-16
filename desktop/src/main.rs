@@ -879,6 +879,9 @@ struct Win {
     /// para poder seleccionarlo y copiarlo).
     task_read: Option<(String, iced::widget::text_editor::Content)>,
     note_read: Option<(String, iced::widget::text_editor::Content)>,
+    /// La tarjeta «de qué va», plegada a un botón. Es de ESTA ventana: plegarla aquí no pliega
+    /// las demás (dueño, 2026-10-16). Una ventana nueva empieza como se dejó la última.
+    about_folded: bool,
 }
 
 impl Win {
@@ -943,8 +946,6 @@ struct App {
     /// Lo que ya se vio: la consola (id) y el `doneAt` que tenía cuando su ventana tuvo el foco.
     /// Ese «terminó» ya no parpadea; uno nuevo (otro `doneAt`) sí.
     seen: HashMap<String, u64>,
-    /// La tarjeta «de qué va», plegada a un botón (en todas las ventanas; se recuerda).
-    about_folded: bool,
 }
 
 /// Qué texto de la tarjeta «de qué va»: la tarea del programa o la nota del dueño.
@@ -1047,8 +1048,8 @@ enum Message {
     ScrollTo(window::Id, f32),
     /// Colapsar el panel a solo botones (o volver a abrirlo).
     CollapseSidebar(window::Id),
-    /// La tarjeta «de qué va»: plegarla o abrirla.
-    AboutFold,
+    /// La tarjeta «de qué va» de una ventana: plegarla o abrirla.
+    AboutFold(window::Id),
     /// Empezar a editar la nota de la consola de la ventana.
     NoteEdit(window::Id),
     NoteAction(window::Id, iced::widget::text_editor::Action),
@@ -1651,7 +1652,7 @@ fn linked_names(profiles: &[Profile]) -> Vec<String> {
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let launch = resolve();
-        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, stale: None, menu_open: false, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, applying: HashMap::new(), rung: HashMap::new(), focused: None, seen: HashMap::new(), about_folded: about_folded() };
+        let mut app = App { launch, profiles: Vec::new(), windows: BTreeMap::new(), by_term: HashMap::new(), next_term: 0, awaiting_client: false, font: terminal_font(), palette: terminal_palette(), consoles: HashMap::new(), far: HashMap::new(), polls: 0, far_silent: HashMap::new(), far_why: HashMap::new(), notice: None, stale: None, menu_open: false, exe_stamp: exe_stamp(), respawn: None, hover: None, drag: None, dying: Default::default(), next_tag: 0, blink_off: false, applying: HashMap::new(), rung: HashMap::new(), focused: None, seen: HashMap::new() };
         let _ = app.reload_profiles();
         let cli = match Cli::parse(std::env::args().skip(1).collect()) {
             Ok(cli) => cli,
@@ -1734,7 +1735,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, reopening: false, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None });
+        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, reopening: false, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None, about_folded: about_folded() });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -2186,8 +2187,8 @@ impl App {
             s
         };
         let tip = t("De qué va esta consola", "What this console is about");
-        if self.about_folded {
-            let b = button(text("i").size(12).font(iced::Font { style: iced::font::Style::Italic, weight: iced::font::Weight::Bold, ..iced::Font::DEFAULT })).padding([2, 8]).style(round).on_press(Message::AboutFold);
+        if win.about_folded {
+            let b = button(text("i").size(12).font(iced::Font { style: iced::font::Style::Italic, weight: iced::font::Weight::Bold, ..iced::Font::DEFAULT })).padding([2, 8]).style(round).on_press(Message::AboutFold(id));
             return Some(place(iced::widget::tooltip(b, container(text(tip).size(12)).padding(6).style(container::rounded_box), iced::widget::tooltip::Position::Left).into()));
         }
         let dim = |theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text.scale_alpha(0.6)) };
@@ -2210,7 +2211,7 @@ impl App {
         if !second.is_empty() {
             titles = titles.push(text(second).size(11).style(dim));
         }
-        let head = row![badge, titles, button(text("–").size(12)).padding([0, 7]).style(round).on_press(Message::AboutFold)].spacing(6);
+        let head = row![badge, titles, button(text("–").size(12)).padding([0, 7]).style(round).on_press(Message::AboutFold(id))].spacing(6);
         let act = |label: String, msg: Option<Message>| button(text(label).size(12)).padding([2, 10]).style(round).on_press_maybe(msg);
         let editing = win.note_edit.as_ref().filter(|(cid, _)| *cid == c.id);
         let mut card = column![head, rule::horizontal(1)].spacing(6);
@@ -2880,9 +2881,10 @@ impl App {
                 }
                 Task::none()
             }
-            Message::AboutFold => {
-                self.about_folded = !self.about_folded;
-                save_about_folded(self.about_folded);
+            Message::AboutFold(id) => {
+                let Some(win) = self.windows.get_mut(&id) else { return Task::none() };
+                win.about_folded = !win.about_folded;
+                save_about_folded(win.about_folded);
                 Task::none()
             }
             Message::NoteEdit(id) => {
