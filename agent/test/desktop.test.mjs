@@ -62,7 +62,7 @@ test('un paquete se instala con el gestor que resuelve dependencias, con sudo sa
   assert.deepEqual([bad.ok, bad.code, bad.file], [false, 'install-failed', '/t/a.deb'])
 })
 
-test('el tarball cambia el binario del usuario de una vez', () => {
+test('el tarball cambia el binario del usuario de una vez', { skip: process.platform === 'win32' test('el tarball cambia el binario del usuario de una vez', () => {test('el tarball cambia el binario del usuario de una vez', () => { 'permisos de Unix' }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-'))
   const exe = path.join(dir, 'bin', BINARY)
   fs.mkdirSync(path.dirname(exe)); fs.writeFileSync(exe, 'old')
