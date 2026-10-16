@@ -202,7 +202,10 @@ function captureEarly () {
 
 /** El agente de esta máquina; si no hay ninguno escuchando, lo levanta y espera a que conteste. */
 async function agent (dir) {
-  try { return await connectLocal(dir) } catch (e) { if (e.code !== 'ENOAGENT') throw e }
+  try { return await connectLocal(dir) } catch (e) {
+    if (e.code === 'EAGENTACCESS') throw new Error(t(`el agente de este perfil corre con otros permisos y no deja entrar a esta ventana (${e.cause?.code}). Reinícialo: dotrino-terminal restart`, `this profile's agent runs with other permissions and does not let this window in (${e.cause?.code}). Restart it: dotrino-terminal restart`))
+    if (e.code !== 'ENOAGENT') throw e
+  }
   // Un agente vivo sin socket es uno anterior a las ventanas (< 0.6.0): no se levanta otro
   // encima (tendrían la misma llave), se dice.
   const pid = Number((() => { try { return fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8') } catch (_) { return '' } })())

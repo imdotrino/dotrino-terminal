@@ -19,6 +19,10 @@
  *     hacerse pasar por él, porque no sabe cómo se va a llamar;
  *   · una LLAVE que la ventana manda en su primera línea. La lista de tuberías la ve cualquiera,
  *     y sin la llave el agente corta la conexión sin atender nada.
+ *
+ * Por eso la tubería se abre para todos (`readableAll`/`writableAll`): lo que protege es la llave.
+ * Con el permiso por defecto, un agente lanzado con el token de administrador entero (desde SSH)
+ * dejaba fuera a las ventanas del mismo usuario, que corren sin elevar.
  */
 import fs from 'node:fs'
 import net from 'node:net'
@@ -137,7 +141,7 @@ export async function listenLocal ({ dir, serve, platform = process.platform }) 
   })
   await new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(file, () => { server.off('error', reject); resolve() })
+    server.listen({ path: file, ...(key ? { readableAll: true, writableAll: true } : {}) }, () => { server.off('error', reject); resolve() })
   })
   if (key) {
     // Se apunta DESPUÉS de escuchar: quien lo lea encuentra la tubería ya abierta.
@@ -190,7 +194,10 @@ export function connectLocal (dir, { platform = process.platform } = {}) {
     })
     // Tras conectar, un error acaba en 'close', que ya se avisa arriba.
     sock.on('error', (e) => {
-      if (!connected) reject(Object.assign(new Error(`no terminal agent is listening on ${file}`), { code: 'ENOAGENT', cause: e }))
+      if (connected) return
+      // Hay agente pero no deja entrar: no es lo mismo que no haber ninguno.
+      if (e.code === 'EPERM' || e.code === 'EACCES') reject(Object.assign(new Error(`the terminal agent on ${file} refused this window (${e.code})`), { code: 'EAGENTACCESS', cause: e }))
+      else reject(Object.assign(new Error(`no terminal agent is listening on ${file}`), { code: 'ENOAGENT', cause: e }))
     })
   })
 }
