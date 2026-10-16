@@ -302,6 +302,15 @@ fn user_at_host() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn win_quote_follows_commandlinetoargvw() {
+        assert_eq!(super::win_quote("plain"), "plain");
+        assert_eq!(super::win_quote(r"C:\Users\Ana María\node.exe"), r#""C:\Users\Ana María\node.exe""#);
+        assert_eq!(super::win_quote(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(super::win_quote(r"C:\dir with space\"), r#""C:\dir with space\\""#);
+        assert_eq!(super::win_quote(""), r#""""#);
+    }
+
     use super::{client_prefix, drop_target, panel_lines};
 
     #[test]
@@ -1356,6 +1365,35 @@ fn sh_quote(text: &str) -> String {
     if cfg!(windows) { format!("'{}'", text.replace('\'', "''")) } else { format!("'{}'", text.replace('\'', "'\\''")) }
 }
 
+/// Un argumento escrito como lo lee un programa de Windows (las reglas de `CommandLineToArgvW`):
+/// entre comillas si lleva espacios o comillas, con las comillas escapadas y las barras que las
+/// preceden dobladas.
+fn win_quote(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+        return arg.to_string();
+    }
+    let mut out = String::from('"');
+    let mut slashes = 0;
+    for c in arg.chars() {
+        match c {
+            '\\' => slashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(slashes * 2 + 1));
+                out.push('"');
+                slashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(slashes));
+                out.push(c);
+                slashes = 0;
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(slashes * 2));
+    out.push('"');
+    out
+}
+
 /// Cómo se corre un script de la app (una actualización, una orden del cliente a la vista).
 fn script_command(script: &str) -> (String, Vec<String>) {
     if cfg!(windows) {
@@ -1754,6 +1792,9 @@ impl App {
                 return;
             }
         };
+        // Windows: el PTY (alacritty_terminal) junta programa y argumentos con espacios, sin
+        // comillas, y `C:\Users\Ana María\…` llegaba partido en dos. Las pone aquí.
+        let (program, args) = if cfg!(windows) { (win_quote(&program), args.iter().map(|a| win_quote(a)).collect()) } else { (program, args) };
         let settings = iced_term::settings::Settings {
             backend: iced_term::settings::BackendSettings {
                 program: program.clone(),
