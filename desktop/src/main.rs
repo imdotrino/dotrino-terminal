@@ -1651,7 +1651,10 @@ impl App {
         };
         // La carpeta: la pedida, o aquella desde la que se lanzó la app (exo-open, el que usa
         // Thunar, lanza la terminal DENTRO de la carpeta).
-        let cwd = cli.cwd.clone().map(Ok).unwrap_or_else(std::env::current_dir).map_err(|e| e.to_string());
+        // Windows no abre una app de ventanas «desde» ninguna carpeta: con doble clic hereda la
+        // del .exe, y desde el Explorador o una tarea, System32. Sin `--cwd`, la del usuario.
+        let launched_in = if cfg!(windows) { home_dir().ok_or_else(|| std::io::Error::other("no USERPROFILE")) } else { std::env::current_dir() };
+        let cwd = cli.cwd.clone().map(Ok).unwrap_or(launched_in).map_err(|e| e.to_string());
         // Una orden (-x/-e) corre sin perfil: es lo que XFCE espera, y no es una consola tuya.
         let profile = if cli.command.is_some() { None } else { cli.name.clone().or_else(|| app.default_profile()) };
         let (id, task) = match (&cli.command, &profile) {
@@ -2625,7 +2628,7 @@ impl App {
                 };
                 let ok = t("Listo: dotrino-terminal está al día. El agente que ya corría sigue con la versión anterior hasta que se reinicie: al volver a tu consola, la app te ofrece hacerlo.", "Done: dotrino-terminal is up to date. An agent that was already running keeps the old version until it restarts: back in your console, the app offers to do it.");
                 let fail = t("No se pudo. Si dice EACCES, tu npm instala en una carpeta del sistema: usa nvm, o instálalo con sudo.", "It failed. If it says EACCES, your npm installs into a system folder: use nvm, or install it with sudo.");
-                let no_npm = t("No encuentro npm: instala Node 20 o más reciente (https://nodejs.org).", "Can't find npm: install Node 20 or newer (https://nodejs.org).");
+                let no_npm = t("No encuentro npm: instala Node 22.12 o más reciente (https://nodejs.org).", "Can't find npm: install Node 22.12 or newer (https://nodejs.org).");
                 let close = t("Pulsa Enter para volver a tu consola.", "Press Enter to go back to your console.");
                 // Y DESPUÉS LA APP, en la misma pasada (dueño, 2026-10-10: una sola acción). La baja,
                 // la verifica y la instala el cliente recién puesto; un paquete del sistema pide ahí

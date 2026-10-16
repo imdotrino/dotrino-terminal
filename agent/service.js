@@ -150,7 +150,7 @@ function spawnSupervisor ({ name, node, cli, spawn, run, env }) {
   if (env.SSH_CONNECTION || env.SSH_CLIENT) {
     const script = `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psQuote(runCommand({ name, node, cli }))} }; if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }`
     const r = quiet(run, 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
-    return r.ok ? { ok: true } : { ok: false, reason: r.reason }
+    return r.ok ? { ok: true } : { ok: false, reason: 'Windows (WMI) does not let this account start it from SSH' }
   }
   const child = spawn(node, [cli, 'supervise', '--name', name], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...env, DOTRINO_SUPERVISOR: '1' } })
   child.unref()

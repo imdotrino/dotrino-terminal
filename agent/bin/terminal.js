@@ -536,7 +536,7 @@ async function service () {
     try { r = installService({ name, cli, dir, running: own }) } catch (e) { explain(e) }
     console.log(t(`Servicio del perfil «${name}» puesto: ${r.file}`, `Service for profile "${name}" installed: ${r.file}`))
     if (r.started) console.log(t('El agente ya corre como servicio.', 'The agent now runs as a service.'))
-    else if (r.startReason) console.log(t(`Desde esta sesión SSH no se puede dejar corriendo ahora (${r.startReason}): arranca la próxima vez que inicies sesión en Windows.`, `It cannot be left running from this SSH session (${r.startReason}): it starts the next time you log in to Windows.`))
+    else if (r.startReason) console.log(t('Desde una sesión SSH, Windows no deja a esta cuenta dejarlo corriendo ahora: arranca la próxima vez que inicies sesión en Windows.', `It cannot be left running from this SSH session (${r.startReason}): it starts the next time you log in to Windows.`))
     else console.log(t('Ahora mismo corre un agente que levantó una ventana, y no se toca para no cerrar sus consolas. El servicio toma el relevo cuando ese termine o al próximo arranque.', 'Right now an agent started by a window is running, and it is left alone so its consoles stay open. The service takes over when it ends or at the next start.'))
     if (r.kind === 'launchd') console.log(t('Arranca solo cuando inicias sesión en esta Mac.', 'It starts by itself when you log in to this Mac.'))
     else if (r.kind === 'run-key') console.log(t('Arranca solo cuando inicias sesión en Windows.', 'It starts by itself when you log in to Windows.'))
