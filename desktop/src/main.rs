@@ -1066,10 +1066,22 @@ enum Message {
 }
 
 fn es() -> bool {
-    ["LC_ALL", "LC_MESSAGES", "LANG"]
-        .iter()
-        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
-        .is_some_and(|v| v.to_lowercase().starts_with("es"))
+    let from_env = ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+    from_env.or_else(system_language).is_some_and(|v| v.to_lowercase().starts_with("es"))
+}
+
+/// Windows no pone `LANG`: el idioma es el de la interfaz del usuario («es-EC»).
+#[cfg(windows)]
+fn system_language() -> Option<String> {
+    let mut buf = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
+    // SAFETY: se le pasa el búfer con su tamaño; devuelve cuántos caracteres escribió (con el NUL).
+    let n = unsafe { windows_sys::Win32::Globalization::GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
+    (n > 1).then(|| String::from_utf16_lossy(&buf[..n as usize - 1]))
+}
+
+#[cfg(not(windows))]
+fn system_language() -> Option<String> {
+    None
 }
 
 fn t(es_text: &str, en_text: &str) -> String {

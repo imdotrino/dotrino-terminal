@@ -2,8 +2,8 @@
 
 > **Parte del ecosistema [Dotrino](https://dotrino.com).**
 
-Una terminal para Linux y macOS cuyas ventanas también se abren desde el navegador de otro
-aparato de tu cuenta, y una shell real (`bash`, `zsh`…, o PowerShell en Windows: solo el agente, sin app de escritorio) de tus máquinas en ese navegador. Solo entran los aparatos que tu **acta**
+Una terminal para Linux, macOS y Windows cuyas ventanas también se abren desde el navegador de otro
+aparato de tu cuenta, y una shell real (`bash`, `zsh`…, o PowerShell en Windows) de tus máquinas en ese navegador. Solo entran los aparatos que tu **acta**
 reconoce con permiso `sign`, y todo viaja cifrado de punta a punta por el proxio.
 No hay puertos abiertos ni contraseñas.
 
@@ -93,7 +93,8 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   «Herramientas → Actualizar dotrino-terminal y la app…» corre `dotrino-terminal desktop update --current <versión> --exe <binario>`
   igual, en otra TTY: la app no tiene red, así que baja, verifica contra la atestación e instala el
   cliente (`agent/desktop.js`, sobre `@dotrino/update`; `sudo apt-get install` / `sudo dnf install` si vino de un
-  paquete, cambio atómico del binario si vino del tarball, el `.app` entero en macOS). Cliente ≥ 0.39.0.
+  paquete, cambio atómico del binario si vino del tarball, el `.app` entero en macOS, el `.exe` apartado a
+  `.exe.old` en Windows). Cliente ≥ 0.39.0; en Windows, ≥ 0.47.2.
   «Perfil → Usar en / Quitar de la terminal de VS Code» corre `dotrino-terminal vscode --name <perfil>`
   o `vscode --off` como «Actualizar»: en la ventana, en otra TTY, y al acabar vuelve a su consola (cliente ≥ 0.20.0).
   **Cerrar una ventana nunca cierra una consola** (≥ 0.2.28): la suelta (Ctrl+] d) y se va, también
@@ -144,7 +145,10 @@ cd desktop && cargo run                  # la app de escritorio (DOTRINO_TERMINA
 Desde CI, nunca a mano:
 - **agente**: commit → tag `agent-vX.Y.Z` → `release.yml` publica `@dotrino/terminal-agent`
   con procedencia y SBOM.
-- **escritorio**: tag `desktop-vX.Y.Z` → `desktop.yml` sube `.deb`, `.rpm`, `.tar.gz` (Linux x64) y
-  `.zip` (macOS universal: Apple Silicon e Intel), atestiguados. El `.app` de macOS no va firmado por Apple todavía.
+- **escritorio**: tag `desktop-vX.Y.Z` → `desktop.yml` sube `.deb`, `.rpm`, `.tar.gz` (Linux x64),
+  `.zip` (macOS universal: Apple Silicon e Intel) y `.zip` (Windows x64), atestiguados. Ni el `.app` de macOS
+  ni el `.exe` de Windows van firmados todavía. `desktop-windows.yml` la compila en Windows con cada cambio y
+  deja el `.zip` como artefacto; `dotrino-test` la prueba en una VM de Windows 11
+  (`smoke:terminal-windows --desktop <zip>`).
 
 MIT.

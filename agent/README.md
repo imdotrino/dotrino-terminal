@@ -202,4 +202,4 @@ manda la llave en su primera línea (`{ type:'local-auth', key }`) y sin ella el
 contestar: la lista de tuberías la ve cualquier usuario de la máquina, la carpeta del perfil no.
 En PowerShell, con la política de ejecución por defecto, npm deja `dotrino-terminal.ps1` y Windows
 no lo deja correr: se llama `dotrino-terminal.cmd` (o se permite con
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`). La app de escritorio (`desktop/`) todavía no tiene versión para Windows.
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`). La app de escritorio también corre en Windows (≥ 0.2.73): lanza el cliente como `node terminal.js` (no por el `.cmd`, que metería un `cmd.exe` en medio) y habla con el agente por la misma tubería.

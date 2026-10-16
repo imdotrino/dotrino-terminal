@@ -1,6 +1,6 @@
 [package]
 name = "dotrino-terminal-desktop"
-version = "0.2.72"
+version = "0.2.73"
 edition = "2024"
 description = "Dotrino Terminal: terminal windows (Linux, macOS, Windows) whose consoles you can also open from your other devices."
 license = "MIT"
@@ -18,9 +18,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1", features = ["time"] }
 
-# Windows: mirar si el agente contestó por su tubería sin quedarse colgado (PeekNamedPipe).
+# Windows: mirar si el agente contestó por su tubería sin quedarse colgado (PeekNamedPipe) y
+# el idioma de la interfaz (no hay LANG).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Pipes"] }
 
 [patch.crates-io]
 # Un método público más (ver vendor/README.md).
