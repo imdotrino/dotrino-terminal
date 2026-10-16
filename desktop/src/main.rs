@@ -52,8 +52,16 @@ fn main() -> iced::Result {
     iced::daemon(App::boot, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
-        .theme(|_: &App, _| Theme::Dark)
+        .theme(|_: &App, _| app_theme())
         .run()
+}
+
+/// El tema oscuro de iced con el acento cambiado: su `primary` es azul, y el texto azul sobre
+/// fondo oscuro no se lee (dueño, 2026-10-16: «no uses font azul en ningún lado»). El acento pasa
+/// a un gris claro; lo demás queda como el `Dark` de siempre.
+fn app_theme() -> Theme {
+    let dark = Theme::Dark.palette();
+    Theme::custom("Dotrino", iced::theme::Palette { primary: Color::from_rgb8(0xd6, 0xd6, 0xd6), ..dark })
 }
 
 /// Una orden externa. En Windows, sin abrir su ventana de consola: la app es de ventanas y cada
