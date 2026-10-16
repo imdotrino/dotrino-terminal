@@ -1,0 +1,30 @@
+# El agente en Windows, de verdad: la tubería con nombre, PowerShell por ConPTY y el servicio
+# de inicio de sesión (`HKCU\…\Run` + supervisor). `agent/test/windows.test.mjs` solo corre aquí.
+name: Agent on Windows
+
+on:
+  push:
+    paths: ['agent/**', '.github/workflows/agent-windows.yml']
+  pull_request:
+    paths: ['agent/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agent/package-lock.json
+      - run: npm ci
+      - name: Windows (tubería, PowerShell, servicio)
+        run: node --test test/windows.test.mjs test/service.test.mjs test/editors.test.mjs

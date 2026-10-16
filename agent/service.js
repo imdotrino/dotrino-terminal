@@ -8,6 +8,11 @@
  *   · Linux — una unidad de systemd DEL USUARIO (`~/.config/systemd/user`), sin `sudo`. Con
  *     «linger» arranca al encender, antes de que nadie inicie sesión; sin él, al iniciarla.
  *   · macOS — un LaunchAgent (`~/Library/LaunchAgents`): arranca al iniciar sesión.
+ *   · Windows — una entrada en `HKCU\…\Run`: arranca al iniciar sesión, sin administrador.
+ *     Lanza un SUPERVISOR (`dotrino-terminal-agent supervise`) que se vuelve a abrir sin
+ *     ventana y levanta el agente cada vez que sale, como `Restart=always`. No es el
+ *     Programador de tareas porque crear una tarea al iniciar sesión pide derechos que una
+ *     cuenta normal no tiene, y no es un servicio de Windows porque ese pide administrador.
  *
  * Es de usuario a propósito (CONVENCIONES §15): así el agente se sigue actualizando solo, y
  * con alguien que lo levante ya puede reiniciarse para estrenar la versión nueva.
@@ -17,7 +22,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn as childSpawn } from 'node:child_process'
 
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
@@ -31,6 +36,15 @@ export function unitPath (name, home = os.homedir()) {
 export function plistPath (name, home = os.homedir()) {
   return path.join(home, 'Library', 'LaunchAgents', `${plistLabel(name)}.plist`)
 }
+
+/** Windows: la clave de lo que arranca al iniciar sesión, y el nombre del valor de cada perfil. */
+export const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+export const runValue = (name) => `DotrinoTerminalAgent-${name}`
+/** Lo que se apunta en la clave: Node, el CLI y el supervisor del perfil. */
+export const runCommand = ({ name, node, cli }) => `"${node}" "${cli}" supervise --name ${name}`
+export const supervisorPidFile = (dir) => path.join(dir, 'supervisor.pid')
+/** Cuánto espera el supervisor antes de volver a levantar el agente (como `RestartSec`). */
+export const RESTART_MS = 3000
 
 /** systemd parte `ExecStart` por espacios: lo que los lleve va entre comillas. */
 const unitArg = (s) => (/[\s"'\\$%]/.test(s) ? `"${s.replace(/[\\"]/g, '\\$&').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"` : s)
@@ -103,10 +117,60 @@ const LINGER_DIR = '/var/lib/systemd/linger'
 /** ¿Deja este sistema instalar el servicio? Lanza con el motivo si no. */
 function platformOf ({ platform, run }) {
   if (platform === 'darwin') return 'launchd'
+  if (platform === 'win32') return 'run-key'
   if (platform !== 'linux') throw fail('unsupported-platform', `there is no service support for ${platform}`)
   // Sin systemd de usuario (un contenedor, WSL sin systemd, otra init) no hay dónde ponerlo.
   if (!quiet(run, 'systemctl', ['--user', 'show-environment']).ok) throw fail('no-user-systemd', 'this session has no systemd user manager')
   return 'systemd'
+}
+
+const readPid = (file) => { try { return Number(fs.readFileSync(file, 'utf8')) || 0 } catch (e) { if (e.code === 'ENOENT') return 0; throw e } }
+const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+const runKeyFile = (name) => `${RUN_KEY}\\${runValue(name)}`
+const hasRunKey = (name, run) => quiet(run, 'reg', ['query', RUN_KEY, '/v', runValue(name)]).ok
+
+/** Windows: lanza el supervisor del perfil, ya sin ventana. */
+function spawnSupervisor ({ name, node, cli, spawn }) {
+  const child = spawn(node, [cli, 'supervise', '--name', name], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, DOTRINO_SUPERVISOR: '1' } })
+  child.unref()
+}
+
+/**
+ * El supervisor de Windows: levanta el agente del perfil y lo vuelve a levantar cada vez que
+ * sale (también cuando se reinicia para estrenar una versión: §15, `DOTRINO_SUPERVISED`).
+ * Uno por perfil: si ya hay otro vivo, lanza `already-supervised`.
+ */
+export function supervise ({ name, dir, node = process.execPath, cli, spawn = childSpawn }) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const pidFile = supervisorPidFile(dir)
+  const other = readPid(pidFile)
+  if (other && other !== process.pid && alive(other)) throw fail('already-supervised', `profile ${name} already has a supervisor (pid ${other})`)
+  fs.writeFileSync(pidFile, String(process.pid))
+  let stopped = false
+  let child = null
+  const start = () => {
+    const fd = fs.openSync(path.join(dir, 'agent.log'), 'a', 0o600)
+    child = spawn(node, [cli, '--name', name, '--local'], { windowsHide: true, stdio: ['ignore', fd, fd], env: { ...process.env, DOTRINO_SUPERVISED: '1' } })
+    fs.closeSync(fd)
+    child.on('exit', () => { child = null; if (!stopped) setTimeout(start, RESTART_MS) })
+  }
+  start()
+  return {
+    stop: () => {
+      stopped = true
+      try { child?.kill() } catch (_) {}
+      try { if (readPid(pidFile) === process.pid) fs.rmSync(pidFile) } catch (_) {}
+    }
+  }
+}
+
+/** Windows: para el supervisor y después el agente (matar el supervisor no se lleva al hijo). */
+function stopSupervised (dir) {
+  for (const file of [supervisorPidFile(dir), path.join(dir, 'agent.pid')]) {
+    const pid = readPid(file)
+    if (pid && alive(pid)) process.kill(pid)
+  }
+  fs.rmSync(supervisorPidFile(dir), { force: true })
 }
 
 /**
@@ -116,10 +180,16 @@ function platformOf ({ platform, run }) {
  * Dos agentes con el mismo enlace son la misma llave, y parar ese cerraría sus consolas: el
  * servicio queda puesto y toma el relevo cuando ese agente termine o al próximo arranque.
  *
- * @returns {{ kind:'systemd'|'launchd', file:string, started:boolean, boot?:boolean, lingerReason?:string }}
+ * @returns {{ kind:'systemd'|'launchd'|'run-key', file:string, started:boolean, boot?:boolean, lingerReason?:string }}
  */
-export function installService ({ name, node = process.execPath, cli, dir, running = false, pathEnv = process.env.PATH || '', platform = process.platform, home = os.homedir(), user = os.userInfo().username, uid = process.getuid?.(), run = execFileSync }) {
+export function installService ({ name, node = process.execPath, cli, dir, running = false, pathEnv = process.env.PATH || '', platform = process.platform, home = os.homedir(), user = os.userInfo().username, uid = process.getuid?.(), run = execFileSync, spawn = childSpawn }) {
   const kind = platformOf({ platform, run })
+  if (kind === 'run-key') {
+    must(run, 'reg', ['add', RUN_KEY, '/v', runValue(name), '/t', 'REG_SZ', '/d', runCommand({ name, node, cli }), '/f'])
+    if (running) return { kind, file: runKeyFile(name), started: false }
+    spawnSupervisor({ name, node, cli, spawn })
+    return { kind, file: runKeyFile(name), started: true }
+  }
   if (kind === 'launchd') {
     const file = plistPath(name, home)
     fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -149,7 +219,13 @@ export function installService ({ name, node = process.execPath, cli, dir, runni
  * `dotrino-terminal` cuando no encuentra agente, para no levantar uno propio al lado de un
  * servicio que el sistema arrancaría después con la misma llave.
  */
-export function startService ({ name, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync }) {
+export function startService ({ name, dir, node = process.execPath, cli, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync, spawn = childSpawn }) {
+  if (platform === 'win32') {
+    if (!hasRunKey(name, run)) return false
+    const pid = readPid(supervisorPidFile(dir))
+    if (!(pid && alive(pid))) spawnSupervisor({ name, node, cli, spawn })
+    return true
+  }
   if (platform === 'darwin') {
     const file = plistPath(name, home)
     if (!fs.existsSync(file)) return false
@@ -164,8 +240,14 @@ export function startService ({ name, platform = process.platform, home = os.hom
 }
 
 /** Para el servicio y lo quita. El enlace y los ajustes del perfil no se tocan. */
-export function uninstallService ({ name, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync }) {
+export function uninstallService ({ name, dir, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync }) {
   const kind = platformOf({ platform, run })
+  if (kind === 'run-key') {
+    if (!hasRunKey(name, run)) return { kind, file: runKeyFile(name), removed: false }
+    stopSupervised(dir)
+    must(run, 'reg', ['delete', RUN_KEY, '/v', runValue(name), '/f'])
+    return { kind, file: runKeyFile(name), removed: true }
+  }
   const file = kind === 'launchd' ? plistPath(name, home) : unitPath(name, home)
   if (!fs.existsSync(file)) return { kind, file, removed: false }
   if (kind === 'launchd') quiet(run, 'launchctl', ['bootout', `gui/${uid}/${plistLabel(name)}`])
@@ -176,8 +258,13 @@ export function uninstallService ({ name, platform = process.platform, home = os
 }
 
 /** ¿Está puesto, y está corriendo ahora bajo el sistema? */
-export function serviceStatus ({ name, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync }) {
+export function serviceStatus ({ name, dir, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync }) {
   const kind = platformOf({ platform, run })
+  if (kind === 'run-key') {
+    const installed = hasRunKey(name, run)
+    const pid = installed ? readPid(supervisorPidFile(dir)) : 0
+    return { kind, file: runKeyFile(name), installed, active: !!pid && alive(pid) }
+  }
   const file = kind === 'launchd' ? plistPath(name, home) : unitPath(name, home)
   const installed = fs.existsSync(file)
   const active = installed && (kind === 'launchd'
@@ -186,4 +273,4 @@ export function serviceStatus ({ name, platform = process.platform, home = os.ho
   return { kind, file, installed, active }
 }
 
-export default { startService, installService, uninstallService, serviceStatus, unitText, plistText, unitName, unitPath, plistLabel, plistPath }
+export default { supervise, runCommand, runValue, RUN_KEY, startService, installService, uninstallService, serviceStatus, unitText, plistText, unitName, unitPath, plistLabel, plistPath }

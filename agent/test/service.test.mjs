@@ -7,7 +7,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { startService, installService, uninstallService, serviceStatus, unitText, plistText, unitPath, plistPath } from '../service.js'
+import { EventEmitter } from 'node:events'
+import { startService, installService, uninstallService, serviceStatus, unitText, plistText, unitPath, plistPath, supervise, runCommand, RUN_KEY, supervisorPidFile } from '../service.js'
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'svc-'))
 /** Un `run` que apunta lo que se le pide y falla en lo que se le diga. */
@@ -70,7 +71,7 @@ test('sin systemd de usuario no se escribe nada', () => {
   const home = tmp(); const { run } = recorder((l) => l.includes('show-environment'))
   assert.throws(() => installService({ name: 'work', node: '/n', cli: '/c.js', dir: '/d', platform: 'linux', home, user: 'u', run }), { code: 'no-user-systemd' })
   assert.equal(fs.existsSync(unitPath('work', home)), false)
-  assert.throws(() => installService({ name: 'work', cli: '/c.js', dir: '/d', platform: 'win32', home, user: 'u', run }), { code: 'unsupported-platform' })
+  assert.throws(() => installService({ name: 'work', cli: '/c.js', dir: '/d', platform: 'freebsd', home, user: 'u', run }), { code: 'unsupported-platform' })
   fs.rmSync(home, { recursive: true, force: true })
 })
 
@@ -114,4 +115,74 @@ test('arrancar el servicio: solo si ese perfil lo tiene', () => {
   assert.equal(startService({ name: 'work', platform: 'linux', home, run }), true)
   assert.deepEqual(calls, ['systemctl --user start dotrino-terminal-agent-work.service'])
   fs.rmSync(home, { recursive: true, force: true })
+})
+
+/** Un `spawn` que apunta lo lanzado y devuelve hijos falsos que se pueden «matar». */
+const spawner = () => {
+  const kids = []
+  const spawn = (cmd, args, opts) => { const c = Object.assign(new EventEmitter(), { cmd, args, opts, unref () {}, kill () { this.emit('exit', 0) } }); kids.push(c); return c }
+  return { kids, spawn }
+}
+
+test('Windows: la entrada de inicio de sesión corre el supervisor de ese perfil', () => {
+  assert.equal(runCommand({ name: 'work', node: 'C:\\Program Files\\nodejs\\node.exe', cli: 'C:\\a\\cli.js' }), '"C:\\Program Files\\nodejs\\node.exe" "C:\\a\\cli.js" supervise --name work')
+})
+
+test('Windows: instalar apunta la entrada y lanza el supervisor sin ventana; con agente propio, no', () => {
+  const { calls, run } = recorder(); const { kids, spawn } = spawner()
+  const r = installService({ name: 'work', node: 'n.exe', cli: 'c.js', dir: tmp(), platform: 'win32', run, spawn })
+  assert.equal(r.kind, 'run-key'); assert.equal(r.started, true)
+  assert.deepEqual(calls, [`reg add ${RUN_KEY} /v DotrinoTerminalAgent-work /t REG_SZ /d "n.exe" "c.js" supervise --name work /f`])
+  assert.deepEqual(kids[0].args, ['c.js', 'supervise', '--name', 'work'])
+  assert.equal(kids[0].opts.windowsHide, true)
+  assert.equal(kids[0].opts.env.DOTRINO_SUPERVISOR, '1', 'ya va sin ventana: no se vuelve a lanzar')
+  const own = spawner()
+  assert.equal(installService({ name: 'work', node: 'n.exe', cli: 'c.js', dir: tmp(), running: true, platform: 'win32', run, spawn: own.spawn }).started, false)
+  assert.equal(own.kids.length, 0)
+})
+
+test('Windows: arrancar solo si hay entrada, y sin duplicar un supervisor vivo', () => {
+  const dir = tmp()
+  const none = recorder(() => true); const a = spawner()
+  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run: none.run, spawn: a.spawn }), false)
+  assert.equal(a.kids.length, 0)
+  const { run } = recorder(); const b = spawner()
+  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run, spawn: b.spawn }), true)
+  assert.equal(b.kids.length, 1)
+  fs.writeFileSync(supervisorPidFile(dir), String(process.pid))
+  const c = spawner()
+  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run, spawn: c.spawn }), true)
+  assert.equal(c.kids.length, 0, 'ya hay uno vivo')
+  assert.equal(serviceStatus({ name: 'work', dir, platform: 'win32', run }).active, true)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('Windows: quitar borra la entrada; sin entrada no hace nada', () => {
+  const dir = tmp()
+  const none = recorder((l) => l.startsWith('reg query'))
+  assert.equal(uninstallService({ name: 'work', dir, platform: 'win32', run: none.run }).removed, false)
+  const { calls, run } = recorder()
+  assert.equal(uninstallService({ name: 'work', dir, platform: 'win32', run }).removed, true)
+  assert.deepEqual(calls.at(-1), `reg delete ${RUN_KEY} /v DotrinoTerminalAgent-work /f`)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('el supervisor vuelve a levantar el agente cuando sale, y no cuando se le para', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const dir = tmp(); const { kids, spawn } = spawner()
+  const s = supervise({ name: 'work', dir, node: 'n', cli: 'c.js', spawn })
+  assert.deepEqual(kids[0].args, ['c.js', '--name', 'work', '--local'])
+  assert.equal(kids[0].opts.env.DOTRINO_SUPERVISED, '1', '§15: hay quien lo levante')
+  assert.equal(fs.readFileSync(supervisorPidFile(dir), 'utf8'), String(process.pid))
+  kids[0].emit('exit', 1)
+  t.mock.timers.tick(3000)
+  assert.equal(kids.length, 2)
+  s.stop()
+  t.mock.timers.tick(3000)
+  assert.equal(kids.length, 2)
+  assert.equal(fs.existsSync(supervisorPidFile(dir)), false)
+  // Otro proceso vivo ya supervisa ese perfil: no se pone un segundo.
+  fs.writeFileSync(supervisorPidFile(dir), String(process.ppid))
+  assert.throws(() => supervise({ name: 'work', dir, node: 'n', cli: 'c.js', spawn }), (e) => e.code === 'already-supervised')
+  fs.rmSync(dir, { recursive: true, force: true })
 })

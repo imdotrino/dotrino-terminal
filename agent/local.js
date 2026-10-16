@@ -9,13 +9,28 @@
  * El protocolo es EL MISMO que el de las sesiones remotas (`serveSession`), en JSON por
  * líneas: una ventana local y el navegador de otro aparato son dos clientes de las mismas
  * consolas.
+ *
+ * En Windows no hay sockets Unix: es una TUBERÍA CON NOMBRE (`\\.\pipe\…`). Esas viven en un
+ * espacio de nombres de toda la máquina, no en la carpeta, así que el permiso de la carpeta no
+ * las protege. Dos cosas lo suplen, y las dos salen de un archivo que solo lee el usuario
+ * (`terminal.pipe`, en la carpeta del enlace):
+ *
+ *   · el NOMBRE de la tubería es aleatorio: nadie puede crearla antes que el agente para
+ *     hacerse pasar por él, porque no sabe cómo se va a llamar;
+ *   · una LLAVE que la ventana manda en su primera línea. La lista de tuberías la ve cualquiera,
+ *     y sin la llave el agente corta la conexión sin atender nada.
  */
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
+import crypto from 'node:crypto'
 
 export const SOCKET_NAME = 'terminal.sock'
 export const socketPath = (dir) => path.join(dir, SOCKET_NAME)
+/** Windows: el archivo que dice cómo se llama la tubería del agente y con qué llave se entra. */
+export const PIPE_FILE = 'terminal.pipe'
+export const pipeFile = (dir) => path.join(dir, PIPE_FILE)
+const isWindows = (platform) => platform === 'win32'
 /** Lo más largo que admite la ruta de un socket Unix (macOS: 104 bytes con el nulo; Linux: 108). */
 export const MAX_SOCKET_PATH = 103
 
@@ -52,49 +67,95 @@ function answers (file) {
   })
 }
 
+/** Windows: lo apuntado por el agente que escucha (o escuchó) en esa carpeta. `null` si no hay. */
+function readPipe (dir) {
+  let text
+  try { text = fs.readFileSync(pipeFile(dir), 'utf8') } catch (e) { if (e.code === 'ENOENT') return null; throw e }
+  const rec = JSON.parse(text)
+  if (typeof rec?.pipe !== 'string' || typeof rec?.key !== 'string') throw Object.assign(new Error(`${pipeFile(dir)} is malformed`), { code: 'EBADPIPE' })
+  return rec
+}
+
+/** La sesión de una conexión: misma forma que las de `@dotrino/remote-agent`. */
+function sessionOf (sock, serve, key) {
+  const h = { message: [], close: [] }
+  let closed = false
+  let allowed = !key
+  const session = {
+    device: null,
+    send: async (payload) => { if (allowed) write(payload) },
+    on (ev, cb) { h[ev]?.push(cb); return this }
+  }
+  const write = framed(sock, (msg) => {
+    // Windows: la primera línea es la llave. Cualquier otra cosa corta, sin contestar.
+    if (!allowed) {
+      const got = Buffer.from(String(msg?.type === 'local-auth' ? msg.key : ''))
+      const want = Buffer.from(key)
+      if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) { sock.destroy(); return }
+      allowed = true
+      serve(session)
+      return
+    }
+    for (const cb of h.message) { try { cb(msg) } catch (_) {} }
+  })
+  const bye = () => { if (closed) return; closed = true; if (allowed) for (const cb of h.close) { try { cb() } catch (_) {} } }
+  sock.on('close', bye)
+  sock.on('error', bye)
+  if (allowed) serve(session)
+}
+
 /**
  * Escucha las ventanas locales. Cada conexión es una sesión con la misma forma que las de
  * `@dotrino/remote-agent` (`send`, `on('message'|'close')`), así que `serve` es
  * `serveSession` tal cual.
  *
- * @param {{ dir: string, serve: (session: object) => void }} opts
+ * @param {{ dir: string, serve: (session: object) => void, platform?: string }} opts
  * @returns {Promise<{ path: string, close: () => void }>}
  */
-export async function listenLocal ({ dir, serve }) {
+export async function listenLocal ({ dir, serve, platform = process.platform }) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   fs.chmodSync(dir, 0o700)
-  const file = socketPath(dir)
-  checkLength(file)
-  if (fs.existsSync(file)) {
-    if (await answers(file)) throw Object.assign(new Error(`another agent is already listening on ${file}`), { code: 'EALREADY' })
-    fs.rmSync(file)                                   // lo dejó un agente que murió sin limpiar
+  let file, key = null
+  if (isWindows(platform)) {
+    const old = readPipe(dir)
+    if (old && await answers(old.pipe)) throw Object.assign(new Error(`another agent is already listening on ${old.pipe}`), { code: 'EALREADY' })
+    file = `\\\\.\\pipe\\dotrino-terminal-${crypto.randomBytes(16).toString('hex')}`
+    key = crypto.randomBytes(32).toString('hex')
+  } else {
+    file = socketPath(dir)
+    checkLength(file)
+    if (fs.existsSync(file)) {
+      if (await answers(file)) throw Object.assign(new Error(`another agent is already listening on ${file}`), { code: 'EALREADY' })
+      fs.rmSync(file)                                   // lo dejó un agente que murió sin limpiar
+    }
   }
   const socks = new Set()
   const server = net.createServer((sock) => {
     socks.add(sock)
     sock.on('close', () => socks.delete(sock))
-    const h = { message: [], close: [] }
-    let closed = false
-    const session = {
-      device: null,
-      send: async (payload) => write(payload),
-      on (ev, cb) { h[ev]?.push(cb); return this }
-    }
-    const write = framed(sock, (msg) => { for (const cb of h.message) { try { cb(msg) } catch (_) {} } })
-    const bye = () => { if (closed) return; closed = true; for (const cb of h.close) { try { cb() } catch (_) {} } }
-    sock.on('close', bye)
-    sock.on('error', bye)
-    serve(session)
+    sessionOf(sock, serve, key)
   })
   await new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(file, () => { server.off('error', reject); resolve() })
   })
-  fs.chmodSync(file, 0o600)
+  if (key) {
+    // Se apunta DESPUÉS de escuchar: quien lo lea encuentra la tubería ya abierta.
+    const tmp = pipeFile(dir) + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify({ pipe: file, key }), { mode: 0o600 })
+    fs.renameSync(tmp, pipeFile(dir))
+  } else {
+    fs.chmodSync(file, 0o600)
+  }
+  const forget = () => {
+    if (!key) { try { fs.rmSync(file) } catch (_) {} return }
+    // Solo si sigue siendo el nuestro: otro agente pudo tomar la carpeta después.
+    try { if (readPipe(dir)?.pipe === file) fs.rmSync(pipeFile(dir)) } catch (_) {}
+  }
   return {
     path: file,
     // Parar el agente cierra también las ventanas: sin agente no queda shell que mirar.
-    close: () => { server.close(); for (const s of socks) s.destroy(); try { fs.rmSync(file) } catch (_) {} }
+    close: () => { server.close(); for (const s of socks) s.destroy(); forget() }
   }
 }
 
@@ -103,11 +164,19 @@ export async function listenLocal ({ dir, serve }) {
  * escuchando en esa carpeta.
  *
  * @param {string} dir  la carpeta del enlace del agente.
+ * @param {{ platform?: string }} [opts]
  * @returns {Promise<{ send:(obj:object)=>void, on:(ev:'message'|'close', cb:Function)=>void, close:()=>void }>}
  */
-export function connectLocal (dir) {
-  const file = socketPath(dir)
-  checkLength(file)
+export function connectLocal (dir, { platform = process.platform } = {}) {
+  let file, key = null
+  if (isWindows(platform)) {
+    const rec = readPipe(dir)
+    if (!rec) return Promise.reject(Object.assign(new Error(`no terminal agent is listening in ${dir}`), { code: 'ENOAGENT' }))
+    file = rec.pipe; key = rec.key
+  } else {
+    file = socketPath(dir)
+    checkLength(file)
+  }
   return new Promise((resolve, reject) => {
     const sock = net.connect(file)
     const h = { message: [], close: [] }
@@ -115,6 +184,7 @@ export function connectLocal (dir) {
     let connected = false
     sock.once('connect', () => {
       connected = true
+      if (key) send({ type: 'local-auth', key })
       sock.on('close', () => { for (const cb of h.close) cb() })
       resolve({ send, on: (ev, cb) => { h[ev]?.push(cb) }, close: () => sock.end() })
     })

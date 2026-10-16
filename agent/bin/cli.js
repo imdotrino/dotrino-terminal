@@ -8,6 +8,7 @@
  *   dotrino-terminal-agent info [--name <n>]     # qué aparato es: su ID, su bóveda, sus permisos
  *   dotrino-terminal-agent update [--name <n>] [--approval on|off] [--notify on|off]
  *                                                # cómo se actualiza este agente (CONVENCIONES §15)
+ *   dotrino-terminal-agent supervise --name <n>  # Windows: lo lanza el servicio al iniciar sesión
  *
  * Las ventanas de esta máquina se abren con `dotrino-terminal` (bin/terminal.js), que habla
  * con este agente por un socket local y lo levanta si no está corriendo.
@@ -69,6 +70,27 @@ if (cmd === 'update') {
   process.exit(r.ok ? 0 : 2)
 }
 
+// `supervise` (Windows): lo lanza la entrada de `HKCU\…\Run` que pone `dotrino-terminal service
+// install`. Al iniciar sesión Windows lo abre CON ventana: se vuelve a lanzar sin ella y sale.
+if (cmd === 'supervise') {
+  const { supervise } = await import('../service.js')
+  const { realpathSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const name = opt('--name')
+  if (!name) { console.error('uso: dotrino-terminal-agent supervise --name <n>'); process.exit(2) }
+  const cli = realpathSync(fileURLToPath(import.meta.url))
+  if (!process.env.DOTRINO_SUPERVISOR) {
+    const { spawn } = await import('node:child_process')
+    spawn(process.execPath, [cli, 'supervise', '--name', name], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, DOTRINO_SUPERVISOR: '1' } }).unref()
+    process.exit(0)
+  }
+  try {
+    const s = supervise({ name, dir: dataDir(name), cli })
+    const bye = () => { s.stop(); process.exit(0) }
+    process.on('SIGINT', bye); process.on('SIGTERM', bye)
+  } catch (e) { console.error('error:', e.message); process.exit(1) }
+}
+
 // `info`: la pieza común del ecosistema (`@dotrino/vault/device-info`). Lo que se viene a
 // mirar es el ID, para buscarlo en el acta.
 if (cmd === 'info') {
@@ -86,7 +108,8 @@ if (cmd === 'info') {
   process.exit(0)
 }
 
-try {
+// El supervisor de arriba sigue vivo con su hijo: aquí no se corre otro agente.
+if (cmd !== 'supervise') try {
   const dir = opt('--dir') || dataDir(opt('--name'))
   // Antes de nada, también de enlazar: dos procesos con el mismo enlace son la misma llave.
   process.on('exit', lockInstance(dir))

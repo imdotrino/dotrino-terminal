@@ -52,7 +52,7 @@ test('en macOS las claves son las de osx', () => {
   assert.deepEqual(v['terminal.integrated.profiles.osx'][PROFILE], profile)
   assert.equal(v['terminal.integrated.defaultProfile.osx'], PROFILE)
   assert.equal(platformKey('darwin'), 'osx')
-  assert.throws(() => platformKey('win32'), (e) => e.code === 'unsupported-platform')
+  assert.throws(() => platformKey('freebsd'), (e) => e.code === 'unsupported-platform')
 })
 
 test('poner dos veces deja el mismo texto', () => {
@@ -109,6 +109,8 @@ test('la carpeta de configuración: XDG en Linux, Application Support en macOS',
   assert.equal(configBase({ platform: 'linux', home: '/h', env: {} }), '/h/.config')
   assert.equal(configBase({ platform: 'linux', home: '/h', env: { XDG_CONFIG_HOME: '/x' } }), '/x')
   assert.equal(configBase({ platform: 'darwin', home: '/h', env: {} }), '/h/Library/Application Support')
+  assert.equal(configBase({ platform: 'win32', home: '/h', env: { APPDATA: '/roaming' } }), '/roaming')
+  assert.equal(platformKey('win32'), 'windows')
 })
 
 test('la orden: escribe el perfil con la ruta de este Node y de este script', { skip: process.platform !== 'linux' }, () => {

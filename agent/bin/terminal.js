@@ -218,12 +218,13 @@ async function agent (dir) {
   // Si este perfil tiene servicio (`dotrino-terminal service install`), el agente es el del
   // sistema: se arranca ese, no uno propio al lado. `--dir` fuerza una carpeta sin perfil.
   const { startService } = await import('../service.js')
-  if (!(!opt('--dir') && !process.env.DOTRINO_TERMINAL_DIR && startService({ name: path.basename(dir) }))) {
+  const cli = fs.realpathSync(fileURLToPath(new URL('./cli.js', import.meta.url)))
+  if (!(!opt('--dir') && !process.env.DOTRINO_TERMINAL_DIR && startService({ name: path.basename(dir), dir, cli }))) {
     const fd = fs.openSync(log, 'a', 0o600)
-    const cli = fileURLToPath(new URL('./cli.js', import.meta.url))
     const extra = opt('--name') ? ['--name', opt('--name')] : []
     // Sin TTY: si la máquina no está enlazada, el agente atiende solo a las ventanas locales.
-    const child = spawn(process.execPath, [cli, ...extra], { detached: true, stdio: ['ignore', fd, fd], env: process.env })
+    // `windowsHide`: en Windows un proceso aparte abre su propia ventana de consola.
+    const child = spawn(process.execPath, [cli, ...extra], { detached: true, windowsHide: true, stdio: ['ignore', fd, fd], env: process.env })
     child.unref()
     fs.closeSync(fd)
   }
@@ -261,7 +262,7 @@ function vscode () {
   try { done = configureEditors({ profile }) } catch (e) {
     if (e.code === 'no-editor') die(t('no encontré VS Code, VS Code Insiders, VSCodium ni Cursor en esta cuenta.', 'could not find VS Code, VS Code Insiders, VSCodium or Cursor in this account.'))
     if (e.code === 'bad-settings') die(t(`no se pudo leer la configuración y no se tocó nada: ${e.message}`, `could not read the settings and nothing was changed: ${e.message}`))
-    if (e.code === 'unsupported-platform') die(t('esto solo está para Linux y macOS.', 'this is only available on Linux and macOS.'))
+    if (e.code === 'unsupported-platform') die(t('esto solo está para Linux, macOS y Windows.', 'this is only available on Linux, macOS and Windows.'))
     throw e
   }
   for (const d of done) {
@@ -447,7 +448,7 @@ async function restart () {
   }
   if (inside && !args.includes('--detached-step')) {
     const self = fileURLToPath(import.meta.url)
-    spawn(process.execPath, [self, ...args.filter((a) => a !== '--yes'), '--yes', '--detached-step'], { detached: true, stdio: 'ignore', env: process.env }).unref()
+    spawn(process.execPath, [self, ...args.filter((a) => a !== '--yes'), '--yes', '--detached-step'], { detached: true, windowsHide: true, stdio: 'ignore', env: process.env }).unref()
     console.log(t('Reiniciando. Esta consola se va a cerrar.', 'Restarting. This console is about to close.'))
     return
   }
@@ -462,7 +463,7 @@ async function restart () {
       await new Promise((r) => setTimeout(r, 100))
     }
     let service = false
-    try { service = serviceStatus({ name: a.name }).installed } catch (e) { if (e.code !== 'no-user-systemd' && e.code !== 'unsupported-platform') throw e }
+    try { service = serviceStatus({ name: a.name, dir }).installed } catch (e) { if (e.code !== 'no-user-systemd' && e.code !== 'unsupported-platform') throw e }
     console.log(service
       ? t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Su servicio lo vuelve a levantar con la ${VERSION}.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). Its service starts it again with ${VERSION}.`)
       : t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Arranca con la ${VERSION} al abrir una ventana.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). It starts with ${VERSION} when you open a window.`))
@@ -494,7 +495,7 @@ async function network () {
   console.log(t('\nBytes del contenido, sin las cabeceras de la red. Acumulados desde que arrancó el agente.', '\nContent bytes, without network headers. Accumulated since the agent started.'))
 }
 
-/** El agente como servicio del usuario (systemd en Linux, launchd en macOS). */
+/** El agente como servicio del usuario (systemd en Linux, launchd en macOS, `HKCU\…\Run` en Windows). */
 async function service () {
   const action = args[1]
   if (!['install', 'uninstall', 'status'].includes(action)) die(t('uso: dotrino-terminal service install|uninstall|status [--name <perfil>]', 'usage: dotrino-terminal service install|uninstall|status [--name <profile>]'))
@@ -505,11 +506,11 @@ async function service () {
   const { installService, uninstallService, serviceStatus } = await import('../service.js')
   const explain = (e) => {
     if (e.code === 'no-user-systemd') die(t('esta sesión no tiene systemd de usuario, que es donde se pone el servicio. No se instaló nada.', 'this session has no systemd user manager, which is where the service goes. Nothing was installed.'))
-    if (e.code === 'unsupported-platform') die(t('esto solo está para Linux y macOS.', 'this is only available on Linux and macOS.'))
+    if (e.code === 'unsupported-platform') die(t('esto solo está para Linux, macOS y Windows.', 'this is only available on Linux, macOS and Windows.'))
     throw e
   }
   let st
-  try { st = serviceStatus({ name }) } catch (e) { explain(e) }
+  try { st = serviceStatus({ name, dir }) } catch (e) { explain(e) }
   const pid = Number((() => { try { return fs.readFileSync(path.join(dir, 'agent.pid'), 'utf8') } catch (_) { return '' } })())
   const running = !!pid && alive(pid)
 
@@ -517,6 +518,7 @@ async function service () {
     if (!st.installed) console.log(t(`El perfil «${name}» no tiene servicio: su agente arranca cuando abres una ventana. Para ponerlo: dotrino-terminal service install --name ${name}`, `Profile "${name}" has no service: its agent starts when you open a window. To add it: dotrino-terminal service install --name ${name}`))
     else if (st.active) console.log(t(`Servicio puesto y corriendo (${st.file}).`, `Service installed and running (${st.file}).`))
     else if (running) console.log(t(`Servicio puesto (${st.file}). Ahora corre un agente que levantó una ventana; el servicio toma el relevo cuando ese termine o al próximo arranque.`, `Service installed (${st.file}). Right now an agent started by a window is running; the service takes over when it ends or at the next start.`))
+    else if (st.kind === 'run-key') console.log(t(`Servicio puesto pero parado (${st.file}). Arranca al abrir una ventana o al iniciar sesión; si falló, mira por qué en ${path.join(dir, 'agent.log')}`, `Service installed but stopped (${st.file}). It starts when you open a window or log in; if it failed, see why in ${path.join(dir, 'agent.log')}`))
     else console.log(t(`Servicio puesto pero parado (${st.file}). Arranca al abrir una ventana; si falló, mira por qué: journalctl --user -u dotrino-terminal-agent-${name}`, `Service installed but stopped (${st.file}). It starts when you open a window; if it failed, see why: journalctl --user -u dotrino-terminal-agent-${name}`))
     return
   }
@@ -532,6 +534,7 @@ async function service () {
     if (r.started) console.log(t('El agente ya corre como servicio.', 'The agent now runs as a service.'))
     else console.log(t('Ahora mismo corre un agente que levantó una ventana, y no se toca para no cerrar sus consolas. El servicio toma el relevo cuando ese termine o al próximo arranque.', 'Right now an agent started by a window is running, and it is left alone so its consoles stay open. The service takes over when it ends or at the next start.'))
     if (r.kind === 'launchd') console.log(t('Arranca solo cuando inicias sesión en esta Mac.', 'It starts by itself when you log in to this Mac.'))
+    else if (r.kind === 'run-key') console.log(t('Arranca solo cuando inicias sesión en Windows.', 'It starts by itself when you log in to Windows.'))
     else if (r.boot) console.log(t('Arranca solo al encender la máquina, sin que nadie inicie sesión.', 'It starts by itself when the machine boots, with nobody logged in.'))
     else console.log(t(`Arranca solo cuando inicias sesión. Para que arranque al encender, sin iniciar sesión: sudo loginctl enable-linger ${os.userInfo().username}`, `It starts by itself when you log in. To start at boot, with nobody logged in: sudo loginctl enable-linger ${os.userInfo().username}`))
     if (!loadLink(dir)) console.log(t(`Este perfil no está enlazado: el servicio atiende solo a las ventanas de esta máquina. Para abrir sus consolas desde otros aparatos: dotrino-terminal link --name ${name}`, `This profile is not linked: the service only serves this machine's windows. To open its consoles from other devices: dotrino-terminal link --name ${name}`))
@@ -551,7 +554,7 @@ async function service () {
     }
   }
   let r
-  try { r = uninstallService({ name }) } catch (e) { explain(e) }
+  try { r = uninstallService({ name, dir }) } catch (e) { explain(e) }
   console.log(t(`Servicio del perfil «${name}» quitado (${r.file}). El perfil y su enlace siguen igual: el agente vuelve a arrancar cuando abras una ventana.`, `Service for profile "${name}" removed (${r.file}). The profile and its link are untouched: the agent starts again when you open a window.`))
 }
 
@@ -675,7 +678,7 @@ async function rename () {
   }
   if (running && inside && !args.includes('--detached-step')) {
     const self = fileURLToPath(import.meta.url)
-    spawn(process.execPath, [self, 'rename', from, to, '--yes', '--detached-step'], { detached: true, stdio: 'ignore', env: process.env }).unref()
+    spawn(process.execPath, [self, 'rename', from, to, '--yes', '--detached-step'], { detached: true, windowsHide: true, stdio: 'ignore', env: process.env }).unref()
     console.log(t(`Renombrando «${from}» → «${to}». Esta consola es de ese perfil y se va a cerrar; la ventana sigue en «${to}».`,
       `Renaming "${from}" → "${to}". This console belongs to that profile and is about to close; the window continues in "${to}".`))
     return
@@ -707,7 +710,7 @@ function samePath (a, b) {
 
 /** La preferencia de la app de escritorio: el último perfil elegido en su menú. */
 function lastProfileFile () {
-  const base = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config')
+  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
   return path.join(base, 'dotrino-terminal', 'last-profile')
 }
 

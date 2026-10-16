@@ -30,16 +30,18 @@ export const EDITORS = [
 /** Un error con `code`: quien lo recibe decide por el código, no por la frase. */
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
-/** `linux` u `osx`: el sufijo de las claves de terminal de VS Code. Otro sistema no se atiende. */
+/** `linux`, `osx` o `windows`: el sufijo de las claves de terminal de VS Code. Otro sistema no se atiende. */
 export function platformKey (platform = process.platform) {
   if (platform === 'linux') return 'linux'
   if (platform === 'darwin') return 'osx'
+  if (platform === 'win32') return 'windows'
   throw fail('unsupported-platform', `unsupported platform: ${platform}`)
 }
 
 /** Donde los editores guardan lo del usuario. */
 export function configBase ({ platform = process.platform, home = os.homedir(), env = process.env } = {}) {
   if (platform === 'darwin') return path.join(home, 'Library', 'Application Support')
+  if (platform === 'win32') return env.APPDATA || path.join(home, 'AppData', 'Roaming')
   return env.XDG_CONFIG_HOME || path.join(home, '.config')
 }
 
