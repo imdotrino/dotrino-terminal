@@ -130,28 +130,40 @@ test('Windows: la entrada de inicio de sesión corre el supervisor de ese perfil
 
 test('Windows: instalar apunta la entrada y lanza el supervisor sin ventana; con agente propio, no', () => {
   const { calls, run } = recorder(); const { kids, spawn } = spawner()
-  const r = installService({ name: 'work', node: 'n.exe', cli: 'c.js', dir: tmp(), platform: 'win32', run, spawn })
+  const r = installService({ name: 'work', node: 'n.exe', cli: 'c.js', dir: tmp(), platform: 'win32', run, spawn, env: {} })
   assert.equal(r.kind, 'run-key'); assert.equal(r.started, true)
   assert.deepEqual(calls, [`reg add ${RUN_KEY} /v DotrinoTerminalAgent-work /t REG_SZ /d "n.exe" "c.js" supervise --name work /f`])
   assert.deepEqual(kids[0].args, ['c.js', 'supervise', '--name', 'work'])
   assert.equal(kids[0].opts.windowsHide, true)
   assert.equal(kids[0].opts.env.DOTRINO_SUPERVISOR, '1', 'ya va sin ventana: no se vuelve a lanzar')
   const own = spawner()
-  assert.equal(installService({ name: 'work', node: 'n.exe', cli: 'c.js', dir: tmp(), running: true, platform: 'win32', run, spawn: own.spawn }).started, false)
+  assert.equal(installService({ name: 'work', node: 'n.exe', cli: 'c.js', dir: tmp(), running: true, platform: 'win32', run, spawn: own.spawn, env: {} }).started, false)
   assert.equal(own.kids.length, 0)
+})
+
+test('Windows: desde una sesión SSH el supervisor lo crea WMI, con la línea de la entrada de Run', () => {
+  const calls = []
+  const run = (cmd, args) => { calls.push([cmd, ...args]) }
+  const { kids, spawn } = spawner()
+  installService({ name: 'work', node: "C:\\it's\\node.exe", cli: 'c.js', dir: tmp(), platform: 'win32', run, spawn, env: { SSH_CONNECTION: '1.2.3.4 5 6.7.8.9 22' } })
+  assert.equal(kids.length, 0, 'un proceso hijo moriría al cerrar la sesión')
+  const ps = calls.find((c) => c[0] === 'powershell.exe')
+  assert.ok(ps)
+  assert.match(ps.at(-1), /Win32_Process -MethodName Create/)
+  assert.ok(ps.at(-1).includes(`CommandLine = '"C:\\it''s\\node.exe" "c.js" supervise --name work'`), ps.at(-1))
 })
 
 test('Windows: arrancar solo si hay entrada, y sin duplicar un supervisor vivo', () => {
   const dir = tmp()
   const none = recorder(() => true); const a = spawner()
-  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run: none.run, spawn: a.spawn }), false)
+  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run: none.run, spawn: a.spawn, env: {} }), false)
   assert.equal(a.kids.length, 0)
   const { run } = recorder(); const b = spawner()
-  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run, spawn: b.spawn }), true)
+  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run, spawn: b.spawn, env: {} }), true)
   assert.equal(b.kids.length, 1)
   fs.writeFileSync(supervisorPidFile(dir), String(process.pid))
   const c = spawner()
-  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run, spawn: c.spawn }), true)
+  assert.equal(startService({ name: 'work', dir, cli: 'c.js', platform: 'win32', run, spawn: c.spawn, env: {} }), true)
   assert.equal(c.kids.length, 0, 'ya hay uno vivo')
   assert.equal(serviceStatus({ name: 'work', dir, platform: 'win32', run }).active, true)
   fs.rmSync(dir, { recursive: true, force: true })

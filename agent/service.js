@@ -129,9 +129,24 @@ const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { r
 const runKeyFile = (name) => `${RUN_KEY}\\${runValue(name)}`
 const hasRunKey = (name, run) => quiet(run, 'reg', ['query', RUN_KEY, '/v', runValue(name)]).ok
 
-/** Windows: lanza el supervisor del perfil, ya sin ventana. */
-function spawnSupervisor ({ name, node, cli, spawn }) {
-  const child = spawn(node, [cli, 'supervise', '--name', name], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, DOTRINO_SUPERVISOR: '1' } })
+/** PowerShell: una cadena entre comillas simples. */
+const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`
+
+/**
+ * Windows: lanza el supervisor del perfil, ya sin ventana.
+ *
+ * Desde una sesión SSH no vale un proceso aparte: sshd mete la sesión en un objeto de trabajo y
+ * al cerrarla mata todo lo que lanzó, y Node no puede pedir salirse de él. Ahí lo crea WMI
+ * (`Win32_Process.Create`), que lo lanza fuera de la sesión, y con la misma línea que queda en
+ * `HKCU\…\Run`: así se prueba también la que correrá al iniciar sesión.
+ */
+function spawnSupervisor ({ name, node, cli, spawn, run, env }) {
+  if (env.SSH_CONNECTION || env.SSH_CLIENT) {
+    const script = `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${psQuote(runCommand({ name, node, cli }))} }; if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }`
+    must(run, 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
+    return
+  }
+  const child = spawn(node, [cli, 'supervise', '--name', name], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...env, DOTRINO_SUPERVISOR: '1' } })
   child.unref()
 }
 
@@ -182,12 +197,12 @@ function stopSupervised (dir) {
  *
  * @returns {{ kind:'systemd'|'launchd'|'run-key', file:string, started:boolean, boot?:boolean, lingerReason?:string }}
  */
-export function installService ({ name, node = process.execPath, cli, dir, running = false, pathEnv = process.env.PATH || '', platform = process.platform, home = os.homedir(), user = os.userInfo().username, uid = process.getuid?.(), run = execFileSync, spawn = childSpawn }) {
+export function installService ({ name, node = process.execPath, cli, dir, running = false, pathEnv = process.env.PATH || '', platform = process.platform, home = os.homedir(), user = os.userInfo().username, uid = process.getuid?.(), run = execFileSync, spawn = childSpawn, env = process.env }) {
   const kind = platformOf({ platform, run })
   if (kind === 'run-key') {
     must(run, 'reg', ['add', RUN_KEY, '/v', runValue(name), '/t', 'REG_SZ', '/d', runCommand({ name, node, cli }), '/f'])
     if (running) return { kind, file: runKeyFile(name), started: false }
-    spawnSupervisor({ name, node, cli, spawn })
+    spawnSupervisor({ name, node, cli, spawn, run, env })
     return { kind, file: runKeyFile(name), started: true }
   }
   if (kind === 'launchd') {
@@ -219,11 +234,11 @@ export function installService ({ name, node = process.execPath, cli, dir, runni
  * `dotrino-terminal` cuando no encuentra agente, para no levantar uno propio al lado de un
  * servicio que el sistema arrancaría después con la misma llave.
  */
-export function startService ({ name, dir, node = process.execPath, cli, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync, spawn = childSpawn }) {
+export function startService ({ name, dir, node = process.execPath, cli, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync, spawn = childSpawn, env = process.env }) {
   if (platform === 'win32') {
     if (!hasRunKey(name, run)) return false
     const pid = readPid(supervisorPidFile(dir))
-    if (!(pid && alive(pid))) spawnSupervisor({ name, node, cli, spawn })
+    if (!(pid && alive(pid))) spawnSupervisor({ name, node, cli, spawn, run, env })
     return true
   }
   if (platform === 'darwin') {
