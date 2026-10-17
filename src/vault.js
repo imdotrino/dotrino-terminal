@@ -11,6 +11,7 @@
  * `verifyChain` + scope `vault:sign`, exactamente igual que antes.
  */
 import { Identity } from '@dotrino/identity'
+import { linkFromIdentity } from '@dotrino/remote-agent/browser-link'
 
 let _id = null
 
@@ -49,23 +50,7 @@ export function setSelfMode (on) {
  * { paired:false } o { paired:true, id, cert, iss, proxy, deviceId, scope }.
  */
 export async function getLink () {
-  const id = await identity()
-  const status = await id.vaultStatus().catch(() => ({ paired: false }))
-  if (!status.paired) return { paired: false, id }
-  // Cert vencido = el vault rechazará todo ("no autorizado"): tratar como no
-  // emparejado y avisar para re-conectar (profile.dotrino.com/#vault).
-  if (status.exp && status.exp <= Date.now()) return { paired: false, expired: true, exp: status.exp, id }
-  const v = await id.getVaultCert().catch(() => null)
-  if (!v?.cert) return { paired: false, id }
-  return {
-    paired: true,
-    id,
-    cert: v.cert,
-    iss: status.master,
-    proxy: status.proxy || 'wss://proxy.dotrino.com',
-    deviceId: status.deviceId,
-    scope: status.scope || []
-  }
+  return linkFromIdentity(await identity())
 }
 
 /** Desvincula este dispositivo (borra sub-clave + cert en el iframe de identidad). */
