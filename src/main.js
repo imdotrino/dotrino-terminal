@@ -843,8 +843,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   // Una consola que termina (o toca la campana) suena con el trino, una vez. Lo que la máquina
   // empuja de la consola que miras y la lista de las demás pasan por el mismo sitio.
-  // El trino de TERMINADO, no el de aviso: de oído se distingue «terminó» de «te avisan».
-  const ring = () => playDone().catch((e) => console.warn('ring: could not play', e.name))
+  // El trino de TERMINADO, no el de aviso: de oído se distingue «terminó» de «te avisan». En su
+  // versión `low`, como el escritorio y las apps del teléfono: la original sonaba muy fuerte.
+  const ring = () => playDone({ level: 'low' }).catch((e) => console.warn('ring: could not play', e.name))
   const done = doneWatcher({ onRing: ring })
 
   async function refresh (s) {

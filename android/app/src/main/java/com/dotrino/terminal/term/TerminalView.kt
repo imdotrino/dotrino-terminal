@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.text.InputType
+import android.text.Selection
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.KeyEvent
@@ -419,6 +420,11 @@ class TerminalView(context: Context) : View(context) {
     /** Send what a key means, applying the sticky modifiers of the extra row to it. */
     fun type(text: String) {
         if (text.isEmpty()) return
+        resetIme()
+        sendText(text)
+    }
+
+    private fun sendText(text: String) {
         val out = Keys.text(text, shift, ctrl, alt)
         if (ctrl || alt || shift) { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
@@ -427,6 +433,11 @@ class TerminalView(context: Context) : View(context) {
 
     /** A named key of the extra row or of a real keyboard, as the escape sequence a shell expects. */
     fun key(name: String) {
+        resetIme()
+        sendKey(name)
+    }
+
+    private fun sendKey(name: String) {
         val out = Keys.named(name, shift, alt, terminal?.appCursorKeys == true) ?: return
         if (ctrl || alt || shift) { ctrl = false; alt = false; shift = false; onModifiersChanged() }
         scrollBack = 0
@@ -436,6 +447,7 @@ class TerminalView(context: Context) : View(context) {
     /** Paste: bracketed when the program asked for it, so it does not run what was pasted line by line. */
     fun paste(text: String) {
         if (text.isEmpty()) return
+        resetIme()
         val body = text.replace("\r\n", "\r").replace('\n', '\r')
         scrollBack = 0
         onInput(if (terminal?.bracketedPaste == true) "\u001b[200~$body\u001b[201~" else body)
@@ -459,11 +471,12 @@ class TerminalView(context: Context) : View(context) {
     override fun onCreateInputConnection(out: EditorInfo): InputConnection {
         // Plain text without suggestions, NOT «visible password»: in a password field the keyboard
         // hides its whole toolbar (clipboard, emoji, GIF), so its image button never shows. What the
-        // keyboard composes meanwhile is kept in step key by key ([sync]).
+        // keyboard composes meanwhile is kept in step key by key ([flush]).
         out.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         out.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
         // This field takes images: without saying so the keyboard shows its image button disabled.
         out.contentMimeTypes = arrayOf("image/*")
+        sent = ""                                  // a new connection starts with an empty mirror
         return object : BaseInputConnection(this, true) {
             override fun commitContent(info: android.view.inputmethod.InputContentInfo, flags: Int, opts: android.os.Bundle?): Boolean {
                 val take = onImage ?: return false
@@ -473,30 +486,71 @@ class TerminalView(context: Context) : View(context) {
                 take(info.contentUri) { if (granted) info.releasePermission() }
                 return true
             }
-            /** What of the word being composed is already in the console. */
-            private var sent = ""
-            /** Makes the console say [now] where it said [sent]: Backspace over what changed, then the rest. */
-            private fun sync(now: String) {
-                val keep = sent.commonPrefixWith(now).length
-                repeat(sent.codePointCount(keep, sent.length)) { key("backspace") }
-                if (now.length > keep) type(now.substring(keep).replace('\n', '\r'))
-                sent = now
-            }
-            private fun settle() { sent = ""; editable?.clear() }
-            override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean { sync(text?.toString() ?: ""); return true }
-            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean { sync(text?.toString() ?: ""); settle(); return true }
-            override fun finishComposingText(): Boolean { settle(); return true }
+            override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean = super.setComposingText(text, newCursorPosition).also { flush() }
+            override fun setComposingRegion(start: Int, end: Int): Boolean = super.setComposingRegion(start, end).also { flush() }
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean = super.commitText(text, newCursorPosition).also { flush() }
+            override fun finishComposingText(): Boolean = super.finishComposingText().also { flush() }
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                // The keyboard deleting «the character before the cursor» is the Backspace key.
-                repeat(max(1, beforeLength)) { key("backspace") }
-                settle()
+                // What the keyboard deletes beyond what it wrote here is already in the shell's line
+                // (written before the last reset): that part goes as Backspace.
+                val before = editable?.let { Selection.getSelectionStart(it) }?.coerceAtLeast(0) ?: 0
+                val beyond = if (beforeLength == 0 && afterLength == 0 && before == 0) 1 else max(0, beforeLength - before)
+                super.deleteSurroundingText(min(beforeLength, before), 0)
+                flush()
+                repeat(beyond) { sendKey("backspace") }
                 return true
             }
             override fun sendKeyEvent(event: KeyEvent): Boolean {
-                if (event.action == KeyEvent.ACTION_DOWN) onKeyDown(event.keyCode, event)
+                if (event.action != KeyEvent.ACTION_DOWN) return true
+                val e = editable
+                // Backspace over what the keyboard wrote: it comes out of the mirror, so the keyboard's
+                // view and the console stay the same.
+                if (event.keyCode == KeyEvent.KEYCODE_DEL && e != null && e.isNotEmpty()) {
+                    val end = Selection.getSelectionEnd(e).takeIf { it > 0 } ?: e.length
+                    e.delete(Character.offsetByCodePoints(e, end, -1), end)
+                    flush()
+                    return true
+                }
+                onKeyDown(event.keyCode, event)
                 return true
             }
-        }
+        }.also { ime = it }
+    }
+
+    /**
+     * The console's side of the keyboard. The keyboard reads back what it wrote (to correct or
+     * complete a word already typed it asks for the text before the cursor and rewrites it), so
+     * the [editable] keeps everything it wrote since the last [resetIme]: an empty one made it
+     * rewrite words that were not there, and the word came out twice or half deleted. [flush] makes
+     * the console say what the mirror says: Backspace over what changed, then the rest.
+     */
+    private var ime: BaseInputConnection? = null
+    /** What of the mirror is already in the console. */
+    private var sent = ""
+
+    private fun flush() {
+        val e = ime?.editable ?: return
+        val now = e.toString()
+        val keep = sent.commonPrefixWith(now).length
+        repeat(sent.codePointCount(keep, sent.length)) { sendKey("backspace") }
+        if (now.length > keep) sendText(now.substring(keep).replace('\n', '\r'))
+        sent = now
+        // A new line: the shell starts another, and so does the keyboard.
+        if (now.contains('\n')) resetIme()
+    }
+
+    /**
+     * Something other than the keyboard moved the shell's line (Enter, an arrow, Tab, a paste): the
+     * mirror no longer matches it. Empty it and tell the keyboard, so it does not rewrite a word
+     * from before.
+     */
+    private fun resetIme() {
+        val e = ime?.editable
+        if (sent.isEmpty() && (e == null || e.isEmpty())) return
+        sent = ""
+        e?.clear()
+        e?.let { BaseInputConnection.removeComposingSpans(it) }
+        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).updateSelection(this, 0, 0, -1, -1)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
