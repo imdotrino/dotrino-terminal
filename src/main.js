@@ -22,7 +22,7 @@ import { doneWatcher } from './done.js'
 import { prepareImage, imageIn } from './image.js'
 import { playDone } from '@dotrino/notifications/ring'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
-import { pubkeyId } from '@dotrino/identity/capabilities'
+import { keyLabel } from '@dotrino/identity/capabilities'
 
 // Lo que contesta el agente de terminal cuando se le pregunta qué es (agent/link.js).
 // NO es el nombre del acta: ese lo pone el dueño al emparejar («TerminalLocal»).
@@ -1196,7 +1196,7 @@ function terminalScreen (link) {
       const found = await probeAgents(_probeClient, members.map((m) => m.sub))
       for (const m of members) {
         if (found.get(m.sub)?.kind !== AGENT_KIND || seen.has(m.sub)) continue
-        const deviceId = (await pubkeyId(m.sub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
+        const deviceId = await keyLabel(m.sub)
         const name = m.label ? `${m.label} · ${deviceId}` : deviceId
         const row = el(`<div class="machine-row" data-sub="${esc(m.sub)}">
           <button class="machine" data-testid="machine-item" title="${esc(t('machine_open', name))}"><span class="mdot"></span>${esc(m.label || deviceId)} +</button>

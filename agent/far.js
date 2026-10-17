@@ -21,7 +21,7 @@
 import { RemoteAgentClient } from '@dotrino/remote-agent/client'
 import { clientLink } from '@dotrino/remote-agent/link'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
-import { pubkeyId } from '@dotrino/identity/capabilities'
+import { keyLabel } from '@dotrino/identity/capabilities'
 
 /** Lo más seguido que se vuelve a preguntar a las máquinas por sus consolas. */
 export const REFRESH_MS = 3000
@@ -35,9 +35,7 @@ export const ANSWER_MS = 8000
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
 /** `AB12-CD34`, como sale en `dotrino-vault members`. */
-export async function shortId (sub) {
-  return (await pubkeyId(sub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
-}
+export const shortId = keyLabel
 
 /** Las máquinas con agente de terminal encendido, con el transporte de verdad. */
 async function discoverReal ({ link, dir, kind, state }) {
