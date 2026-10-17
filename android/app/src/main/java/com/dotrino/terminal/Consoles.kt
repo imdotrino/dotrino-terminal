@@ -3,6 +3,7 @@ package com.dotrino.terminal
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import com.dotrino.sdk.Delegation
 import com.dotrino.sdk.PhoneIdentity
 import com.dotrino.sdk.Profile
@@ -13,6 +14,7 @@ import com.dotrino.sdk.RemoteAgent
 import com.dotrino.terminal.term.Terminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -263,14 +265,55 @@ object Consoles {
         val asked = tabs.filter { it.state == Tab.State.OPEN }
         for (t in asked) t.check()
         scope.launch {
-            // No connection at all (it dropped while asleep): try now, not when the back-off says.
-            if (conn == null && tabs.any { it.state == Tab.State.LOST }) {
-                try { connection() } catch (_: Exception) { return@launch }
-                for (t in tabs.toList()) if (t.state == Tab.State.LOST) resume(t)
-                return@launch
-            }
+            if (comeBackNow()) return@launch
             delay(WAKE_MS)
             if (asked.any { it.checking }) connLock.withLock { conn }?.close()
+        }
+    }
+
+    /**
+     * The network came back (Android says so): what is lost comes back now, not when the back-off
+     * says (up to 30 s with the phone already online).
+     */
+    fun networkBack() {
+        if (demo || profile == null) return
+        scope.launch { comeBackNow() }
+    }
+
+    /** Without a connection and with lost tabs, try now. True if there was nothing open to check. */
+    private suspend fun comeBackNow(): Boolean {
+        if (conn != null || tabs.none { it.state == Tab.State.LOST }) return false
+        try { connection() } catch (_: Exception) { return true }
+        for (t in tabs.toList()) if (t.state == Tab.State.LOST) resume(t)
+        return true
+    }
+
+    /** While the app is in front, a tab that heard nothing from its machine for this long asks it. */
+    const val BEAT_MS = 15_000L
+    /** How long it then has to answer before the connection is taken for dead. */
+    const val BEAT_ANSWER_MS = 10_000L
+    private var beat: Job? = null
+
+    /**
+     * The app is in front ([on]) or not. In front, a session that went deaf is noticed without
+     * waiting for the app to go to the background and back: a tab that heard nothing from its
+     * machine for [BEAT_MS] asks it (`list`), and with no answer in [BEAT_ANSWER_MS] the
+     * connection is dropped and the usual way back starts. A tab whose console is talking asks
+     * nothing. (The PWA asks the machine on screen every 2 s.)
+     */
+    fun front(on: Boolean) {
+        beat?.cancel(); beat = null
+        if (!on || demo) return
+        beat = scope.launch {
+            while (true) {
+                delay(BEAT_MS)
+                val since = SystemClock.elapsedRealtime()
+                val asked = tabs.toList().filter { it.state == Tab.State.OPEN && since - it.heardAt >= BEAT_MS }
+                if (asked.isEmpty()) continue
+                ui.post { asked.forEach { it.list() } }
+                delay(BEAT_ANSWER_MS)
+                if (asked.any { it.state == Tab.State.OPEN && it.heardAt < since }) connLock.withLock { conn }?.close()
+            }
         }
     }
 
@@ -320,11 +363,16 @@ object Consoles {
 
     /** Over a new session, the tab comes back to the console it had (the screen is replayed). */
     private suspend fun resume(tab: Tab) {
+        // Two ways back can meet (the back-off, the network coming back, «Retry»): one goes.
+        if (!tab.resumeLock.tryLock()) return
         try {
+            if (tab !in tabs || (tab.state != Tab.State.LOST && tab.state != Tab.State.FAILED)) return
             val p = profile ?: return
             val s = openSession(p, tab.machine)
             ui.post { tab.bind(s.channel(), tab.screenCols, tab.screenRows, tab.consoleId); changed() }
-        } catch (e: Exception) { tab.lostWith(e.message) }
+        } catch (e: Exception) {
+            ui.post { tab.lostWith(e.message) }
+        } finally { tab.resumeLock.unlock() }
     }
 
     /**
@@ -396,6 +444,12 @@ object Consoles {
         private var triedKept = false                                 // the remembered code was already sent on this lock
         /** Back from the background: the machine was asked and has not answered yet ([Consoles.wake]). */
         var checking = false; private set
+        /** When something last came from the machine ([SystemClock.elapsedRealtime]). */
+        @Volatile internal var heardAt = 0L; private set
+        internal val resumeLock = Mutex()
+        /** Failed tries in a row to come back, for the back-off; an `attached` clears it. */
+        private var attempts = 0
+        private var retryJob: Job? = null
         /** While LOCKED: why the last code was not taken (`bad-code`, `wait`), or null if none was tried. */
         var codeProblem: String? = null; private set
         /** With `wait`: how long the machine makes everyone wait, in ms. */
@@ -433,6 +487,7 @@ object Consoles {
         fun bind(ch: Channel, cols: Int, rows: Int, resume: String?) {
             release()
             channel = ch; fresh = true; state = State.CONNECTING; note = null
+            heardAt = SystemClock.elapsedRealtime()
             screenCols = cols; screenRows = rows
             off = ch.onMessage { m -> post { handle(m) } }
             offError = ch.onError { e -> post { if (state == State.OPEN || state == State.CONNECTING) lostWith(e.message) } }
@@ -465,6 +520,7 @@ object Consoles {
         internal fun check() { if (state != State.OPEN) return; checking = true; onChange(); list() }
 
         internal fun handle(m: JsonObject) {
+            heardAt = SystemClock.elapsedRealtime()
             if (checking) { checking = false; onChange() }
             when ((m["type"] as? JsonPrimitive)?.content) {
                 "consoles" -> {
@@ -484,7 +540,7 @@ object Consoles {
                     consoleId = (m["id"] as? JsonPrimitive)?.content
                     wantId = consoleId; leftId = null
                     (m["console"] as? JsonObject)?.let(::consoleOf)?.let { upsert(it); follow(it) }
-                    state = State.OPEN; note = null; resuming = false
+                    state = State.OPEN; note = null; resuming = false; attempts = 0
                     // The size went in the `attach`; it may have changed while attaching. The agent
                     // follows it only if this screen is the one that set the size.
                     sayScreen()
@@ -697,7 +753,7 @@ object Consoles {
         }
 
         /** Leave the tab without touching the console: it stays alive on the machine. */
-        internal fun drop() { release(); tabs.remove(this); changed() }
+        internal fun drop() { retryJob?.cancel(); release(); tabs.remove(this); changed() }
 
         internal fun release() {
             off?.invoke(); offError?.invoke(); off = null; offError = null; channel?.close(); channel = null
@@ -707,9 +763,20 @@ object Consoles {
         /** The connection dropped under this tab: it comes back by itself. */
         internal fun lost() { checking = false; if (state == State.OPEN || state == State.CONNECTING) { release(); state = State.LOST; onChange() } }
 
-        internal fun lostWith(why: String?) { release(); state = State.LOST; note = why; onChange(); scope.launch { resume(this@Tab) } }
+        /**
+         * Coming back failed (or the session broke): try again, but not at once. Without network
+         * the try fails in an instant, and trying again at once was a loop with no pause that
+         * opened a connection per turn and flooded the screen until the app was restarted.
+         */
+        internal fun lostWith(why: String?) {
+            release(); state = State.LOST; note = why; onChange()
+            val wait = minOf(1_000L shl minOf(attempts, 5), 30_000L)
+            attempts++
+            retryJob?.cancel()
+            retryJob = scope.launch { delay(wait); resume(this@Tab) }
+        }
 
-        /** Try again by hand, from the tab's note. */
-        fun retry() { scope.launch { resume(this@Tab) } }
+        /** Try again by hand, from the tab's note: now. */
+        fun retry() { retryJob?.cancel(); attempts = 0; scope.launch { resume(this@Tab) } }
     }
 }

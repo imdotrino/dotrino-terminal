@@ -70,6 +70,7 @@ class MainActivity : Activity() {
         // the original was far too loud next to a terminal.
         Consoles.onDone = { DotrinoRing.playDone(applicationContext, DotrinoRing.Level.LOW) }
         boot()
+        runCatching { connectivity.registerDefaultNetworkCallback(netBack) }
     }
 
     override fun onResume() {
@@ -80,9 +81,15 @@ class MainActivity : Activity() {
     }
     // Back from the background the connection is checked at once, and it is said on screen.
     private var wasStopped = false
-    override fun onStop() { super.onStop(); wasStopped = true }
-    override fun onStart() { super.onStart(); if (wasStopped) { wasStopped = false; Consoles.wake() } }
-    override fun onDestroy() { scope.cancel(); super.onDestroy() }
+    override fun onStop() { super.onStop(); wasStopped = true; Consoles.front(false) }
+    override fun onStart() { super.onStart(); Consoles.front(true); if (wasStopped) { wasStopped = false; Consoles.wake() } }
+    override fun onDestroy() { runCatching { connectivity.unregisterNetworkCallback(netBack) }; scope.cancel(); super.onDestroy() }
+
+    // The network came back (wifi ↔ mobile data, out of a tunnel): what was lost comes back now.
+    private val connectivity by lazy { getSystemService(android.net.ConnectivityManager::class.java) }
+    private val netBack = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) = Consoles.networkBack()
+    }
 
     @Deprecated("Activity without AndroidX: the back button still comes here")
     override fun onBackPressed() {

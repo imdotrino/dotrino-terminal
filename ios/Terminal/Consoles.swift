@@ -259,9 +259,15 @@ final class Consoles: ObservableObject {
 
     /// Over a new session, the tab comes back to the console it had (the screen is replayed).
     func resume(_ tab: Tab) async {
-        guard let p = profile else { return }
+        // Two ways back can meet (the back-off, the connection coming back, «Retry»): one goes, and
+        // only for a tab that is still there and still lost.
+        guard !tab.resuming, tabs.contains(where: { $0 === tab }), tab.state == .lost || tab.state == .failed,
+              let p = profile else { return }
+        tab.resuming = true
+        defer { tab.resuming = false }
+        // A failed try comes back by itself, with a growing wait: before, it stayed lost until «Retry».
         do { tab.bind(try await openSession(p, tab.machine), cols: tab.screenCols, rows: tab.screenRows, resume: tab.consoleId) }
-        catch { tab.lostWith("\(error)", retry: false) }
+        catch { tab.lostWith("\(error)", retry: true) }
     }
 
     /// DEBUG: a tab fed by a scripted agent (`DemoAgent`), with no profile and no network.
@@ -312,6 +318,11 @@ final class Tab: ObservableObject, Identifiable {
     var onDone: () -> Void = {}
     var onDrop: () -> Void = {}
     var onLost: () -> Void = {}
+    /// A way back is under way (`Consoles.resume`).
+    var resuming = false
+    /// Failed tries in a row to come back, for the back-off; an `attached` clears it.
+    private var attempts = 0
+    private var retryTask: Task<Void, Never>?
     /// An image sent to the machine ended: `path` is where the machine kept it (what is typed into
     /// the console), or `problem` says why not (`timeout`: the machine's terminal is older than 0.43
     /// and does not answer; `not-image`, `too-big`; `lost`: the connection dropped).
@@ -403,7 +414,7 @@ final class Tab: ObservableObject, Identifiable {
             consoleId = m["id"]?.string
             wantId = consoleId; leftId = nil
             if let c = m["console"].flatMap(consoleOf) { upsert(c); follow(c) }
-            state = .open; note = nil
+            state = .open; note = nil; attempts = 0
             // The size went in the `attach`; it may have changed while attaching. The agent follows
             // it only if this screen is the one that set the size.
             sayScreen()
@@ -600,7 +611,7 @@ final class Tab: ObservableObject, Identifiable {
     /// tab must never close the console) and drops the tab. A console is closed from the panel.
     func leave() {
         if state == .open { try? channel?.send(["type": "detach"]) }
-        release(); onDrop()
+        retryTask?.cancel(); release(); onDrop()
     }
 
     func release() {
@@ -613,11 +624,21 @@ final class Tab: ObservableObject, Identifiable {
     /// The connection dropped under this tab: it comes back by itself.
     func lost() { if state == .open || state == .connecting { release(); state = .lost } }
 
+    /// Coming back failed (or the session broke): try again, but not at once — without network a
+    /// try fails in an instant (1 s, 2 s, 4 s… up to 30 s).
     func lostWith(_ why: String?, retry: Bool) {
         release(); state = .lost; note = why
-        if retry { onLost() }
+        guard retry else { return }
+        let wait = min(UInt64(1_000_000_000) << UInt64(min(attempts, 5)), 30_000_000_000)
+        attempts += 1
+        retryTask?.cancel()
+        retryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: wait)
+            guard let self, !Task.isCancelled else { return }
+            self.onLost()
+        }
     }
 
-    /// Try again by hand, from the tab's note.
-    func retry() { onLost() }
+    /// Try again by hand, from the tab's note: now.
+    func retry() { retryTask?.cancel(); attempts = 0; onLost() }
 }
