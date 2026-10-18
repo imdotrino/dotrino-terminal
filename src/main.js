@@ -66,6 +66,9 @@ const M = {
     connecting: (a) => `Conectando a ${a}…`,
     connected: (a) => `Conectado a ${a}`,
     error: 'Error: ',
+    err_unauthorized: (r) => `No autorizado: ${r}`,
+    err_blocked: 'Un aprobador bloqueó este aparato; se desbloquea en la bóveda',
+    err_unknown_session: 'La máquina ya no conoce esta sesión; vuelve a conectar',
     close: 'Cerrar',
     close_tab: 'Cerrar la pestaña (la consola sigue en la máquina)',
     exited: (c) => `[la consola terminó (${c})]`,
@@ -153,6 +156,9 @@ const M = {
     connecting: (a) => `Connecting to ${a}…`,
     connected: (a) => `Connected to ${a}`,
     error: 'Error: ',
+    err_unauthorized: (r) => `Unauthorized: ${r}`,
+    err_blocked: 'An approver blocked this device; unblock it from the vault',
+    err_unknown_session: 'The machine no longer knows this session; reconnect',
     close: 'Close',
     close_tab: 'Close the tab (the console stays on the machine)',
     exited: (c) => `[console ended (${c})]`,
@@ -212,6 +218,16 @@ let lang = 'es'
 try { lang = (localStorage.getItem('dotrino.lang') || (navigator.language || 'es').slice(0, 2)) === 'en' ? 'en' : 'es' } catch {}
 const t = (k, ...a) => { const v = M[lang][k]; return typeof v === 'function' ? v(...a) : v }
 topbar.addEventListener('dotrino-lang', (e) => { lang = e.detail.lang; render() })
+/**
+ * Lo que se le enseña al usuario de un error del agente: por su `code`, traducido. Un error
+ * sin código es de desarrollo y sale tal cual (e.message), que es lo que hay que pegar en un issue.
+ */
+const errorText = (e) => {
+  if (e?.code === 'unauthorized') return t('err_unauthorized', e.reason || '?')
+  if (e?.code === 'blocked') return t('err_blocked')
+  if (e?.code === 'unknown-session') return t('err_unknown_session')
+  return t('error') + (e?.message || String(e))
+}
 
 const app = document.getElementById('app')
 
@@ -867,7 +883,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       follow(p, r.console)
       persist()
     } catch (e) {
-      p.term.write(`\r\n\x1b[31m${e.code === 'no-console' ? t('console_gone') : e.message}\x1b[0m\r\n`)
+      p.term.write(`\r\n\x1b[31m${e.code === 'no-console' ? t('console_gone') : errorText(e)}\x1b[0m\r\n`)
     }
     refresh(s); p.term.focus()
   }
@@ -1044,7 +1060,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   async function connectPane (s, p, consoleId) {
     p.agent = link.mode === 'demo' ? new DemoAgentClient() : new AgentClient(link, { agentPubkey: s.pub })
     p.agent.askCode = ({ wrong }) => askMachineCode(s.alias, wrong)
-    p.agent.onError = (e) => { s.status = e.message; setTabState(s, 'err'); if (active === s) hint.textContent = t('error') + e.message }
+    p.agent.onError = (e) => { s.status = errorText(e); setTabState(s, 'err'); if (active === s) hint.textContent = errorText(e) }
     // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
     // a la misma consola si sigue viva, o a otra diciéndolo.
     p.agent.onResumed = () => {
@@ -1112,7 +1128,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       removeSession(s)
       if (e.code === 'locked') { hint.textContent = t('code_needed', s.alias); hint.title = ''; return }
       hint.innerHTML = `${esc(t('conn_machine', s.alias))} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('how_link')}</a>`
-      hint.title = e.message
+      hint.title = errorText(e)
     }
   }
 
