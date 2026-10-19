@@ -50,6 +50,7 @@ import { resolveInstance, isValidName } from '@dotrino/remote-agent/instances'
 import readline from 'node:readline'
 import { connectLocal } from '../local.js'
 import { titleFilter } from '../title.js'
+import { farMessage as farMessageFor } from '../far-messages.js'
 import { hasAccessCode, setAccessCode, clearAccessCode, MIN_LENGTH } from '../access.js'
 import { configureEditors, terminalProfile } from '../editors.js'
 
@@ -735,12 +736,7 @@ async function farRequest (conn, msg, type) {
   if (!r) die(t('el agente de esta máquina no contestó. Si es anterior a la 0.38 no sabe de otras máquinas: actualízalo y reinícialo.', 'this machine\'s agent did not answer. If it predates 0.38 it knows nothing about other machines: update and restart it.'))
   return r
 }
-const farMessage = (r) => ({
-  'not-linked': t('esta máquina no está enlazada con tu bóveda, así que no ve tus otras máquinas. Enlázala con: dotrino-terminal link', 'this machine is not linked to your vault, so it cannot see your other machines. Link it with: dotrino-terminal link'),
-  'no-acta': t('no se pudo preguntar a tu bóveda qué máquinas tienes. Comprueba que esté encendida y que esta máquina tenga conexión.', 'could not ask your vault which machines you have. Check that it is on and that this machine is online.'),
-  'no-machine': t('no hay ninguna máquina encendida con ese id o nombre (mira «dotrino-terminal machines»).', 'no machine with that id or name is on (see "dotrino-terminal machines").'),
-  'ambiguous-machine': t('hay más de una máquina con ese nombre: usa su id (mira «dotrino-terminal machines»).', 'more than one machine has that name: use its id (see "dotrino-terminal machines").')
-}[r.code] || `${r.message} (${r.code})`)
+const farMessage = (r) => farMessageFor(r, t)
 
 /** `dotrino-terminal machines`: las otras máquinas de la cuenta que están encendidas, y sus consolas. */
 async function machines (conn) {

@@ -2038,7 +2038,7 @@ impl App {
                         self.far_silent.remove(p);
                         let why = match code.as_str() {
                             "not-linked" => t("Este perfil no está enlazado con tu bóveda, así que no ve tus otras máquinas. Enlázalo en Perfil → Enrolar…", "This profile is not linked to your vault, so it cannot see your other machines. Link it in Profile → Enroll…"),
-                            "no-acta" => t("No se pudo preguntar a tu bóveda qué máquinas tienes. Comprueba que esté encendida y que esta máquina tenga conexión.", "Could not ask your vault which machines you have. Check that it is on and that this machine is online."),
+                            "no-record" => t("No se pudo preguntar a tu bóveda qué máquinas tienes. Comprueba que esté encendida y que esta máquina tenga conexión.", "Could not ask your vault which machines you have. Check that it is on and that this machine is online."),
                             _ => format!("{}: {message} ({code})", t("No se pudieron ver tus otras máquinas", "Could not see your other machines")),
                         };
                         self.far_why.insert(p.clone(), why);

@@ -69,5 +69,5 @@ test('SIN ACTA no se abre sesión: no hay con qué decidir', async () => {
   const cert = await papel(A, D, acta.seq, 'n-1')
   const r = await verifyChain({ ...(await hs(D, cert)), expectedScope: SIGN_SCOPE, actaSeq: null, sealers: null })
   assert.equal(r.ok, false)
-  assert.equal(r.reason, 'no-acta', 'sin acta se dice que no, no se pasa por alto')
+  assert.equal(r.reason, 'no-record', 'sin acta se dice que no, no se pasa por alto')
 })
