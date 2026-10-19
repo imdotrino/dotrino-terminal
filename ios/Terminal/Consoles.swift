@@ -120,6 +120,13 @@ func panelLines(_ title: String, _ cwd: String?, _ machine: String? = nil) -> (h
     return (host ?? machine, dir, rest.isEmpty || rest == dir ? nil : rest)
 }
 
+/// The card's top lines: the same as the open panel (`user@host`, folder, the program's title), one per line.
+func aboutLines(_ c: ConsoleInfo) -> String {
+    let l = panelLines(c.title, c.cwd, c.host)
+    let lines = [l.host, l.dir, l.name].compactMap { $0 }
+    return lines.isEmpty ? t("about.untitled") : lines.joined(separator: "\n")
+}
+
 /// The title of a console for the panel. The shell sets it as «user@host: path»; what matters is
 /// the last folder, so «user@host:» goes (the machine is known) and the path is cut ON THE LEFT,
 /// by whole folders, down to `max` characters. The same as the PWA and Android (`shortTitle`).

@@ -583,7 +583,7 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.VERTICAL; setPadding(px(4), px(5), px(4), px(5))
                     // The number and the machine (`user@host`, always first) on the first row, as the
                     // PWA's panel; the folder and the title on their OWN rows, whole: cut to «…/…/nal»
-                    // they said nothing.
+                    // they said nothing. Neither the task nor the notes: those live only on the card.
                     val lines = panelLines(c.title, c.cwd, c.host)
                     addView(label((if (on) "● " else "") + "${c.n}" + (lines.host?.let { " · $it" } ?: ""), 13f, bold = true).apply {
                         tag = "drawer-host"; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END
@@ -595,7 +595,6 @@ class MainActivity : Activity() {
                     }
                     lines.dir?.let { addView(oneLine(it, "drawer-cwd", col(R.color.t_text))) }
                     lines.name?.let { addView(oneLine(it, "drawer-title", col(R.color.t_text))) }
-                    c.aboutLine?.let { addView(oneLine(it, "drawer-about", col(R.color.t_accent)).apply { ellipsize = android.text.TextUtils.TruncateAt.END }) }
                     addView(label(where(tab, c) + actText(c), 11f, col(R.color.t_muted)))
                     setOnClickListener { tab.switchTo(c.id) }
                     setOnLongClickListener { consoleActions(tab, c); true }
@@ -652,7 +651,7 @@ class MainActivity : Activity() {
         val shown = c != null && tab.state == Consoles.Tab.State.OPEN
         // Built again only when what it says changed: the panel asks the machine every 2 s, and
         // rebuilding the card each time threw away a selection being made in its text.
-        val says = if (!shown) null else listOf(box.hashCode(), aboutFolded, I18n.lang, c!!.id, c.n, c.title, where(tab, c), c.task, c.note)
+        val says = if (!shown) null else listOf(box.hashCode(), aboutFolded, I18n.lang, c!!.id, c.n, c.title, c.cwd, c.host, where(tab, c), c.task, c.note)
         if (says == aboutSays && box.childCount > 0 == shown) return
         aboutSays = says
         box.removeAllViews()
@@ -683,7 +682,9 @@ class MainActivity : Activity() {
             addView(label("${c.n}", 12f, col(R.color.t_on_accent), bold = true).apply { background = rounded(col(R.color.t_accent), px(5)); setPadding(px(6), 0, px(6), 0) })
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL; setPadding(px(7), 0, px(4), 0)
-                addView(label(c.title.ifBlank { t("about.untitled") }, 12f, bold = true).apply { tag = "about-title"; maxLines = 3; setTextIsSelectable(true) })
+                // On top, the same lines as the open panel: user@host, folder and the program's title.
+                val lines = panelLines(c.title, c.cwd, c.host).let { l -> listOfNotNull(l.host, l.dir, l.name) }.ifEmpty { listOf(t("about.untitled")) }
+                addView(label(lines.joinToString("\n"), 12f, bold = true).apply { tag = "about-title"; maxLines = 6; setTextIsSelectable(true) })
                 addView(label(where(tab, c), 11f, col(R.color.t_muted)).apply { tag = "about-where" })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(label("–", 15f, col(R.color.t_muted)).apply {

@@ -508,7 +508,8 @@ private struct ConsoleScreen: View {
                     Text("\(c.n)").font(.caption.bold()).foregroundColor(Palette.onAccent).padding(.horizontal, 6)
                         .background(RoundedRectangle(cornerRadius: 5).fill(Palette.accent))
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(c.title.isEmpty ? t("about.untitled") : c.title).font(.caption.bold()).foregroundColor(Palette.text).lineLimit(3)
+                        // On top, the same lines as the open panel: user@host, folder and the program's title.
+                        Text(aboutLines(c)).font(.caption.bold()).foregroundColor(Palette.text).lineLimit(6)
                             .textSelection(.enabled).accessibilityIdentifier("about-title")
                         Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                     }
@@ -610,7 +611,7 @@ private struct ConsoleScreen: View {
                         VStack(alignment: .leading, spacing: 2) {
                             // The number and the machine (`user@host`, always first) on the first row, as
                             // the PWA's panel; the folder and the title on their OWN rows, whole: cut to
-                            // «…/…/nal» they said nothing.
+                            // «…/…/nal» they said nothing. Neither the task nor the notes: those live only on the card.
                             let lines = panelLines(c.title, c.cwd, c.host)
                             Text((on ? "● " : "") + "\(c.n)" + (lines.host.map { " · \($0)" } ?? ""))
                                 .font(.footnote.bold()).foregroundColor(Palette.text).lineLimit(1).truncationMode(.tail)
@@ -619,7 +620,6 @@ private struct ConsoleScreen: View {
                             ForEach([lines.dir, lines.name].compactMap { $0 }, id: \.self) { line in
                                 Text(line).font(.caption).foregroundColor(Palette.text).lineLimit(1).truncationMode(.head)
                             }
-                            if let about = c.aboutLine { Text(about).font(.caption).foregroundColor(Palette.accent).lineLimit(1).truncationMode(.tail) }
                             Text(whereIs(c)).font(.caption2).foregroundColor(Palette.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
