@@ -3666,10 +3666,6 @@ impl App {
             for l in lines {
                 label = label.push(text(l).size(12));
             }
-            // De qué va: la primera línea de su nota.
-            if let Some(line) = [c.task.as_deref(), c.note.as_deref()].into_iter().flatten().flat_map(str::lines).map(str::trim).find(|l| !l.is_empty()) {
-                label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text) }));
-            }
             let label = label.push(text(where_).size(11).style(dim));
             let pick = button(label).width(Length::Fill).padding([4, 8]).style(console_button(is_mine, c.act())).on_press_maybe(act(Message::Go(id, None, Some(c.id.clone()))));
             let kill = button(text("×").size(13)).padding([4, 6]).style(menu_button).on_press(Message::KillAt(id, None, c.id.clone()));
@@ -3722,9 +3718,6 @@ impl App {
                 let mut label = column![text(format!("{}{first}", if is_mine { "● " } else { "" })).size(12)];
                 for l in lines {
                     label = label.push(text(l).size(12));
-                }
-                if let Some(line) = [c.task.as_deref(), c.note.as_deref()].into_iter().flatten().flat_map(str::lines).map(str::trim).find(|l| !l.is_empty()) {
-                    label = label.push(text(line.to_string()).size(12).style(|theme: &Theme| text::Style { color: Some(theme.extended_palette().background.base.text) }));
                 }
                 let where_ = if is_mine { t("en esta ventana", "in this window") } else if c.watchers.is_empty() { t("suelta", "detached") } else { t("abierta", "open") };
                 let where_ = match c.act() {

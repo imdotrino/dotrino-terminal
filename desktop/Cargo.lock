@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "dotrino-terminal-desktop"
-version = "0.2.79"
+version = "0.2.80"
 dependencies = [
  "iced",
  "iced_aw",

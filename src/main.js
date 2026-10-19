@@ -644,7 +644,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** ⤢ «Usar el tamaño de esta pantalla»: una flecha diagonal doble, dibujada (no depende de fuentes). */
   const ICON_SIZE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5l-11 11"/></svg>'
 
-  /** Las líneas de una consola en el panel: máquina (si es otra), carpeta y título del programa. */
+  /** Las líneas de una consola en el panel: máquina, carpeta y título del programa. Ni la tarea ni las notas: esas van solo en la tarjeta. */
   function linesOf (c) {
     const l = panelLines(c.title, c.cwd, c.host)
     return [l.host, l.dir && shortTitle(l.dir), l.name].filter(Boolean)
@@ -654,11 +654,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   function rows (c, i, mine) {
     const [first, ...more] = linesOf(c)
     const head = `${c.id === mine ? '● ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
-    return `<span>${head}</span>` + more.map((l) => `<span>${esc(l)}</span>`).join('') + (noteLine(c) ? `<span class="note" data-testid="panel-note">${esc(noteLine(c))}</span>` : '')
+    return `<span>${head}</span>` + more.map((l) => `<span>${esc(l)}</span>`).join('')
   }
 
-  /** La primera línea de la nota de una consola: lo que el panel enseña de «de qué va». */
-  const noteLine = (c) => [c.task, c.note].join('\n').split('\n').map((l) => l.trim()).find(Boolean) || ''
 
   /**
    * Una ruta para el panel: lo que importa es la carpeta final, así que se recorta POR LA
@@ -749,7 +747,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         <button class="sbtn" data-act="expand" title="${esc(t('panel_open'))}">»</button>
         <button class="sbtn" data-act="new" title="${esc(t('new_console'))}">+</button>
         <button class="sbtn pin" data-act="pin" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}" ${cur ? '' : 'disabled'}>${ICON_SIZE}</button>
-        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c) + ([c.task, c.note].filter(Boolean).length ? '\n\n' + [c.task, c.note].filter(Boolean).join('\n') : ''))}">${numOf(c, i)}</button>`).join('')}`
+        ${list.map((c, i) => `<button class="sbtn num${c.id === mine ? ' on' : ''}${inPane(c)}${actClass(c)}" data-id="${esc(c.id)}" title="${esc((linesOf(c).join('\n') || String(numOf(c, i))) + actText(c))}">${numOf(c, i)}</button>`).join('')}`
     } else {
       side.innerHTML = `
         <div class="srow head"><button class="sbtn" data-act="collapse" title="${esc(t('panel_close'))}">«</button><b>${t('consoles')}</b></div>
