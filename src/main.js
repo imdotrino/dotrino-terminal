@@ -791,6 +791,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       return
     }
     const n = current(s, p)?.n ?? c.n ?? ''
+    // Arriba, las mismas líneas que el panel abierto: usuario@máquina, carpeta y título del programa.
     const note = c.note || ''
     const task = c.task || ''
     // La tarea la pone el programa de dentro: aquí se lee y se quita, no se edita. La nota es de la persona.
@@ -798,7 +799,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     box.innerHTML = `
       <div class="about-head">
         <b class="about-n">${esc(String(n))}</b>
-        <span class="about-titles"><span class="about-title" data-testid="about-title">${esc(c.title || t('about_untitled'))}</span><small class="about-where" data-testid="about-where">${esc(where(s, c, p))}</small></span>
+        <span class="about-titles"><span class="about-title" data-testid="about-title">${(linesOf(c).length ? linesOf(c) : [t('about_untitled')]).map((l) => `<span>${esc(l)}</span>`).join('')}</span><small class="about-where" data-testid="about-where">${esc(where(s, c, p))}</small></span>
         <button class="about-btn" data-a="hide" data-testid="about-hide" title="${esc(t('about_hide'))}" aria-label="${esc(t('about_hide'))}" aria-expanded="true">–</button>
       </div>
       ${taskBox}

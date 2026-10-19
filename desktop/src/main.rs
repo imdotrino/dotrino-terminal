@@ -2189,7 +2189,10 @@ impl App {
             let p = theme.extended_palette();
             container::Style { background: Some(p.primary.base.color.into()), text_color: Some(p.primary.base.text), border: Border::default().rounded(4.0), ..Default::default() }
         });
-        let title = if c.title.is_empty() { t("Sin título", "Untitled") } else { c.title.clone() };
+        // Arriba, las mismas líneas que el panel abierto: usuario@máquina, carpeta y título del programa.
+        let (host, dir, name) = panel_lines(&c.title, c.cwd.as_deref(), user_at_host().as_deref());
+        let lines = [host, dir, name].into_iter().flatten().collect::<Vec<_>>();
+        let lines = if lines.is_empty() { vec![t("Sin título", "Untitled")] } else { lines };
         // Debajo del título, lo mismo que la barra de la ventana añade al suyo: si la consola está
         // abierta desde otro aparato, y el perfil.
         let remote = c.watchers.iter().filter(|w| w.origin == "remote").count();
@@ -2199,7 +2202,7 @@ impl App {
             n => Some(format!("● {} ×{n}", t("abierta desde otro aparato", "open on another device"))),
         };
         let second = [mark, win.profile.clone()].into_iter().flatten().collect::<Vec<_>>().join(" — ");
-        let mut titles = column![text(title).size(12).width(Length::Fill)].width(Length::Fill);
+        let mut titles = column(lines.into_iter().map(|l| text(l).size(12).width(Length::Fill).into())).width(Length::Fill);
         if !second.is_empty() {
             titles = titles.push(text(second).size(11).style(dim));
         }
