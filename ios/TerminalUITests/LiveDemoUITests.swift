@@ -46,6 +46,9 @@ final class LiveDemoUITests: XCTestCase {
         let console = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'console-' AND NOT (identifier IN %@)",
                                                                            ["console-new", "console-kill", "console-grip"])).firstMatch
         try need(console, 60, "the agent did not answer with its consoles")
+        // A command too: the terminal takes the keyboard when touched.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).tap()
+        sleep(1)
         app.typeText("echo LIVE_DEMO_OK\n")
         sleep(3)
     }
