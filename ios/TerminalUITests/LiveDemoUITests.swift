@@ -32,9 +32,12 @@ final class LiveDemoUITests: XCTestCase {
         if remember.exists { remember.tap() }
         web.buttons.matching(NSPredicate(format: "label IN %@", ["Sign in", "Entrar", "Iniciar sesión"])).firstMatch.tap()
 
-        // Back on the machines: the demo's one. The app may reload on the profile change.
-        let close = app.buttons["web-close"]
-        if close.waitForExistence(timeout: 20) { close.tap() }
+        // Signed in when the page shows the profile; changing profile is not reactive (CONVENCIONES
+        // §6.1): the app starts again with the new one.
+        let done = web.staticTexts.matching(NSPredicate(format: "label IN %@", ["Your profile", "Tu perfil"])).firstMatch
+        try need(done, 60, "the sign-in did not finish")
+        app.terminate()
+        app.launch()
         let machine = app.buttons["machine"].firstMatch
         try need(machine, 90, "the demo machine did not show up")
         machine.tap()
