@@ -66,7 +66,7 @@ LO QUE NECESITAS
 • La app «Identidad Dotrino», que guarda tus llaves para todas las apps de Dotrino del teléfono. Si falta, la app te lo explica y te lleva a instalarla.
 • Una bóveda de Dotrino y el agente de Terminal en la computadora a la que quieres entrar (Linux, macOS o Windows). Los dos son gratuitos. Cómo se instalan: https://wiki.dotrino.com/herramientas/terminal/
 
-Terminal también funciona gratis en el navegador, sin instalar nada: https://terminal.dotrino.com/
+También puedes usar Terminal gratis dentro de la app Dotrino (https://play.google.com/store/apps/details?id=com.dotrino.app) o en el navegador, sin instalar nada: https://terminal.dotrino.com/
 
 ### appstore.description.es
 
@@ -92,7 +92,7 @@ LO QUE NECESITAS
 
 • Una bóveda de Dotrino y el agente de Terminal en la computadora a la que quieres entrar (Linux, macOS o Windows). Los dos son gratuitos. Cómo se instalan: https://wiki.dotrino.com/herramientas/terminal/
 
-Terminal también funciona gratis en el navegador, sin instalar nada: https://terminal.dotrino.com/
+También puedes usar Terminal gratis dentro de la app Dotrino (https://apps.apple.com/app/id6817137047) o en el navegador, sin instalar nada: https://terminal.dotrino.com/
 
 ## English
 
@@ -137,7 +137,7 @@ WHAT YOU NEED
 • The "Dotrino Identity" app, which keeps your keys for every Dotrino app on the phone. If it's missing, the app explains it and takes you to install it.
 • A Dotrino vault and the Terminal agent on the computer you want to get into (Linux, macOS or Windows). Both are free. How to install them: https://wiki.dotrino.com/en/herramientas/terminal/
 
-Terminal also works for free in the browser, with nothing to install: https://terminal.dotrino.com/
+You can also use Terminal for free inside the Dotrino app (https://play.google.com/store/apps/details?id=com.dotrino.app) or in the browser, with nothing to install: https://terminal.dotrino.com/
 
 ### appstore.description.en
 
@@ -163,4 +163,4 @@ WHAT YOU NEED
 
 • A Dotrino vault and the Terminal agent on the computer you want to get into (Linux, macOS or Windows). Both are free. How to install them: https://wiki.dotrino.com/en/herramientas/terminal/
 
-Terminal also works for free in the browser, with nothing to install: https://terminal.dotrino.com/
+You can also use Terminal for free inside the Dotrino app (https://apps.apple.com/app/id6817137047) or in the browser, with nothing to install: https://terminal.dotrino.com/
