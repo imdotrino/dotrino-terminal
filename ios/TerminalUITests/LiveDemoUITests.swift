@@ -51,6 +51,13 @@ final class LiveDemoUITests: XCTestCase {
         sleep(1)
         app.typeText("echo LIVE_DEMO_OK\n")
         sleep(3)
+        // THE APP REVIEW VIDEO: Xcode keeps the screen recording only when a test fails, so the take
+        // ends in a deliberate failure (TEST_RUNNER_REVIEW_RECORD=1), like DotrinoUITests' recording.
+        if env["REVIEW_RECORD"] == "1" {
+            app.typeText("uname -a\n")
+            sleep(4)
+            XCTFail("review recording: failing on purpose so Xcode keeps the video")
+        }
     }
 
     /// Waits for [e]; if it never shows, prints what IS on screen and stops.
