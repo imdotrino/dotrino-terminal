@@ -1,7 +1,7 @@
 // Service worker estándar del ecosistema (§3): navegación network-first (los
 // deploys se ven al instante; offline cae a caché), resto cache-first con refresco
 // en segundo plano. Subir N de CACHE en cada cambio de assets cacheados.
-const CACHE = 'terminal-v46';
+const CACHE = 'terminal-v47';
 const ASSETS = [
   '/',
   '/consoles/',
@@ -30,6 +30,8 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
+  // El video va directo a la red: se pide por rangos y no se guarda en caché.
+  if (url.pathname.startsWith('/video/')) return;
 
   const esNavegacion = e.request.mode === 'navigate' || e.request.destination === 'document';
   if (esNavegacion) {

@@ -233,6 +233,8 @@ body:has(.term-card) { height: 100vh; height: 100dvh; min-height: 0; }
 a.btn { display: inline-block; text-decoration: none; color: inherit; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 10px 16px; font-weight: 600; }
 a.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
 .home-how { color: var(--muted); margin: 12px 0 28px; }
+/* El video de cómo funciona: servido desde el propio dominio, sin reproductor de terceros, y no baja nada hasta pulsar play. */
+.home-video { display: block; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; margin: 0 0 28px; border-radius: 18px; background: #fff; box-shadow: 0 18px 40px rgba(0, 101, 140, 0.12); }
 .home a:not(.btn) { color: var(--text); text-underline-offset: 3px; }
 .home-points { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .home-points .point { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }

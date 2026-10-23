@@ -37,6 +37,7 @@ const M = {
     home_platforms: 'Linux (.deb, .rpm), macOS y Windows',
     home_open: 'Abrir mis consolas',
     home_how: 'Cómo instalar',
+    home_video: 'Video: cómo funciona Dotrino Terminal',
     home_p1: 'Tus ventanas, en cualquier aparato',
     home_p1_d: 'Abre en el teléfono la consola que dejaste en la computadora y sigue donde ibas. Las dos pantallas ven lo mismo.',
     home_p2: 'Solo entran tus aparatos',
@@ -127,6 +128,7 @@ const M = {
     home_platforms: 'Linux (.deb, .rpm), macOS and Windows',
     home_open: 'Open my consoles',
     home_how: 'How to install',
+    home_video: 'Video: how Dotrino Terminal works',
     home_p1: 'Your windows, on any device',
     home_p1_d: 'Open on your phone the console you left on your computer and carry on. Both screens see the same thing.',
     home_p2: 'Only your devices get in',
@@ -233,7 +235,9 @@ const app = document.getElementById('app')
 
 const installEl = document.getElementById('install')
 
-function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return tpl.content.firstElementChild }
+// importNode: los nodos nacen en el documento de la página. Sacados tal cual del <template> (un
+// documento inerte), Chrome no carga el poster de un <video>.
+function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return document.importNode(tpl.content, true).firstElementChild }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
 // ---------- Mi perfil (§6.1) ----------
@@ -283,6 +287,8 @@ function homeScreen () {
         <a class="btn" href="/consoles" data-testid="home-consoles">${t('home_open')}</a>
       </div>
       <p class="home-how">${t('home_platforms')} · <a href="${WIKI('terminal-escritorio')}" target="_blank" rel="noopener" data-testid="home-how">${t('home_how')}</a></p>
+      <video class="home-video" controls preload="none" playsinline poster="/video/poster-${lang}.jpg" src="/video/terminal-${lang}.mp4"
+        aria-label="${t('home_video')}" data-testid="home-video"></video>
       <div class="home-points">${points}</div>
       <p class="home-remote">${t('home_remote')} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('home_remote_link')}</a></p>
     </section>`)
