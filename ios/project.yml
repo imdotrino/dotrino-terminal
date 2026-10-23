@@ -18,8 +18,8 @@ settings:
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: P7G853375S
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: 0.13.7
-    CURRENT_PROJECT_VERSION: "53"
+    MARKETING_VERSION: 0.13.8
+    CURRENT_PROJECT_VERSION: "54"
 packages:
   # La librería nativa del ecosistema: el repo dotrino-native, como submódulo en ../native
   # (igual que Android). Perfil, transporte, el cliente del agente y la barra compartida.

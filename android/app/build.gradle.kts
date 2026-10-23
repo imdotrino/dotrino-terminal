@@ -39,8 +39,8 @@ android {
         applicationId = "com.dotrino.terminal"
         minSdk = 31
         targetSdk = 36
-        versionCode = 52
-        versionName = "0.13.7"
+        versionCode = 53
+        versionName = "0.13.8"
     }
 
     // La MISMA llave que la app de identidad (Play App Signing «misma llave que otra app»): su
