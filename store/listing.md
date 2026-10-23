@@ -55,7 +55,7 @@ QUÉ HACES CON ELLA
 
 CÓMO CUIDA LO TUYO
 
-• Solo entran los aparatos que tú enlazaste a tu cuenta. No hay usuario ni contraseña que adivinar.
+• Solo entran los aparatos que tú enlazaste a tu cuenta.
 • Lo que escribes y lo que muestra la consola va cifrado entre tu teléfono y tu computadora. Cuando se puede, va directo; si no, por un servidor de reenvío que no puede leerlo.
 • Puedes ponerle además una clave a cada computadora.
 • Sin anuncios, sin estadísticas y sin llevar cuenta de lo que haces.
@@ -98,7 +98,7 @@ WHAT YOU DO WITH IT
 
 HOW IT KEEPS WHAT'S YOURS
 
-• Only the devices you linked to your account get in. There's no username or password to guess.
+• Only the devices you linked to your account get in.
 • What you type and what the console shows is encrypted between your phone and your computer. Directly when possible; otherwise through a relay server that can't read it.
 • You can also put a code on each computer.
 • No ads, no statistics and no keeping track of what you do.
