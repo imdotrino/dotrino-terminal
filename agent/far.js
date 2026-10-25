@@ -27,6 +27,13 @@ import { keyLabel } from '@dotrino/identity/capabilities'
 export const REFRESH_MS = 3000
 /** Cada cuánto se vuelve a mirar QUÉ máquinas hay (el acta y quién contesta). */
 export const DISCOVER_MS = 30_000
+/**
+ * Cada cuánto se le pide el acta a la BÓVEDA. Entre medias vale la guardada, que el agente ya
+ * refresca solo (`REVOKE_REFRESH_MS`, también 5 min). Pedirla en cada vuelta (30 s) era un
+ * `vault.devices` a la cuenta cada 30 s mientras hubiera una ventana abierta, y eso no dejaba
+ * dormirse a la bóveda de Lambda (2026-10-25).
+ */
+export const MEMBERS_MS = 5 * 60_000
 /** Sin que nadie pregunte durante este rato, se sueltan las conexiones. */
 export const IDLE_MS = 60_000
 /** Lo que se espera la respuesta de una máquina antes de darla por apagada. */
@@ -40,7 +47,9 @@ export const shortId = keyLabel
 /** Las máquinas con agente de terminal encendido, con el transporte de verdad. */
 async function discoverReal ({ link, dir, kind, state }) {
   const cl = clientLink(link, { dir })
-  const members = await listAgentsByLabel(cl.id)
+  const fresh = !state.askedVaultAt || Date.now() - state.askedVaultAt >= MEMBERS_MS
+  const members = await listAgentsByLabel(cl.id, undefined, { fresh })
+  if (fresh) state.askedVaultAt = Date.now()
   if (!members.length) return []
   if (!state.probe) {
     const { WebSocketProxyClient } = await import('@dotrino/proxy-client')
