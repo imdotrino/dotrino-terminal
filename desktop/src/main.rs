@@ -613,14 +613,40 @@ fn arrowed<'a>(under: Element<'a, Message>, on: bool) -> Element<'a, Message> {
     iced::widget::stack![under, container(arrow).width(Length::Fill).height(Length::Fill).align_x(iced::alignment::Horizontal::Right).align_y(iced::alignment::Vertical::Center)].into()
 }
 
+/// Lo que ocupa la barra del panel, a la izquierda del contenido: 3 px de barra y 1 de aire.
+const PANEL_BAR_W: f32 = 3.0;
+const PANEL_BAR_GAP: f32 = 1.0;
+
 /// El panel con su franja para la flecha: el fondo del panel a su ancho y, al lado, `ARROW_W` con
-/// el fondo de la terminal; encima, el contenido, que se desplaza con la flecha dentro.
-fn with_arrow_gutter<'a>(content: Element<'a, Message>, width: f32, pad: iced::Padding, term_bg: Color) -> Element<'a, Message> {
+/// el fondo de la terminal; encima, el contenido, que se desplaza con la flecha dentro. Si no cabe,
+/// la barra va a la izquierda, delgada, en el hueco que deja `PANEL_BAR_W` (ver `PanelScroll`).
+fn with_arrow_gutter<'a>(id: window::Id, scroll: PanelScroll, content: Element<'a, Message>, width: f32, pad: iced::Padding, term_bg: Color) -> Element<'a, Message> {
     let back = row![
         container(space()).width(width).height(Length::Fill).style(|theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() }),
         container(space()).width(ARROW_W).height(Length::Fill).style(move |_: &Theme| container::Style { background: Some(term_bg.into()), ..Default::default() }),
     ];
-    iced::widget::stack![back, container(iced::widget::scrollable(content)).width(width + ARROW_W).height(Length::Fill).padding(pad)].into()
+    let pad = iced::Padding { left: pad.left + PANEL_BAR_W + PANEL_BAR_GAP, ..pad };
+    let content = iced::widget::sensor(content).on_show(move |s| Message::PanelContent(id, s.height)).on_resize(move |s| Message::PanelContent(id, s.height));
+    let list = iced::widget::scrollable(content)
+        .id(panel_id(id))
+        .direction(iced::widget::scrollable::Direction::Vertical(iced::widget::scrollable::Scrollbar::hidden()))
+        .on_scroll(move |v| Message::PanelScrolled(id, v.absolute_offset().y));
+    let list = iced::widget::sensor(container(list).width(width + ARROW_W).height(Length::Fill).padding(pad))
+        .on_show(move |s| Message::PanelViewport(id, s.height - pad.top - pad.bottom))
+        .on_resize(move |s| Message::PanelViewport(id, s.height - pad.top - pad.bottom));
+    // Hueco en vez de barra cuando todo cabe: la pila no cambia de forma (ver la de la terminal).
+    let max = scroll.max();
+    let bar: Element<'a, Message> = if max > 0.5 {
+        let handle = (scroll.viewport * scroll.viewport / scroll.content).max(24.0) as u16;
+        // Arriba es el principio: el deslizador vertical tiene el máximo arriba.
+        let bar = iced::widget::vertical_slider(0.0..=max, max - scroll.offset.min(max), move |v| Message::PanelScrollTo(id, max - v))
+            .width(PANEL_BAR_W)
+            .style(move |theme: &Theme, status| scrollbar(theme, status, handle, 2.0));
+        container(bar).height(Length::Fill).padding(iced::Padding { top: pad.top, bottom: pad.bottom, left: 1.0, right: 0.0 }).into()
+    } else {
+        space().into()
+    };
+    iced::widget::stack![back, list, bar].into()
 }
 
 /// El botón de una consola en el panel, con el borde del color de lo que está haciendo.
@@ -874,6 +900,24 @@ struct Win {
     /// La tarjeta «de qué va», plegada a un botón. Es de ESTA ventana: plegarla aquí no pliega
     /// las demás (dueño, 2026-10-16). Una ventana nueva empieza como se dejó la última.
     about_folded: bool,
+    /// Lo que se sabe del desplazamiento del panel, para dibujar su barra (ver `PanelScroll`).
+    panel: PanelScroll,
+}
+
+/// El desplazamiento del panel de consolas, en píxeles. La barra nativa de iced solo va a la
+/// derecha y tapaba los puntos y la flecha de la consola activa; la del panel la dibuja la app, a
+/// la izquierda y delgada (dueño, 2026-10-27).
+#[derive(Clone, Copy, Default)]
+struct PanelScroll {
+    offset: f32,
+    content: f32,
+    viewport: f32,
+}
+
+impl PanelScroll {
+    fn max(&self) -> f32 {
+        (self.content - self.viewport).max(0.0)
+    }
 }
 
 impl Win {
@@ -1038,6 +1082,12 @@ enum Message {
     TogglePin(window::Id),
     /// La barra de desplazamiento: llevar la vista a tantas líneas desde el final.
     ScrollTo(window::Id, f32),
+    /// El panel de consolas: su contenido o su hueco cambiaron de alto, o se desplazó.
+    PanelContent(window::Id, f32),
+    PanelViewport(window::Id, f32),
+    PanelScrolled(window::Id, f32),
+    /// La barra del panel: llevarlo a tantos píxeles desde arriba.
+    PanelScrollTo(window::Id, f32),
     /// Colapsar el panel a solo botones (o volver a abrirlo).
     CollapseSidebar(window::Id),
     /// La tarjeta «de qué va» de una ventana: plegarla o abrirla.
@@ -1727,7 +1777,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, reopening: false, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None, about_folded: about_folded() });
+        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, reopening: false, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None, about_folded: about_folded(), panel: PanelScroll::default() });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -2832,6 +2882,32 @@ impl App {
                 }
                 Task::none()
             }
+            Message::PanelContent(id, h) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.panel.content = h;
+                    w.panel.offset = w.panel.offset.min(w.panel.max());
+                }
+                Task::none()
+            }
+            Message::PanelViewport(id, h) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.panel.viewport = h;
+                    w.panel.offset = w.panel.offset.min(w.panel.max());
+                }
+                Task::none()
+            }
+            Message::PanelScrolled(id, y) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.panel.offset = y;
+                }
+                Task::none()
+            }
+            Message::PanelScrollTo(id, y) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.panel.offset = y;
+                }
+                iced::widget::operation::scroll_to(panel_id(id), iced::widget::scrollable::AbsoluteOffset { x: 0.0, y })
+            }
             Message::TogglePin(id) => {
                 // ⤢: esta ventana fija el tamaño de su consola, o lo suelta (Ctrl+] p / u).
                 let pinned = self.pinned_here(id);
@@ -3314,19 +3390,23 @@ impl App {
                     .width(w)
                     .height(h);
                 // La barra de desplazamiento: solo si hay historial. Arriba es el principio.
+                // Sin historial va un hueco en su sitio, no la terminal sola: si la forma del árbol
+                // cambia, iced estrena el estado del widget de la terminal y con él se pierde el
+                // foco del teclado. Pasaba al entrar en una TUI (pantalla alterna: sin historial).
                 let (offset, history, screen) = term.scroll_position();
-                let view: Element<'_, Message> = if history > 0 {
+                let bar: Element<'_, Message> = if history > 0 {
                     // El asa mide lo que se ve frente al total (con un mínimo para poder agarrarla).
                     let line_px = self.font.size * self.font.scale_factor;
                     let track = screen as f32 * line_px;
                     let handle = (track * screen as f32 / (history + screen) as f32).max(24.0) as u16;
                     let bar = iced::widget::vertical_slider(0.0..=history as f32, offset as f32, move |v| Message::ScrollTo(id, v))
                         .width(10)
-                        .style(move |theme: &Theme, status| scrollbar(theme, status, handle));
-                    row![view, container(bar).padding([2, 1])].height(h).into()
+                        .style(move |theme: &Theme, status| scrollbar(theme, status, handle, 6.0));
+                    container(bar).padding([2, 1]).into()
                 } else {
-                    view.into()
+                    space().into()
                 };
+                let view: Element<'_, Message> = row![view, bar].height(h).into();
                 // Clic derecho: Copiar y Pegar, lo mismo que el menú Editar.
                 ContextMenu::new(view, move || {
                     let selected = term.selected_text();
@@ -3358,11 +3438,11 @@ impl App {
         // La tarjeta «de qué va» flota sobre la consola (solo si hay consola que mostrar).
         let body: Element<'_, Message> = match (win.term.is_some() && win.error.is_none()).then(|| self.about(id, win)).flatten() {
             Some(card) => iced::widget::stack![body, card].into(),
-            None => body,
+            None => iced::widget::stack![body, space()].into(),
         };
         let main: Element<'_, Message> = match (win.sidebar, &win.profile) {
             (true, Some(profile)) => row![self.side(id, profile), body].into(),
-            _ => body,
+            _ => row![space(), body].into(),
         };
         let all: Element<'_, Message> = column![self.menu(id, win), main].into();
         // El aviso (versión nueva, o reiniciar) flota centrado sobre la ventana.
@@ -3377,11 +3457,11 @@ impl App {
                 let over = container(chip).width(Length::Fill).height(Length::Fill).align_x(iced::alignment::Horizontal::Center).align_y(iced::alignment::Vertical::Bottom).padding(16);
                 iced::widget::stack![all, over].into()
             }
-            None => all,
+            None => iced::widget::stack![all, space()].into(),
         };
         match &self.notice {
             Some(n) => iced::widget::stack![all, self.notice_card(id, n)].into(),
-            None => all,
+            None => iced::widget::stack![all, space()].into(),
         }
     }
 
@@ -3478,6 +3558,7 @@ impl App {
         // Las consolas de la máquina que mira la ventana (para el tamaño y ⤢).
         let shown = self.consoles.get(&scope_key(profile, here.as_deref())).cloned().unwrap_or_default();
         let my_tag = self.windows.get(&id).map(|w| w.tag.clone()).unwrap_or_default();
+        let scroll = self.windows.get(&id).map(|w| w.panel).unwrap_or_default();
         let panel_style = |theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() };
         // Colapsado: una franja estrecha, un botón numerado por consola (el título, al pasar).
         let collapsed = self.windows.get(&id).is_some_and(|w| w.sidebar_collapsed);
@@ -3602,7 +3683,7 @@ impl App {
                 strip = strip.push(container(b).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
             }
             // Lo justo para dos dígitos («00»): 24 px de botón en 30 de franja.
-            return with_arrow_gutter(strip.into(), 30.0, iced::Padding { top: 4.0, bottom: 4.0, left: 3.0, right: 0.0 }, term_bg);
+            return with_arrow_gutter(id, scroll, strip.into(), 30.0 + PANEL_BAR_W + PANEL_BAR_GAP, iced::Padding { top: 4.0, bottom: 4.0, left: 3.0, right: 0.0 }, term_bg);
         }
         // Como en la franja colapsada: «« » arriba y «+» en su propia fila, debajo.
         let mut items = column![
@@ -3741,7 +3822,7 @@ impl App {
             items = items.push(container(separator()).padding(iced::Padding { top: 6.0, right: ARROW_W, ..Default::default() }));
             items = items.push(container(column![text(t("Otras máquinas", "Other machines")).size(13), text(why).size(11).style(tone)].spacing(2)).padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
         }
-        with_arrow_gutter(items.into(), 210.0, iced::Padding { top: 4.0, bottom: 4.0, left: 4.0, right: 0.0 }, term_bg)
+        with_arrow_gutter(id, scroll, items.into(), 210.0 + PANEL_BAR_W + PANEL_BAR_GAP, iced::Padding { top: 4.0, bottom: 4.0, left: 4.0, right: 0.0 }, term_bg)
     }
 
     fn title(&self, id: window::Id) -> String {
@@ -3866,6 +3947,10 @@ fn reading<'a>(id: window::Id, part: Part, content: &'a iced::widget::text_edito
 
 /// Un mensaje dentro de `ms` milisegundos.
 /// El editor de la nota de una ventana, para darle el teclado al abrirlo.
+fn panel_id(id: window::Id) -> iced::widget::Id {
+    iced::widget::Id::from(format!("panel-{id:?}"))
+}
+
 fn note_editor_id(id: window::Id) -> iced::widget::Id {
     iced::widget::Id::from(format!("note-{id:?}"))
 }
@@ -4012,15 +4097,17 @@ fn agent_send(dir: &Path, msg: &serde_json::Value) {
 }
 
 /// La barra de desplazamiento: un raíl tenue y un asa rectangular, como una barra de verdad.
-fn scrollbar(theme: &Theme, status: iced::widget::slider::Status, handle_len: u16) -> iced::widget::slider::Style {
+fn scrollbar(theme: &Theme, status: iced::widget::slider::Status, handle_len: u16, rail: f32) -> iced::widget::slider::Style {
     use iced::widget::slider::{Handle, HandleShape, Rail, Style};
     let p = theme.extended_palette();
     let handle = match status {
+        // La delgada (la del panel) con más contraste: con 3 px el gris de siempre no se ve.
+        iced::widget::slider::Status::Active if rail < 6.0 => p.background.base.text.scale_alpha(0.35),
         iced::widget::slider::Status::Active => p.background.strong.color,
         _ => p.primary.weak.color,
     };
     Style {
-        rail: Rail { backgrounds: (p.background.weak.color.into(), p.background.weak.color.into()), width: 6.0, border: Border::default().rounded(3.0) },
+        rail: Rail { backgrounds: (p.background.weak.color.into(), p.background.weak.color.into()), width: rail, border: Border::default().rounded(3.0) },
         handle: Handle { shape: HandleShape::Rectangle { width: handle_len, border_radius: 3.0.into() }, background: handle.into(), border_width: 0.0, border_color: Color::TRANSPARENT },
     }
 }
