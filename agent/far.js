@@ -166,10 +166,14 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     idle.unref?.()
   }
 
-  /** Nadie pregunta: se sueltan las conexiones. La lista se olvida para no enseñar algo viejo. */
+  /**
+   * Nadie pregunta: se sueltan las conexiones. La lista se olvida para no enseñar algo viejo, y
+   * las claves también: desconectado es desconectado, y la próxima vez se vuelven a escribir.
+   */
   function release () {
     for (const m of machines.values()) drop(m)
     machines.clear()
+    codes.clear()
     try { state.probe?.close() } catch (_) {}
     state.probe = null
     discoveredAt = 0; refreshedAt = 0
@@ -247,14 +251,35 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
       return
     }
     if (gone) { try { rc.close() } catch (_) {} return }
+    let attached = null                // la consola que mira la ventana allí
     rc.on('message', (p) => {
+      if (p?.type === 'attached') attached = p.id
       if (p?.type === 'unlocked' && typed != null) { codes.set(m.sub, typed); typed = null }
       if (p?.type === 'fail' && (p.code === 'bad-code' || p.code === 'wait')) typed = null
       session.send(p)
     })
     rc.on('error', (e) => session.send({ type: 'fail', code: e.code || 'far-error', message: e.message }))
-    // La otra máquina se reinició: sus consolas ya no existen. Se dice; no se inventa otra.
-    rc.on('resumed', () => session.send({ type: 'fail', code: 'machine-restarted', message: 'that machine restarted: its consoles are gone' }))
+    // LA SESIÓN CON LA OTRA MÁQUINA SE PERDIÓ y se abrió otra: o la máquina se reinició, o la
+    // sesión venció (30 min sin mensajes: una consola quieta). Se pregunta a la sesión nueva:
+    // - pide la clave: DESCONECTADA. La clave guardada se olvida y el panel suelta su conexión,
+    //   así deja de enseñar sus consolas y vuelve a salir «Escribir la clave» (dueño,
+    //   2026-10-27). Antes el panel la reenviaba solo y las consolas seguían a la vista.
+    // - la consola de la ventana sigue allí: solo venció la sesión, la ventana se vuelve a enganchar.
+    // - no está: la máquina se reinició y sus consolas ya no existen. Se dice; no se inventa otra.
+    rc.on('resumed', () => {
+      ask(rc, { type: 'list' }, 'consoles').then((r) => {
+        if (r.type === 'fail' && r.code === 'locked') {
+          codes.delete(m.sub)
+          const panel = machines.get(m.sub)
+          if (panel) { drop(panel); panel.consoles = null; panel.locked = true; panel.error = null }
+          session.send({ type: 'fail', code: 'locked-again', message: 'that machine asks for its code again' })
+        } else if (r.type === 'consoles' && attached && r.list.some((c) => c.id === attached)) {
+          session.send({ type: 'fail', code: 'session-resumed', message: 'the session with that machine was renewed' })
+        } else {
+          session.send({ type: 'fail', code: 'machine-restarted', message: 'that machine restarted: its consoles are gone' })
+        }
+      }, (e) => session.send({ type: 'fail', code: e.code || 'unreachable', message: e.message }))
+    })
     session.send({ type: 'via', machine: { sub: m.sub, id: m.id, name: m.name } })
     for (const msg of queue.splice(0)) forward(msg)
   }

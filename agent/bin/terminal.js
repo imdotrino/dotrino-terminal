@@ -975,6 +975,16 @@ function interactive (conn, first, dir) {
       // sigue: pasa a una que haya, o se queda sin consola. Terminar aquí cerraba la ventana
       // (y la app, si era la última) en la máquina que solo estaba mirando.
       if (m.code === 'machine-restarted') { lost(); return }
+      // LA OTRA MÁQUINA VOLVIÓ A PEDIR SU CLAVE (la sesión venció sin uso): desconectada. Se
+      // termina sin error, como cuando se queda sin consolas, y la app devuelve la ventana a las
+      // consolas de esta máquina; en el panel, esa máquina vuelve a salir con «Escribir la clave».
+      if (m.code === 'locked-again') return finish(0, t('Esa máquina se desconectó: vuelve a escribir su clave para entrar.', 'That machine disconnected: type its code again to get in.'))
+      // Solo venció la sesión y la consola sigue allí: se vuelve a enganchar a la misma.
+      if (m.code === 'session-resumed' && consoleId) {
+        switching = false; recovering = true
+        conn.send({ type: 'attach', id: consoleId, ...size(), ...tag() })
+        return
+      }
       // FALLÓ UN CAMBIO DE CONSOLA (la que se pidió ya no existe: el panel de la app iba un
       // instante por detrás). El agente rechaza ANTES de soltar la actual, así que esta ventana
       // sigue en la suya: se vuelve a pintar y se sigue. Terminar aquí cerraba la ventana entera

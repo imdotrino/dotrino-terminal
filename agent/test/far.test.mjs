@@ -28,22 +28,33 @@ function otherMachine ({ sub, id, name, code = null }) {
   const hub = makeHub(loadPty(), { shell: '/bin/sh' })
   const gate = makeGate(dir)
   let sessions = 0
+  /** Las conexiones abiertas; `expire()` les vence la sesión como lo hace la de verdad. */
+  const conns = []
   const connect = () => {
     sessions++
-    const toMachine = { message: [], close: [] }
     const toClient = { message: [], error: [], resumed: [] }
-    serveSession({
-      device: 'the-window-machine',
-      on (ev, cb) { toMachine[ev].push(cb); return this },
-      async send (p) { queueMicrotask(() => { for (const cb of [...toClient.message]) cb(p) }) }
-    }, hub, { origin: 'remote', gate })
-    return {
+    let toMachine
+    // Una sesión nueva con la máquina (al conectar, y al volver a saludar tras vencer).
+    const greet = () => {
+      if (toMachine) for (const cb of toMachine.close) cb()
+      toMachine = { message: [], close: [] }
+      serveSession({
+        device: 'the-window-machine',
+        on (ev, cb) { toMachine[ev].push(cb); return this },
+        async send (p) { queueMicrotask(() => { for (const cb of [...toClient.message]) cb(p) }) }
+      }, hub, { origin: 'remote', gate })
+    }
+    greet()
+    const conn = {
       on (ev, cb) { toClient[ev].push(cb); return () => { toClient[ev] = toClient[ev].filter((f) => f !== cb) } },
       async send (m) { queueMicrotask(() => { for (const cb of toMachine.message) cb(m) }) },
-      close () { for (const cb of toMachine.close) cb() }
+      close () { for (const cb of toMachine.close) cb() },
+      expire () { greet(); for (const cb of toClient.resumed) cb({}) }
     }
+    conns.push(conn)
+    return conn
   }
-  return { sub, id, name, hub, connect, sessions: () => sessions, done: () => { hub.killAll(); fs.rmSync(dir, { recursive: true, force: true }) } }
+  return { sub, id, name, hub, connect, conns, sessions: () => sessions, done: () => { hub.killAll(); fs.rmSync(dir, { recursive: true, force: true }) } }
 }
 
 async function setup (others, { linked = true } = {}) {
@@ -147,6 +158,52 @@ test('una máquina con clave sale cerrada; tras escribirla en una ventana, el pa
     return m && m.list[0].consoles?.length === 1
   })
   assert.equal(panel.last('machines').list[0].locked, false)
+  done()
+})
+
+test('si la sesión de la ventana vence y la máquina vuelve a pedir la clave, el panel deja de enseñar sus consolas', async () => {
+  const b = otherMachine({ sub: 'pub-b', id: 'BBBB-0001', name: 'oficina', code: 'secreto' })
+  const c = b.hub.create({ cols: 80, rows: 24, origin: 'local' })
+  const { dir, done } = await setup([b])
+  const panel = await win(dir)
+  const w = await win(dir)
+  w.c.send({ type: 'via', machine: 'oficina' })
+  await until(() => w.last('via'))
+  w.c.send({ type: 'unlock', code: 'secreto' })
+  await until(() => w.last('unlocked'))
+  w.c.send({ type: 'attach', id: c.id, cols: 80, rows: 24 })
+  await until(() => w.last('attached'))
+  await until(() => {
+    panel.c.send({ type: 'machines' })
+    return panel.last('machines')?.list[0].consoles?.length === 1
+  })
+
+  // La sesión de la ventana es la última que se abrió (el panel abrió la suya antes).
+  b.conns.at(-1).expire()
+  await until(() => w.last('fail'))
+  assert.equal(w.last('fail').code, 'locked-again')
+  panel.got.length = 0
+  await until(() => {
+    panel.c.send({ type: 'machines' })
+    const m = panel.last('machines')
+    return m && m.list[0].locked === true
+  })
+  assert.equal(panel.last('machines').list[0].consoles, null, 'desconectada no enseña sus consolas')
+  done()
+})
+
+test('si solo vence la sesión (sin clave) y la consola sigue allí, la ventana vuelve a engancharse', async () => {
+  const b = otherMachine({ sub: 'pub-b', id: 'BBBB-0001', name: 'oficina' })
+  const c = b.hub.create({ cols: 80, rows: 24, origin: 'local' })
+  const { dir, done } = await setup([b])
+  const w = await win(dir)
+  w.c.send({ type: 'via', machine: 'oficina' })
+  await until(() => w.last('via'))
+  w.c.send({ type: 'attach', id: c.id, cols: 80, rows: 24 })
+  await until(() => w.last('attached'))
+  b.conns.at(-1).expire()
+  await until(() => w.last('fail'))
+  assert.equal(w.last('fail').code, 'session-resumed')
   done()
 })
 
