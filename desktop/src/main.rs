@@ -300,8 +300,87 @@ fn user_at_host() -> Option<String> {
     .clone()
 }
 
+/// La ruta de un enlace: la de una ruta, o la de un `file://`; `None` si es un enlace web.
+fn link_path(link: &iced_term::links::Link) -> Option<String> {
+    if link.kind == iced_term::links::LinkKind::Path {
+        return Some(link.target.clone());
+    }
+    let rest = link.target.get(..7).filter(|h| h.eq_ignore_ascii_case("file://")).map(|_| &link.target[7..])?;
+    // `file://host/ruta`: el host se ignora (es esta máquina).
+    let path = &rest[rest.find('/')?..];
+    Some(percent_decode(path))
+}
+
+/// `%20` → espacio. Un `%` sin dos cifras hexadecimales detrás se queda como está.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Some(v) = s.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// La ruta absoluta: `~` es la carpeta personal, y una relativa cuelga de la carpeta de la
+/// consola (que el agente da con `~`). Sin esa carpeta, una relativa no se adivina: `None`.
+fn resolve_path(p: &str, cwd: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
+    let expand = |s: &str| -> Option<PathBuf> {
+        if s == "~" {
+            return home.map(Path::to_path_buf);
+        }
+        match s.strip_prefix("~/") {
+            Some(rest) => home.map(|h| h.join(rest)),
+            None => Some(PathBuf::from(s)),
+        }
+    };
+    let full = expand(p)?;
+    if full.is_absolute() {
+        return Some(full);
+    }
+    Some(expand(cwd?)?.join(full))
+}
+
 #[cfg(test)]
 mod tests {
+    /// La regla de enlaces y rutas (vendor/iced_term/src/links.rs) contra los MISMOS casos que la
+    /// web, Android e iOS.
+    #[test]
+    fn links_follow_the_shared_vectors() {
+        let vectors: Vec<serde_json::Value> = serde_json::from_str(include_str!("../../test/links.vectors.json")).unwrap();
+        for v in vectors {
+            let line = v["line"].as_str().unwrap();
+            let got: Vec<serde_json::Value> = iced_term::links::find_links_in(line)
+                .into_iter()
+                .map(|l| serde_json::json!({ "text": l.text, "kind": if l.kind == iced_term::links::LinkKind::Url { "url" } else { "path" }, "target": l.target, "start": l.start }))
+                .collect();
+            assert_eq!(serde_json::Value::Array(got), v["links"], "{line}");
+        }
+    }
+
+    #[test]
+    fn a_link_path_resolves_home_relative_and_file_urls() {
+        use super::{link_path, resolve_path};
+        use iced_term::links::{Link, LinkKind};
+        use std::path::{Path, PathBuf};
+        let home = Path::new("/home/me");
+        assert_eq!(resolve_path("~/a.pdf", None, Some(home)), Some(PathBuf::from("/home/me/a.pdf")));
+        assert_eq!(resolve_path("/tmp/a", None, Some(home)), Some(PathBuf::from("/tmp/a")));
+        assert_eq!(resolve_path("./d/a.deb", Some("~/src"), Some(home)), Some(PathBuf::from("/home/me/src/./d/a.deb")));
+        assert_eq!(resolve_path("../a", None, Some(home)), None, "sin la carpeta de la consola no se adivina");
+        let url = |t: &str| Link { start: 0, end: t.len(), text: t.into(), kind: LinkKind::Url, target: t.into() };
+        assert_eq!(link_path(&url("file:///tmp/a%20b.pdf")).as_deref(), Some("/tmp/a b.pdf"));
+        assert_eq!(link_path(&url("https://dotrino.com/")), None);
+    }
+
     #[test]
     fn win_quote_follows_commandlinetoargvw() {
         assert_eq!(super::win_quote("plain"), "plain");
@@ -731,6 +810,8 @@ enum Notice {
     /// dotrino-terminal se actualizó y hay agentes que siguen con la versión anterior: para usar
     /// la nueva hay que pararlos, y eso cierra todas sus terminales.
     Agents(Stale),
+    /// Un enlace o una ruta que no se pudo abrir, y por qué.
+    Link(String),
 }
 
 /// Los agentes de esta máquina que corren con una versión que ya no es la instalada.
@@ -1041,6 +1122,9 @@ enum Message {
     /// Copiar un texto ya tomado: el del clic derecho, leído al abrir el menú (el clic sobre
     /// «Copiar» llega también a la terminal y empezaría una selección nueva, borrando esa).
     CopyText(window::Id, String),
+    /// Abrir un enlace o una ruta de la consola (Ctrl+clic, o el clic derecho). `folder`: la
+    /// carpeta que la contiene, en vez del archivo.
+    OpenLink(window::Id, iced_term::links::Link, bool),
     Paste(window::Id),
     Pasted(window::Id, Option<String>),
     Help,
@@ -2206,6 +2290,29 @@ impl App {
         list.iter().find(|c| c.watchers.iter().any(|w| w.tag.as_deref() == Some(win.tag.as_str()))).map(|c| c.id.clone())
     }
 
+    /// Abre un enlace o una ruta de la consola con lo que el sistema tenga para eso. Una ruta es
+    /// de la máquina de la consola: si la ventana mira OTRA máquina, aquí no está, y se dice.
+    fn open_link(&self, id: window::Id, link: &iced_term::links::Link, folder: bool) -> Result<(), String> {
+        let Some(file) = link_path(link) else {
+            return open::that_detached(&link.target).map_err(|e| format!("{}: {e}", link.target));
+        };
+        let win = self.windows.get(&id).ok_or("no window")?;
+        if let Some(m) = &win.machine {
+            return Err(t(
+                &format!("{file} está en otra máquina ({m}). Desde aquí solo se abren los archivos de esta computadora; en el teléfono o en terminal.dotrino.com sí se traen."),
+                &format!("{file} is on another machine ({m}). From here only this computer's files open; on the phone or at terminal.dotrino.com they are fetched."),
+            ));
+        }
+        let cwd = self.my_console(id).and_then(|c| c.cwd.clone());
+        let full = resolve_path(&file, cwd.as_deref(), home_dir().as_deref())
+            .ok_or_else(|| t(&format!("{file}: no se sabe en qué carpeta está la consola. Usa la ruta completa."), &format!("{file}: the folder of the console is unknown. Use the full path.")))?;
+        if !full.exists() {
+            return Err(t(&format!("{} no existe en esta computadora.", full.display()), &format!("{} does not exist on this computer.", full.display())));
+        }
+        let target = if folder && !full.is_dir() { full.parent().map(Path::to_path_buf).unwrap_or(full) } else { full };
+        open::that_detached(&target).map_err(|e| format!("{}: {e}", target.display()))
+    }
+
     /// La consola que muestra la ventana, tal como la cuenta el agente.
     fn my_console(&self, id: window::Id) -> Option<&ConsoleInfo> {
         let mine = self.mine(id)?;
@@ -2852,6 +2959,13 @@ impl App {
                 let selected = self.windows.get(&id).and_then(|w| w.term.as_ref()).map(|t| t.selected_text()).unwrap_or_default();
                 if selected.is_empty() { self.focus(id) } else { iced::clipboard::write(selected).chain(self.focus(id)) }
             }
+            Message::OpenLink(id, link, folder) => {
+                self.clear_stray_selection(id);
+                if let Err(why) = self.open_link(id, &link, folder) {
+                    self.notice = Some(Notice::Link(why));
+                }
+                self.focus(id)
+            }
             Message::CopyText(id, selected) => {
                 self.clear_stray_selection(id);
                 if selected.is_empty() { self.focus(id) } else { iced::clipboard::write(selected).chain(self.focus(id)) }
@@ -3236,6 +3350,7 @@ impl App {
                         win.title = title;
                         Task::none()
                     }
+                    iced_term::actions::Action::OpenLink(link) => self.handle(Message::OpenLink(id, link, false)),
                     _ => Task::none(),
                 }
             }
@@ -3410,13 +3525,23 @@ impl App {
                 // Clic derecho: Copiar y Pegar, lo mismo que el menú Editar.
                 ContextMenu::new(view, move || {
                     let selected = term.selected_text();
-                    let (copy_key, paste_key) = if cfg!(target_os = "macos") { ("⌘C", "⌘V") } else { ("Ctrl+Shift+C", "Ctrl+Shift+V") };
+                    let (copy_key, paste_key, click_key) = if cfg!(target_os = "macos") { ("⌘C", "⌘V", "⌘+clic") } else { ("Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+clic") };
+                    // Sobre un enlace o una ruta: abrirlo y copiarlo, antes que Copiar y Pegar.
+                    let mut items = column![];
+                    if let Some(link) = term.link_at_menu() {
+                        let path = link.kind == iced_term::links::LinkKind::Path || link.target.to_ascii_lowercase().starts_with("file://");
+                        let (open, copy) = if path { (t("Abrir", "Open"), t("Copiar la ruta", "Copy path")) } else { (t("Abrir el enlace", "Open link"), t("Copiar el enlace", "Copy link")) };
+                        items = items.push(entry(open, click_key, Some(Message::OpenLink(id, link.clone(), false))));
+                        if path {
+                            items = items.push(entry(t("Abrir la carpeta", "Open folder"), "", Some(Message::OpenLink(id, link.clone(), true))));
+                        }
+                        items = items.push(entry(copy, "", Some(Message::CopyText(id, link.target.clone())))).push(iced::widget::rule::horizontal(1));
+                    }
                     container(
-                        column![
-                            entry(t("Copiar", "Copy"), copy_key, (!selected.is_empty()).then(|| Message::CopyText(id, selected.clone()))),
-                            entry(t("Pegar", "Paste"), paste_key, Some(Message::Paste(id))),
-                        ]
-                        .width(220),
+                        items
+                            .push(entry(t("Copiar", "Copy"), copy_key, (!selected.is_empty()).then(|| Message::CopyText(id, selected.clone()))))
+                            .push(entry(t("Pegar", "Paste"), paste_key, Some(Message::Paste(id))))
+                            .width(220),
                     )
                     .padding(4)
                     .style(|theme: &Theme| container::Style {
@@ -3497,19 +3622,18 @@ impl App {
 
     /// El aviso sobre la ventana: qué pasa y dos botones (hacerlo ahora, o después).
     fn notice_card<'a>(&'a self, id: window::Id, notice: &Notice) -> Element<'a, Message> {
-        let (title, lines, go, go_msg) = match notice {
+        let (title, lines, go) = match notice {
             Notice::Offer(lines) => (
                 t("Hay una versión nueva", "There is a new version"),
                 lines.clone(),
-                t("Actualizar ahora", "Update now"),
-                Message::NoticeUpdate(id),
+                Some((t("Actualizar ahora", "Update now"), Message::NoticeUpdate(id))),
             ),
             Notice::Restart => (
                 t("La app se actualizó", "The app was updated"),
                 vec![t("Esta ventana sigue con la versión anterior. Al reiniciar, tus consolas no se cierran.", "This window keeps the old version. Restarting does not close your consoles.")],
-                t("Reiniciar la app", "Restart the app"),
-                Message::RestartApp,
+                Some((t("Reiniciar la app", "Restart the app"), Message::RestartApp)),
             ),
+            Notice::Link(why) => (t("No se pudo abrir", "Could not open it"), vec![why.clone()], None),
             Notice::Agents(st) => {
                 let mut lines = vec![
                     t(&format!("El agente de esta máquina sigue con la versión anterior. Para usar la {} hay que cerrar todas sus terminales.", st.installed), &format!("This machine's agent keeps the old version. Using {} means closing all its terminals.", st.installed)),
@@ -3521,17 +3645,20 @@ impl App {
                 if let Some(why) = &st.failed {
                     lines.push(format!("{}: {why}", t("No se pudo", "It failed")));
                 }
-                (t("dotrino-terminal se actualizó", "dotrino-terminal was updated"), lines, t("Cerrar todas las terminales", "Close all terminals"), Message::RestartAgents)
+                (t("dotrino-terminal se actualizó", "dotrino-terminal was updated"), lines, Some((t("Cerrar todas las terminales", "Close all terminals"), Message::RestartAgents)))
             }
         };
         let mut body = column![text(title).size(16)].spacing(6);
         for l in lines {
             body = body.push(text(l).size(13));
         }
-        let buttons = row![
-            button(text(t("Después", "Later")).size(13)).padding([6, 12]).style(menu_button).on_press(Message::NoticeLater),
-            button(text(go).size(13)).padding([6, 12]).on_press(go_msg),
-        ]
+        let buttons = match go {
+            Some((go, go_msg)) => row![
+                button(text(t("Después", "Later")).size(13)).padding([6, 12]).style(menu_button).on_press(Message::NoticeLater),
+                button(text(go).size(13)).padding([6, 12]).on_press(go_msg),
+            ],
+            None => row![button(text(t("Cerrar", "Close")).size(13)).padding([6, 12]).on_press(Message::NoticeLater)],
+        }
         .spacing(8);
         let card = container(column![body, container(buttons).width(Length::Fill).align_x(iced::alignment::Horizontal::Right)].spacing(14))
             .padding(16)

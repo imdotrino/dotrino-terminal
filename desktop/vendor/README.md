@@ -35,6 +35,13 @@ llamaba en cada evento, con una señal de redimensionado cada vez).
 Séptimo cambio: `Terminal::cell_size()` devuelve el tamaño de una celda en píxeles, para dibujar la
 consola al tamaño que tiene cuando el tamaño lo decide otra pantalla.
 
+Octavo cambio: enlaces y RUTAS. El crate solo reconocía URLs (con una regex) y las abría él con
+`open::that`, con un `panic!` si fallaba. Ahora la regla es la de toda la app (`src/links.rs`, la
+misma que `src/links.js` de la web, probada contra `test/links.vectors.json`), reconoce también
+rutas (`/tmp/a.pdf`, `~/x`, `./y`), y Ctrl+clic devuelve `Action::OpenLink` para que lo abra la
+app, que sabe de qué máquina es la consola y en qué carpeta está. `Terminal::link_at_menu()` dice
+qué enlace había bajo el último clic derecho, para el menú contextual.
+
 ## iced_aw 0.14.1
 
 Copia de [iced_aw](https://github.com/iced-rs/iced_aw) 0.14.1 (MIT) con UN cambio, en

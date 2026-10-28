@@ -113,6 +113,15 @@ impl<'a> TerminalView<'a> {
         let terminal_mode = terminal_content.terminal_mode;
 
         match event {
+            // Parche de Dotrino: el clic derecho abre el menú de la app; se apunta dónde fue.
+            iced_core::mouse::Event::ButtonPressed(
+                iced_core::mouse::Button::Right,
+            ) => {
+                let at = self.term.backend.mouse_point.lock().ok().and_then(|m| *m);
+                if let Ok(mut m) = self.term.backend.menu_point.lock() {
+                    *m = at;
+                }
+            },
             iced_core::mouse::Event::ButtonPressed(
                 iced_core::mouse::Button::Left,
             ) => {
@@ -129,6 +138,16 @@ impl<'a> TerminalView<'a> {
                 );
             },
             iced_core::mouse::Event::CursorMoved { position } => {
+                // Parche de Dotrino: dónde está el ratón, aunque la consola no tenga el foco, para
+                // saber qué enlace hay debajo al hacer clic derecho (`Terminal::link_at_mouse`).
+                if let Ok(mut m) = self.term.backend.mouse_point.lock() {
+                    *m = Some(Backend::selection_point(
+                        position.x - layout_position.x,
+                        position.y - layout_position.y,
+                        &terminal_content.terminal_size,
+                        terminal_content.grid.display_offset(),
+                    ));
+                }
                 if !state.is_focused() {
                     return Vec::default();
                 }
@@ -652,6 +671,15 @@ impl Widget<Event, Theme, iced::Renderer> for TerminalView<'_> {
 
         let is_cursor_in_layout = self.is_cursor_in_layout(cursor, layout);
         self.handle_focus(event, state, is_cursor_in_layout);
+        // Parche de Dotrino: un clic derecho fuera de la consola (la barra de desplazamiento) no
+        // es sobre ningún enlace.
+        if !is_cursor_in_layout
+            && *event == iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Right))
+        {
+            if let Ok(mut m) = self.term.backend.menu_point.lock() {
+                *m = None;
+            }
+        }
 
         let commands = match event {
             iced::Event::Mouse(mouse_event) if is_cursor_in_layout => self

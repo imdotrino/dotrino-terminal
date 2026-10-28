@@ -1,5 +1,7 @@
 pub mod actions;
 pub mod bindings;
+/// Parche de Dotrino: enlaces y rutas de una línea (ver vendor/README.md).
+pub mod links;
 pub mod settings;
 
 mod backend;

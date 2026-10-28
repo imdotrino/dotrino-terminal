@@ -5,12 +5,11 @@ use alacritty_terminal::event::{
 };
 use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Direction, Line, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{
-    self, cell::Cell, test::TermSize, viewport_to_point, Term, TermMode,
+    self, cell::{Cell, Flags}, test::TermSize, viewport_to_point, Term, TermMode,
 };
 use alacritty_terminal::{tty, Grid};
 use iced::keyboard::Modifiers;
@@ -18,11 +17,11 @@ use iced_core::Size;
 use std::borrow::Cow;
 use std::cmp::min;
 use std::io::Result;
-use std::ops::{Index, RangeInclusive};
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use crate::links::{find_links, Link};
 
-const URL_REGEX: &str = r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file://|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`]+"#;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -136,7 +135,12 @@ pub struct Backend {
     size: TerminalSize,
     notifier: Notifier,
     last_content: RenderableContent,
-    pub(crate) url_regex: RegexSearch,
+    /// Parche de Dotrino: el enlace subrayado (Ctrl encima), dónde está el ratón ahora y dónde
+    /// estaba al último clic derecho: el menú pregunta por ese (`link_at_menu`), y no por donde
+    /// esté el ratón cuando ya se mueve sobre el menú.
+    hovered_link: Option<Link>,
+    pub(crate) mouse_point: std::sync::Mutex<Option<Point>>,
+    pub(crate) menu_point: std::sync::Mutex<Option<Point>>,
     /// Parche de Dotrino: ¿ya dijo el widget el tamaño real de su área? Hasta entonces el área es
     /// la de arranque (80×50 PÍXELES) y redimensionar con ella dejaba el PTY en ~11×3.
     layout_known: bool,
@@ -189,7 +193,9 @@ impl Backend {
             layout_known: false,
             notifier,
             last_content: initial_content,
-            url_regex: RegexSearch::new(URL_REGEX).expect("invalid url regexp"),
+            hovered_link: None,
+            mouse_point: std::sync::Mutex::new(None),
+            menu_point: std::sync::Mutex::new(None),
         })
     }
 
@@ -229,7 +235,9 @@ impl Backend {
                 self.update_selection(&mut term, x, y);
             },
             Command::ProcessLink(link_action, point) => {
-                self.process_link_action(&term, link_action, point);
+                if let Some(a) = self.process_link_action(&term, link_action, point) {
+                    action = a;
+                }
             },
             Command::MouseReport(button, modifiers, point, pressed) => {
                 self.process_mouse_report(button, modifiers, point, pressed);
@@ -244,41 +252,30 @@ impl Backend {
         terminal: &Term<EventProxy>,
         link_action: LinkAction,
         point: Point,
-    ) {
+    ) -> Option<Action> {
         match link_action {
             LinkAction::Hover => {
-                self.last_content.hovered_hyperlink = self.regex_match_at(
-                    terminal,
-                    point,
-                    &mut self.url_regex.clone(),
-                );
+                let found = link_at(terminal, point);
+                self.last_content.hovered_hyperlink = found.as_ref().map(|(r, _)| r.clone());
+                self.hovered_link = found.map(|(_, l)| l);
             },
             LinkAction::Clear => {
                 self.last_content.hovered_hyperlink = None;
+                self.hovered_link = None;
             },
+            // Parche de Dotrino: lo abre la app (`Action::OpenLink`), no el crate.
             LinkAction::Open => {
-                self.open_link();
+                return link_at(terminal, point).map(|(_, l)| Action::OpenLink(l));
             },
         };
+        None
     }
 
-    fn open_link(&self) {
-        if let Some(range) = &self.last_content.hovered_hyperlink {
-            let start = range.start();
-            let end = range.end();
-
-            let mut url = String::from(self.last_content.grid.index(*start).c);
-            for indexed in self.last_content.grid.iter_from(*start) {
-                url.push(indexed.c);
-                if indexed.point == *end {
-                    break;
-                }
-            }
-
-            open::that(url).unwrap_or_else(|_| {
-                panic!("link opening is failed");
-            })
-        }
+    /// Parche de Dotrino: el enlace o la ruta sobre el que se hizo el último clic derecho, o `None`.
+    pub fn link_at_menu(&self) -> Option<Link> {
+        let point = (*self.menu_point.lock().ok()?)?;
+        let term = self.term.lock();
+        link_at(&term, point).map(|(_, l)| l)
     }
 
     fn process_mouse_report(
@@ -526,38 +523,34 @@ impl Backend {
     pub fn renderable_content(&self) -> &RenderableContent {
         &self.last_content
     }
-
-    /// Based on alacritty/src/display/hint.rs > regex_match_at
-    /// Retrieve the match, if the specified point is inside the content matching the regex.
-    fn regex_match_at(
-        &self,
-        terminal: &Term<EventProxy>,
-        point: Point,
-        regex: &mut RegexSearch,
-    ) -> Option<Match> {
-        let x = visible_regex_match_iter(terminal, regex)
-            .find(|rm| rm.contains(&point));
-        x
-    }
 }
 
-/// Copied from alacritty/src/display/hint.rs:
-/// Iterate over all visible regex matches.
-fn visible_regex_match_iter<'a>(
-    term: &'a Term<EventProxy>,
-    regex: &'a mut RegexSearch,
-) -> impl Iterator<Item = Match> + 'a {
-    let viewport_start = Line(-(term.grid().display_offset() as i32));
-    let viewport_end = viewport_start + term.bottommost_line();
-    let mut start =
-        term.line_search_left(Point::new(viewport_start, Column(0)));
-    let mut end = term.line_search_right(Point::new(viewport_end, Column(0)));
-    start.line = start.line.max(viewport_start - 100);
-    end.line = end.line.min(viewport_end + 100);
-
-    RegexIter::new(start, end, Direction::Right, term, regex)
-        .skip_while(move |rm| rm.end().line < viewport_start)
-        .take_while(move |rm| rm.start().line <= viewport_end)
+/// Parche de Dotrino: el enlace de la línea de `point` que pasa por él, con las celdas que ocupa.
+/// La línea se lee de la pantalla (una línea partida en dos no se junta).
+fn link_at(
+    terminal: &Term<EventProxy>,
+    point: Point,
+) -> Option<(RangeInclusive<Point>, Link)> {
+    let grid = terminal.grid();
+    if point.line < grid.topmost_line() || point.line > grid.bottommost_line() {
+        return None;
+    }
+    let row = &grid[point.line];
+    let mut chars = Vec::with_capacity(grid.columns());
+    let mut cols = Vec::with_capacity(grid.columns());
+    for c in 0..grid.columns() {
+        let cell = &row[Column(c)];
+        if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            continue;
+        }
+        chars.push(cell.c);
+        cols.push(c);
+    }
+    let i = cols.iter().rposition(|&c| c <= point.column.0)?;
+    let link = find_links(&chars).into_iter().find(|l| i >= l.start && i < l.end)?;
+    let start = Point::new(point.line, Column(cols[link.start]));
+    let end = Point::new(point.line, Column(cols[link.end - 1]));
+    Some((start..=end, link))
 }
 
 /// Ver `Terminal::layout_size` (parche de Dotrino).

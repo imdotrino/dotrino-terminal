@@ -98,6 +98,11 @@ impl Terminal {
 
     /// Quita la selección. Parche de Dotrino: el clic sobre una opción de un menú contextual
     /// llega también a la terminal de debajo y empieza una selección que nadie pidió.
+    /// Parche de Dotrino: el enlace o la ruta sobre el que se hizo el último clic derecho.
+    pub fn link_at_menu(&self) -> Option<crate::links::Link> {
+        self.backend.link_at_menu()
+    }
+
     pub fn clear_selection(&mut self) {
         crate::backend::clear_selection(&mut self.backend);
         self.redraw();
