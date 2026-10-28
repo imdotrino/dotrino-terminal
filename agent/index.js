@@ -21,12 +21,16 @@
  *                     { type:'unlock', code } (la clave de la máquina, si tiene: access.js) ·
  *                     { type:'file', up, seq, data, last? } (una imagen, en trozos base64 y en
  *                       orden; cada trozo se acusa con `filed`, y el último trae la `path` donde
- *                       quedó en esta máquina: uploads.js)
+ *                       quedó en esta máquina: uploads.js) ·
+ *                     { type:'fetch', id, path, seq } (un trozo de un archivo de esta máquina, para
+ *                       abrirlo en el aparato; una ruta relativa cuelga de la carpeta de la consola
+ *                       enganchada: downloads.js)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', id, data } ·
  *                     { type:'exit', code, closedBy? } · { type:'fail', code, message, retryMs? } ·
  *                     { type:'unlocked' } · { type:'noted', console } ·
- *                     { type:'filed', up, seq, path? }
+ *                     { type:'filed', up, seq, path? } ·
+ *                     { type:'fetched', id, seq, path, name, size, mtime, data, last? }
  *
  * Con clave puesta, una sesión remota que no la ha escrito recibe `fail` con `code:'locked'`
  * a todo lo que pida; tras `unlock` vale para esa conexión. `bad-code` y `wait` traen
@@ -40,11 +44,12 @@ import { startRemoteAgent } from '@dotrino/remote-agent/agent'
 import { dataDir, loadLink, LABEL } from './link.js'
 import { listTransports, netReport } from '@dotrino/proxy-client'
 import { shortId } from './far.js'
-import { ConsoleHub, pieces, isTyped } from './consoles.js'
+import { ConsoleHub, pieces, isTyped, cwdOf } from './consoles.js'
 import { listenLocal } from './local.js'
 import { makeGate } from './access.js'
 import { makeFar } from './far.js'
 import { makeUploads } from './uploads.js'
+import { readPiece } from './downloads.js'
 
 const require = createRequire(import.meta.url)
 const { version: VERSION } = require('./package.json')
@@ -251,6 +256,14 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
       try { session.send({ type: 'filed', ...uploads.take(msg) }) } catch (e) {
         if (!e.code) console.error('[terminal-agent] could not keep an image:', e.message)
         fail(e.code || 'file-failed', e.message)
+      }
+      return
+    }
+    // Un archivo de esta máquina, para abrirlo en el aparato (una ruta que salió en la consola).
+    if (msg.type === 'fetch') {
+      try { session.send({ type: 'fetched', ...readPiece(msg, current ? cwdOf(current.pty?.pid) : null) }) } catch (e) {
+        if (!e.code || !['bad-fetch', 'no-cwd', 'no-file', 'no-read', 'is-dir', 'not-file', 'too-big', 'changed'].includes(e.code)) console.error('[terminal-agent] could not send a file:', e.message)
+        fail(e.code || 'fetch-failed', e.message)
       }
       return
     }

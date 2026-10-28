@@ -128,6 +128,13 @@ export class DemoAgentClient {
     return `/home/seyacat/.dotrino/agent/terminal-agent/default/uploads/img-demo-${bytes.length}.${bytes[0] === 0xff ? 'jpg' : 'png'}`
   }
 
+  /** En la demo no hay máquina: cualquier ruta trae un texto que lo dice. */
+  async fetchFile (path, { onProgress } = {}) {
+    const bytes = new TextEncoder().encode(`Demo: ${path}\n`)
+    onProgress?.(bytes.length, bytes.length)
+    return { name: (path.split('/').pop() || 'demo') + '.txt', path, bytes }
+  }
+
   async disconnect () { this.consoleId = null; machine.clients.delete(this); broadcast() }
   async close () { if (this.consoleId) this.kill(this.consoleId); await this.disconnect() }
 }

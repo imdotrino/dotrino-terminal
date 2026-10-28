@@ -1,0 +1,11 @@
+[
+  { "line": "see https://dotrino.com/a?b=1.", "links": [{ "text": "https://dotrino.com/a?b=1", "kind": "url", "target": "https://dotrino.com/a?b=1", "start": 4 }] },
+  { "line": "Wrote /tmp/claude-1000/x/scratchpad/abstract/abstract-cepi-telemedicina.pdf", "links": [{ "text": "/tmp/claude-1000/x/scratchpad/abstract/abstract-cepi-telemedicina.pdf", "kind": "path", "target": "/tmp/claude-1000/x/scratchpad/abstract/abstract-cepi-telemedicina.pdf", "start": 6 }] },
+  { "line": "dist/dotrino-terminal_0.2.81_amd64.deb ./dist/a.rpm", "links": [{ "text": "./dist/a.rpm", "kind": "path", "target": "./dist/a.rpm", "start": 39 }] },
+  { "line": "error in ~/src/main.js:12:3: boom", "links": [{ "text": "~/src/main.js:12:3", "kind": "path", "target": "~/src/main.js", "start": 9 }] },
+  { "line": "(open '/home/me/a b.txt') --out=/tmp/o.log", "links": [{ "text": "/home/me/a", "kind": "path", "target": "/home/me/a", "start": 7 }, { "text": "/tmp/o.log", "kind": "path", "target": "/tmp/o.log", "start": 32 }] },
+  { "line": "// comment and / alone and https:// and ../x", "links": [{ "text": "../x", "kind": "path", "target": "../x", "start": 40 }] },
+  { "line": "mailto:a@b.com,", "links": [{ "text": "mailto:a@b.com", "kind": "url", "target": "mailto:a@b.com", "start": 0 }] },
+  { "line": "src/main.js no-slash a/b", "links": [] },
+  { "line": "ñ /tmp/ñandú.png", "links": [{ "text": "/tmp/ñandú.png", "kind": "path", "target": "/tmp/ñandú.png", "start": 2 }] }
+]

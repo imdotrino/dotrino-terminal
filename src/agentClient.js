@@ -227,6 +227,39 @@ export class AgentClient {
     }
   }
 
+  /**
+   * Trae un archivo de la máquina (una ruta que salió en la consola), en trozos (agente ≥ 0.50;
+   * uno anterior no contesta y esto lanza `timeout`). Una ruta relativa cuelga de la carpeta de
+   * la consola enganchada. Lanza también `no-file`, `is-dir`, `too-big`, `no-read`, `no-cwd` y
+   * `changed` (el archivo cambió mientras llegaba).
+   * @param {string} path
+   * @param {{ onProgress?: (got:number, total:number)=>void }} [opts]
+   * @returns {Promise<{ name: string, path: string, bytes: Uint8Array }>}
+   */
+  async fetchFile (path, { onProgress } = {}) {
+    const id = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
+    const parts = []
+    let first = null
+    let got = 0
+    for (let seq = 0; ; seq++) {
+      const p = await this._ask({ type: 'fetch', id, path, seq }, 'fetched', 20000)
+      if (p.id !== id || p.seq !== seq) throw Object.assign(new Error('the machine answered about another file'), { code: 'bad-fetch' })
+      if (!first) first = p
+      else if (p.size !== first.size || p.mtime !== first.mtime) throw Object.assign(new Error('the file changed while it was coming'), { code: 'changed' })
+      const bin = atob(p.data || '')
+      const part = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) part[i] = bin.charCodeAt(i)
+      parts.push(part)
+      got += part.length
+      onProgress?.(got, first.size)
+      if (p.last) break
+    }
+    const bytes = new Uint8Array(got)
+    let at = 0
+    for (const part of parts) { bytes.set(part, at); at += part.length }
+    return { name: first.name, path: first.path, bytes }
+  }
+
   /** Suelta la consola (sigue viva en la máquina) y corta la conexión. */
   async disconnect () {
     try { if (this.rc.key && this.consoleId) await this.rc.send({ type: 'detach' }) } catch (_) {}

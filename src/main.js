@@ -20,6 +20,7 @@ import { panelLines, dropTarget } from './panel.js'
 import { clampRatio, splitLeaf, removeLeaf, layoutIds, restoreSaved } from './layout.js'
 import { doneWatcher } from './done.js'
 import { prepareImage, imageIn } from './image.js'
+import { findLinks, mimeOf } from './links.js'
 import { playDone } from '@dotrino/notifications/ring'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { keyLabel } from '@dotrino/identity/capabilities'
@@ -98,6 +99,12 @@ const M = {
     image_no_console: 'Abre una consola antes de adjuntar una imagen.', image_busy: 'Ya se está enviando una imagen.',
     image_old: 'Esta máquina aún no recibe imágenes: actualiza su terminal.', image_big: 'La imagen pesa demasiado para enviarla.',
     image_not: 'Ese archivo no es una imagen que se pueda enviar (PNG, JPEG, GIF o WebP).', image_fail: 'No se pudo enviar la imagen: ',
+    link_open: 'Abrir', link_open_url: 'Abrir el enlace', link_download: 'Descargar', link_copy_url: 'Copiar el enlace', link_copy_path: 'Copiar la ruta',
+    link_copied: 'Copiado.', file_fetching: (pct) => `Trayendo el archivo de la máquina… ${pct} %`, file_ready: (name) => `Listo: ${name}`,
+    file_old: 'Esta máquina aún no manda archivos: actualiza su terminal.', file_none: 'Ese archivo no existe en la máquina.',
+    file_dir: 'Esa ruta es una carpeta, no un archivo.', file_big: 'El archivo pesa demasiado para traerlo (más de 50 MB).',
+    file_noread: 'La máquina no tiene permiso para leer ese archivo.', file_nocwd: 'No se sabe en qué carpeta está la consola: usa la ruta completa.',
+    file_changed: 'El archivo cambió mientras llegaba: inténtalo de nuevo.', file_fail: 'No se pudo traer el archivo: ', file_no_console: 'Abre una consola antes de abrir un archivo.',
     about_title: 'De qué va esta consola', about_hide: 'Plegar', about_show: 'De qué va esta consola',
     about_untitled: 'Sin título', about_empty: 'Sin notas.', about_edit: 'Editar', about_add: 'Agregar nota',
     about_save: 'Guardar', about_cancel: 'Cancelar', about_ph: 'Tus notas sobre esta consola…', about_task: 'Tarea en curso', about_task_del: 'Quitar la tarea',
@@ -193,6 +200,12 @@ const M = {
     image_no_console: 'Open a console before attaching an image.', image_busy: 'An image is already being sent.',
     image_old: 'This machine does not take images yet: update its terminal.', image_big: 'The image is too large to send.',
     image_not: 'That file is not an image that can be sent (PNG, JPEG, GIF or WebP).', image_fail: 'The image could not be sent: ',
+    link_open: 'Open', link_open_url: 'Open link', link_download: 'Download', link_copy_url: 'Copy link', link_copy_path: 'Copy path',
+    link_copied: 'Copied.', file_fetching: (pct) => `Getting the file from the machine… ${pct}%`, file_ready: (name) => `Ready: ${name}`,
+    file_old: 'This machine does not send files yet: update its terminal.', file_none: 'That file does not exist on the machine.',
+    file_dir: 'That path is a folder, not a file.', file_big: 'The file is too large to get (over 50 MB).',
+    file_noread: 'The machine is not allowed to read that file.', file_nocwd: 'The folder of the console is unknown: use the full path.',
+    file_changed: 'The file changed while it was coming: try again.', file_fail: 'Could not get the file: ', file_no_console: 'Open a console before opening a file.',
     console_gone: 'This console no longer exists on the machine: it was closed, or the agent restarted.',
     closed_by_other: (n) => `Another screen closed console ${n}. This is another one.`,
     closed_by_other_new: (n) => `Another screen closed console ${n}. This is a new one.`,
@@ -487,6 +500,96 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     } finally { p.sending = false }
   }
 
+  /**
+   * ENLACES Y RUTAS de la consola (src/links.js): se subrayan al pasar por encima, Ctrl+clic (⌘ en
+   * macOS) los abre, y el clic derecho (o un toque, en una pantalla táctil) da a elegir. Una ruta
+   * es de la MÁQUINA, no de este aparato: se trae por la sesión (`fetchFile`) y se abre aquí.
+   */
+  function wireLinks (s, p) {
+    const term = p.term
+    term.registerLinkProvider({
+      provideLinks (y, done) {
+        const line = term.buffer.active.getLine(y - 1)
+        if (!line) return done(undefined)
+        const found = findLinks(line.translateToString(true))
+        if (!found.length) return done(undefined)
+        done(found.map((l) => ({
+          text: l.text,
+          range: { start: { x: l.start + 1, y }, end: { x: l.end, y } },
+          decorations: { underline: true, pointerCursor: true },
+          hover: () => { p.hoverLink = l },
+          leave: () => { if (p.hoverLink === l) p.hoverLink = null },
+          activate: (e) => {
+            if (e.ctrlKey || e.metaKey) return openLink(s, p, l)
+            // Un toque en una pantalla táctil no tiene Ctrl: da a elegir.
+            if (e.sourceCapabilities?.firesTouchEvents) linkMenu(s, p, l, e.clientX, e.clientY)
+          }
+        })))
+      }
+    })
+    p.view.addEventListener('contextmenu', (e) => {
+      if (!p.hoverLink) return
+      e.preventDefault()
+      linkMenu(s, p, p.hoverLink, e.clientX, e.clientY)
+    })
+  }
+
+  /** `file://` es una ruta de la máquina, no un enlace que el navegador pueda abrir. */
+  const asPath = (l) => l.kind === 'path' ? l.target : /^file:\/\//i.test(l.target) ? decodeURIComponent(l.target.replace(/^file:\/\/[^/]*/i, '')) : null
+
+  function openLink (s, p, l, { download = false } = {}) {
+    const file = asPath(l)
+    if (file == null) { window.open(l.target, '_blank', 'noopener'); return }
+    openFile(s, p, file, { download })
+  }
+
+  function linkMenu (s, p, l, x, y) {
+    document.querySelector('.cmenu')?.remove()
+    const file = asPath(l)
+    const m = el(`<div class="cmenu" data-testid="link-menu" style="left:${x}px;top:${y}px">
+      <button data-a="open">${t(file == null ? 'link_open_url' : 'link_open')}</button>
+      ${file == null ? '' : `<button data-a="download">${t('link_download')}</button>`}
+      <button data-a="copy">${t(file == null ? 'link_copy_url' : 'link_copy_path')}</button>
+    </div>`)
+    m.addEventListener('click', (e) => {
+      const a = e.target.dataset.a
+      m.remove()
+      if (a === 'open' || a === 'download') openLink(s, p, l, { download: a === 'download' })
+      if (a === 'copy') navigator.clipboard.writeText(file ?? l.target).then(() => { hint.textContent = t('link_copied') }, (err) => { hint.textContent = err.message })
+    })
+    document.body.appendChild(m)
+    setTimeout(() => document.addEventListener('click', () => m.remove(), { once: true }), 0)
+  }
+
+  /** Lo que el navegador enseña en una pestaña; lo demás se descarga. */
+  const VIEWABLE = /^(?:application\/pdf|image\/|text\/plain|application\/json|text\/csv|audio\/|video\/)/
+
+  async function openFile (s, p, file, { download = false } = {}) {
+    if (!p.agent?.consoleId) { hint.textContent = t('file_no_console'); return }
+    const said = (text) => { if (active === s) { hint.textContent = text; hint.title = '' } }
+    // La pestaña se abre YA, con el clic: abierta después de esperar, el navegador la bloquea.
+    const tab = download ? null : window.open('', '_blank')
+    said(t('file_fetching', 0))
+    try {
+      const got = await p.agent.fetchFile(file, { onProgress: (n, total) => said(t('file_fetching', total ? Math.round(n * 100 / total) : 100)) })
+      const type = mimeOf(got.name)
+      const url = URL.createObjectURL(new Blob([got.bytes], { type }))
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      if (tab && VIEWABLE.test(type)) tab.location.href = url
+      else {
+        tab?.close()
+        const a = document.createElement('a')
+        a.href = url; a.download = got.name
+        document.body.appendChild(a); a.click(); a.remove()
+      }
+      said(t('file_ready', got.name))
+    } catch (e) {
+      tab?.close()
+      const known = { timeout: 'file_old', 'no-file': 'file_none', 'is-dir': 'file_dir', 'not-file': 'file_none', 'too-big': 'file_big', 'no-read': 'file_noread', 'no-cwd': 'file_nocwd', changed: 'file_changed' }[e.code]
+      said(known ? t(known) : t('file_fail') + e.message)
+    }
+  }
+
   function focusPane (s, p) {
     if (s.focus === p) return
     s.focus = p
@@ -621,6 +724,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     p.fit = new FitAddon(); p.term.loadAddon(p.fit)
     p.view.replaceChildren()
     p.term.open(p.view); p.fit.fit()
+    wireLinks(s, p)
     p.agent.onData = (d) => p.term.write(d)
     p.agent.onExit = (code, why) => {
       if (why?.closedBy === 'other') return closedByOther(s, p, why.id)

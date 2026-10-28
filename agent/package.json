@@ -19,6 +19,7 @@
     "claude.js",
     "consoles.js",
     "desktop.js",
+    "downloads.js",
     "link.js",
     "local.js",
     "service.js",
