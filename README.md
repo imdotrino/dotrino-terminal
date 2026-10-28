@@ -122,7 +122,7 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   las del perfil leyendo el socket del agente cada 1,5 s, y cambia de consola sin reiniciar nada:
   le manda al cliente de la ventana `Ctrl+] a<id>⏎` o `Ctrl+] n`. `vendor/iced_term`
   es el crate con un método público más (ver su README).
-- **Enlaces y rutas** de la consola (≥ PWA 0.14.0, escritorio 0.2.82, agente 0.50.0): una sola regla
+- **Enlaces y rutas** de la consola (≥ PWA 0.14.0, escritorio 0.2.83, agente 0.50.0): una sola regla
   (`src/links.js`, portada a `vendor/iced_term/src/links.rs`, `term/Links.kt` y `Links.swift`) y unos
   mismos casos (`test/links.vectors.json`). En la web, Ctrl+clic abre y el clic derecho da a elegir;
   una ruta es de la máquina y se trae por la sesión (`fetch`/`fetched`, `agent/downloads.js`, tope

@@ -366,6 +366,8 @@ mod tests {
         }
     }
 
+    // Rutas de Unix: en Windows `/home/me` no es absoluta (allí la carpeta del agente da `C:\…`).
+    #[cfg(unix)]
     #[test]
     fn a_link_path_resolves_home_relative_and_file_urls() {
         use super::{link_path, resolve_path};
