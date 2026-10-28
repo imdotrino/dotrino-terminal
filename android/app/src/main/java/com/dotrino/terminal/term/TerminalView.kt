@@ -47,6 +47,9 @@ class TerminalView(context: Context) : View(context) {
     /** The keyboard handed over an image (its clipboard, a sticker, a GIF). `done` is called when
      *  the image has been read: until then the keyboard's permission to read it is held. */
     var onImage: ((uri: android.net.Uri, done: () -> Unit) -> Unit)? = null
+    /** A tap fell on a link or a path ([Links]): [x]/[y] is where, in the view. Without it, a tap
+     *  on a link opens the keyboard like any other. */
+    var onLink: ((link: Links.Link, x: Float, y: Float) -> Unit)? = null
 
     /** A cell of the buffer, by ABSOLUTE line (history first, then the screen): stable while the
      *  console scrolls and while new output pushes lines into the history. */
@@ -323,7 +326,17 @@ class TerminalView(context: Context) : View(context) {
 
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean { scroller.forceFinished(true); return true }
-        override fun onSingleTapUp(e: MotionEvent): Boolean { clearSelection(); showKeyboard(); return true }
+        // A tap on a link or a path gives the choice of how to open it; anywhere else (or with a
+        // selection, which the tap clears) it opens the keyboard.
+        override fun onSingleTapUp(e: MotionEvent): Boolean {
+            val take = onLink
+            if (take != null && selection == null) {
+                val t = terminal; val c = cellAt(e.x, e.y)
+                val link = if (t != null && c != null) Links.at(t, c.line - t.historySize, c.col) else null
+                if (link != null) { take(link, e.x, e.y); return true }
+            }
+            clearSelection(); showKeyboard(); return true
+        }
         // Long press: the cell under the finger starts a selection; dragging extends it (handled in
         // onTouchEvent: the detector stops scrolling after a long press). Lifting opens nothing:
         // the handles adjust it and the «copy» key of the key row takes it (owner, 2026-10-09).

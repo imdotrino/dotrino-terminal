@@ -20,6 +20,7 @@ import com.dotrino.sdk.ui.DotrinoLocale
 import com.dotrino.sdk.ui.DotrinoTopbar
 import com.dotrino.sdk.ui.DotrinoWebActivity
 import com.dotrino.sdk.ui.IdentityRequired
+import com.dotrino.terminal.term.Links
 import com.dotrino.terminal.term.TerminalView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -280,6 +281,7 @@ class MainActivity : Activity() {
             onSelectionChanged = { renderCopyKey() }
             onModifiersChanged = { renderModifiers() }
             onImage = { uri, done -> attachImage(uri, done) }
+            onLink = { link, x, y -> linkMenu(link, x, y) }
             terminal = tab.terminal
         }
         view = tv
@@ -932,6 +934,99 @@ class MainActivity : Activity() {
                 if (tab.imageProgress == seen) { tab.imageStalled(); break }
                 seen = tab.imageProgress
             }
+        }
+    }
+
+    // ---------- A link or a path shown in the console ----------
+    //
+    // A tap on it gives the choice (src/links.js, the same rule as the PWA). A link opens here; a
+    // path is of the MACHINE, not of this phone: it is brought over the session (fetch), kept in
+    // the cache and handed to the app the user picks.
+
+    private fun linkMenu(link: Links.Link, x: Float, y: Float) {
+        val tv = view ?: return
+        val file = try { Links.asPath(link) } catch (e: IllegalArgumentException) {
+            android.util.Log.w("terminal", "a file:// link that does not decode: ${e.message}"); toast(t("file.fail")); return
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; tag = "link-menu"
+            background = rounded(col(R.color.t_panel2), px(12), px(1), col(R.color.t_line))
+            setPadding(0, px(4), 0, px(4))
+        }
+        val pop = android.widget.PopupWindow(box, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true; elevation = px(8).toFloat()
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0))
+        }
+        box.addView(label(shortTitle(link.text, 40), 12f, col(R.color.t_muted)).apply { setPadding(px(18), px(8), px(18), px(4)) })
+        fun item(tag: String, text: String, action: () -> Unit) = box.addView(label(text, 15f).apply {
+            this.tag = tag; minWidth = px(180)
+            setPadding(px(18), px(12), px(18), px(12))
+            isClickable = true; setOnClickListener { pop.dismiss(); action() }
+        })
+        if (file == null) {
+            item("link-open", t("link.openUrl")) { openUrl(link.target) }
+            item("link-copy", t("link.copyUrl")) { copyText(link.target) }
+        } else {
+            item("link-open", t("link.open")) { openFile(file, share = false) }
+            item("link-share", t("link.share")) { openFile(file, share = true) }
+            item("link-copy", t("link.copyPath")) { copyText(file) }
+        }
+        val at = IntArray(2); tv.getLocationInWindow(at)
+        pop.showAtLocation(tv, Gravity.TOP or Gravity.START, at[0] + x.toInt(), at[1] + y.toInt())
+    }
+
+    private fun copyText(text: String) {
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("terminal", text))
+        toast(t("link.copied"))
+    }
+
+    private fun openUrl(url: String) {
+        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (e: android.content.ActivityNotFoundException) {
+            android.util.Log.w("terminal", "no app opens $url: ${e.message}"); toast(t("link.noApp"))
+        }
+    }
+
+    /** Brings [path] from the machine and opens it with the app the user picks ([share]: sends it to one). */
+    private fun openFile(path: String, share: Boolean) {
+        val tab = active
+        if (tab == null || tab.state != Consoles.Tab.State.OPEN) { toast(t("file.noConsole")); return }
+        if (tab.fetching || tab.sendingImage) { toast(t("file.busy")); return }
+        tab.onFetch = { f, problem ->
+            if (f != null) scope.launch { handOver(f, share) }
+            else toast(t(when (problem) {
+                "timeout" -> "file.old"; "no-file", "not-file" -> "file.none"; "is-dir" -> "file.dir"; "too-big" -> "file.big"
+                "no-read" -> "file.noread"; "no-cwd" -> "file.nocwd"; "changed" -> "file.changed"; "lost" -> "file.lost"
+                else -> "file.fail"
+            }))
+        }
+        if (!tab.fetchFile(path)) { toast(t("file.noConsole")); return }
+        toast(t("file.fetching"))
+        // A machine with an older terminal never answers: after a while without a piece, it is said.
+        scope.launch {
+            var seen = tab.fetchProgress
+            while (tab.fetching) {
+                kotlinx.coroutines.delay(20_000)
+                if (!tab.fetching) break
+                if (tab.fetchProgress == seen) { tab.fetchStalled(); break }
+                seen = tab.fetchProgress
+            }
+        }
+    }
+
+    private suspend fun handOver(f: Fetched, share: Boolean) {
+        val uri = try {
+            kotlinx.coroutines.withContext(Dispatchers.IO) { FetchedFiles.save(this@MainActivity, f) }
+        } catch (e: Exception) {
+            android.util.Log.w("terminal", "could not keep the fetched file: ${e.message}"); toast(t("file.fail")); return
+        }
+        val type = Links.mimeOf(f.name)
+        val intent = if (share) Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri)
+        else Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.clipData = ClipData.newRawUri(f.name, uri)
+        val chooser = Intent.createChooser(intent, t(if (share) "link.shareWith" else "link.openWith"))
+        try { startActivity(chooser) } catch (e: android.content.ActivityNotFoundException) {
+            android.util.Log.w("terminal", "no app takes ${f.name}: ${e.message}"); toast(t("link.noApp"))
         }
     }
 

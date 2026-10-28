@@ -25,6 +25,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
@@ -82,6 +83,13 @@ fun justDone(before: List<ConsoleInfo>, now: List<ConsoleInfo>): Boolean {
 const val FILE_CHUNK = 96 * 1024
 /** The agent's reasons for not keeping an image (agent/uploads.js). */
 val IMAGE_FAILS = setOf("not-image", "too-big", "bad-file", "no-uploads", "file-failed")
+/** The agent's reasons for not sending a file of the machine (agent/downloads.js, `fetch` in agent/index.js). */
+val FETCH_FAILS = setOf("no-file", "is-dir", "not-file", "too-big", "no-read", "no-cwd", "changed", "bad-fetch", "fetch-failed")
+/** The most a file brought from the machine weighs (FETCH_MAX of agent/downloads.js). */
+const val FETCH_MAX = 50L * 1024 * 1024
+
+/** A file of the machine, brought whole: [path] is where it is there, [name] its name. */
+class Fetched(val name: String, val path: String, val bytes: ByteArray)
 
 interface Channel {
     fun send(payload: JsonObject)
@@ -432,6 +440,24 @@ object Consoles {
         private class Upload(val up: String, val bytes: ByteArray) { var at = 0; var seq = 0; var end = 0 }
         private var upload: Upload? = null
 
+        /**
+         * A file of the machine asked with [fetchFile] ended: [file] is it, or [problem] says why
+         * not (one of [FETCH_FAILS]; `timeout`: the machine's terminal is older than 0.50 and does
+         * not answer; `lost`: the connection dropped).
+         */
+        var onFetch: (file: Fetched?, problem: String?) -> Unit = { _, _ -> }
+        /** [got] of [total] bytes have arrived. */
+        var onFetchProgress: (got: Long, total: Long) -> Unit = { _, _ -> }
+        /** A file is on its way from the machine. */
+        val fetching: Boolean get() = fetch != null
+        /** Moves with every piece that arrives: whoever watches for a stall compares it. */
+        var fetchProgress = 0; private set
+        private class Fetch(val id: String, val path: String) {
+            var seq = 0; var size = -1L; var mtime = 0.0; var name = ""; var where = ""
+            val bytes = java.io.ByteArrayOutputStream()
+        }
+        private var fetch: Fetch? = null
+
         private var channel: Channel? = null
         private var off: (() -> Unit)? = null
         private var offError: (() -> Unit)? = null
@@ -560,6 +586,12 @@ object Consoles {
                         if (path.isNullOrEmpty()) onImage(null, "bad-file") else onImage(path, null)
                     } else { u.at = u.end; u.seq++; sendPiece(u) }
                 }
+                // A piece of the file asked with fetchFile; the last one says so.
+                "fetched" -> {
+                    val f = fetch ?: return
+                    if ((m["id"] as? JsonPrimitive)?.content != f.id) return
+                    gotPiece(f, m)
+                }
                 "meta" -> {
                     val info = (m["console"] as? JsonObject)?.let(::consoleOf) ?: return
                     upsert(info)
@@ -593,6 +625,8 @@ object Consoles {
                     }
                     // The machine did not take the image: the console goes on as it was.
                     if (upload != null && code in IMAGE_FAILS) { upload = null; onImage(null, code); return }
+                    // The machine did not send the file: the console goes on as it was.
+                    if (fetch != null && code in FETCH_FAILS) { endFetch(null, code); return }
                     // Coming back after the machine restarted: its consoles died with it. A new one, and it is said (as the PWA).
                     if (code == "no-console" && resuming) { resuming = false; consoleId = null; send("open", null); onGone(); return }
                     // The console is gone on the machine (it was closed there, or the agent restarted).
@@ -647,7 +681,7 @@ object Consoles {
          * False if it could not even start: no console on screen, or another image is on its way.
          */
         fun sendImage(bytes: ByteArray): Boolean {
-            if (state != State.OPEN || consoleId == null || upload != null || bytes.isEmpty()) return false
+            if (state != State.OPEN || consoleId == null || upload != null || fetch != null || bytes.isEmpty()) return false
             val u = Upload(java.util.UUID.randomUUID().toString().replace("-", "").take(16), bytes)
             upload = u
             sendPiece(u)
@@ -667,6 +701,58 @@ object Consoles {
 
         /** The machine has not acknowledged a piece in a long while: an older terminal never answers. */
         fun imageStalled() { if (upload != null) { upload = null; onImage(null, "timeout") } }
+
+        /**
+         * Brings a file of the machine (a path that showed in the console) and says it on
+         * [onFetch]. A relative path hangs from the folder of the console on screen (the agent
+         * resolves it). In pieces, one asked after the other (agent ≥ 0.50; an older one never
+         * answers: [fetchStalled]). If its size or date change on the way, it stops with `changed`.
+         * False if it could not even start: no console on screen, or something else is on its way.
+         */
+        fun fetchFile(path: String): Boolean {
+            if (state != State.OPEN || consoleId == null || upload != null || fetch != null || path.isEmpty()) return false
+            val f = Fetch(java.util.UUID.randomUUID().toString().replace("-", "").take(16), path)
+            fetch = f
+            askPiece(f)
+            return true
+        }
+
+        private fun askPiece(f: Fetch) {
+            try {
+                channel?.send(buildJsonObject { put("type", "fetch"); put("id", f.id); put("path", f.path); put("seq", f.seq) })
+                    ?: throw IllegalStateException("no channel")
+            } catch (_: Exception) { endFetch(null, "lost") }
+        }
+
+        private fun gotPiece(f: Fetch, m: JsonObject) {
+            fun str(k: String) = (m[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            val seq = (m["seq"] as? JsonPrimitive)?.intOrNull
+            val size = (m["size"] as? JsonPrimitive)?.longOrNull
+            val mtime = (m["mtime"] as? JsonPrimitive)?.doubleOrNull
+            val name = str("name"); val where = str("path"); val data = str("data")
+            if (seq != f.seq || size == null || size < 0 || size > FETCH_MAX || mtime == null || name.isNullOrEmpty() || where.isNullOrEmpty() || data == null) {
+                android.util.Log.w("terminal", "fetch: the machine answered a piece that does not fit (seq $seq, want ${f.seq})")
+                endFetch(null, "bad-fetch"); return
+            }
+            if (f.size < 0) { f.size = size; f.mtime = mtime; f.name = name; f.where = where }
+            else if (size != f.size || mtime != f.mtime) { endFetch(null, "changed"); return }
+            val part = try { java.util.Base64.getDecoder().decode(data) } catch (_: IllegalArgumentException) { endFetch(null, "bad-fetch"); return }
+            f.bytes.write(part)
+            fetchProgress++
+            if (f.bytes.size() > f.size) { endFetch(null, "bad-fetch"); return }
+            onFetchProgress(f.bytes.size().toLong(), f.size)
+            val last = (m["last"] as? JsonPrimitive)?.booleanOrNull == true
+            if (last) {
+                if (f.bytes.size().toLong() != f.size) { endFetch(null, "changed"); return }
+                endFetch(Fetched(f.name, f.where, f.bytes.toByteArray()), null)
+            } else if (part.isEmpty()) endFetch(null, "bad-fetch")
+            else { f.seq++; askPiece(f) }
+        }
+
+        private fun endFetch(file: Fetched?, problem: String?) { fetch = null; onFetch(file, problem) }
+
+        /** No piece arrived in a long while: an older terminal never answers. */
+        fun fetchStalled() { if (fetch != null) endFetch(null, "timeout") }
 
         /** What was typed while the console was still being attached (a switch, a reconnection): it
          *  goes the moment it is (owner, 2026-10-07: Enter right after changing console sent nothing). */
@@ -758,6 +844,7 @@ object Consoles {
         internal fun release() {
             off?.invoke(); offError?.invoke(); off = null; offError = null; channel?.close(); channel = null
             if (upload != null) { upload = null; onImage(null, "lost") }
+            if (fetch != null) endFetch(null, "lost")
         }
 
         /** The connection dropped under this tab: it comes back by itself. */

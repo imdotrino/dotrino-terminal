@@ -419,6 +419,57 @@ class TabTest {
         assertNull("only once", got)
     }
 
+    private fun fetched(m: JsonObject, bytes: ByteArray, size: Int, mtime: Double = 1730000000123.5, last: Boolean = false) = buildJsonObject {
+        put("type", "fetched"); put("id", m["id"]!!); put("seq", m["seq"]!!); put("path", "/home/me/a.pdf"); put("name", "a.pdf")
+        put("size", size); put("mtime", mtime); put("data", java.util.Base64.getEncoder().encodeToString(bytes)); if (last) put("last", true)
+    }
+
+    @Test fun aFileOfTheMachineComesInPiecesEachOneAskedAfterThePrevious() {
+        val (t, ch) = openTab()
+        var got: Pair<Fetched?, String?>? = null
+        t.onFetch = { f, problem -> got = f to problem }
+        assertTrue(t.fetchFile("./a.pdf"))
+        assertTrue(t.fetching)
+        assertFalse("one at a time", t.fetchFile("./b.pdf"))
+        assertFalse("nor an image meanwhile", t.sendImage(ByteArray(10)))
+        val first = ch.sent.single()
+        assertEquals("fetch", (first["type"] as JsonPrimitive).content)
+        assertEquals("./a.pdf", (first["path"] as JsonPrimitive).content)
+        assertEquals(0, (first["seq"] as JsonPrimitive).content.toInt())
+        ch.agent(fetched(first, byteArrayOf(1, 2, 3), 5))
+        assertEquals(1, (ch.sent[1]["seq"] as JsonPrimitive).content.toInt())
+        assertNull(got)
+        ch.agent(fetched(ch.sent[1], byteArrayOf(4, 5), 5, last = true))
+        val f = got!!.first!!
+        assertEquals("a.pdf", f.name); assertEquals("/home/me/a.pdf", f.path)
+        assertTrue(f.bytes.contentEquals(byteArrayOf(1, 2, 3, 4, 5)))
+        assertFalse(t.fetching)
+    }
+
+    @Test fun aFileThatChangesOnTheWayStops() {
+        val (t, ch) = openTab()
+        var got: Pair<Fetched?, String?>? = null
+        t.onFetch = { f, problem -> got = f to problem }
+        assertTrue(t.fetchFile("/tmp/x"))
+        ch.agent(fetched(ch.sent[0], byteArrayOf(1), 3))
+        ch.agent(fetched(ch.sent[1], byteArrayOf(2), 3, mtime = 2.0))
+        assertEquals(null to "changed", got)
+        assertFalse(t.fetching)
+    }
+
+    @Test fun whatTheMachineDoesNotSendIsSaidAndTheConsoleGoesOn() {
+        val (t, ch) = openTab()
+        var got: Pair<Fetched?, String?>? = null
+        t.onFetch = { f, problem -> got = f to problem }
+        assertTrue(t.fetchFile("/nope"))
+        ch.agent(buildJsonObject { put("type", "fail"); put("code", "no-file"); put("message", "no such file: /nope") })
+        assertEquals(null to "no-file", got)
+        assertEquals(Consoles.Tab.State.OPEN, t.state)
+        assertTrue(t.fetchFile("/again"))
+        t.fetchStalled()
+        assertEquals(null to "timeout", got)
+    }
+
     @Test fun withoutAConsoleOnScreenNoImageStarts() {
         val (t, ch) = tab()
         assertFalse(t.sendImage(ByteArray(10)))

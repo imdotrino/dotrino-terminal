@@ -19,5 +19,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Los archivos traídos de la máquina, para la app que el usuario elija («Abrir con»,
+             «Compartir»): solo la carpeta cache/fetched, solo lectura, y solo con permiso dado. -->
+        <provider
+            android:name=".FetchedFilesProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
