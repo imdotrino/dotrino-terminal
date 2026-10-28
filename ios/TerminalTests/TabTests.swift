@@ -368,4 +368,81 @@ final class TabTests: XCTestCase {
         XCTAssertEqual(Images.typedPath("/home/my user/img.jpg"), "'/home/my user/img.jpg'")
         XCTAssertThrowsError(try Images.prepare(Data("not an image".utf8)))
     }
+
+    // MARK: a file of the machine (`fetch` / `fetched`, agent ≥ 0.50)
+
+    private func fetched(_ m: JSON, _ part: Data, size: Int, mtime: JSON = 1000, last: Bool = false, name: String = "a.txt") -> JSON {
+        var o: [String: JSON] = ["type": "fetched", "id": m["id"]!, "seq": m["seq"]!, "path": "/home/me/a.txt", "name": .string(name),
+                                 "size": .int(Int64(size)), "mtime": mtime, "data": .string(part.base64EncodedString())]
+        if last { o["last"] = true }
+        return .object(o)
+    }
+
+    func testAFileComesInPiecesEachOneAskedWhenTheLastArrived() throws {
+        let (t, ch) = openTab()
+        var got: (URL?, String?)?
+        var progress: [Int] = []
+        t.onFetched = { got = ($0, $1) }
+        t.onFetchProgress = { g, _ in progress.append(g) }
+        XCTAssertTrue(t.fetchFile("./a.txt"))
+        XCTAssertTrue(t.fetchingFile)
+        XCTAssertFalse(t.fetchFile("./b.txt"))                       // one at a time
+        XCTAssertEqual(ch.sent.count, 1)
+        XCTAssertEqual(ch.sent[0]["type"]?.string, "fetch")
+        XCTAssertEqual(ch.sent[0]["path"]?.string, "./a.txt")         // a relative path goes as is: the machine resolves it
+        XCTAssertEqual(ch.sent[0]["seq"]?.int, 0)
+        t.handle(fetched(ch.sent[0], Data("hola ".utf8), size: 10))
+        t.handle(fetched(ch.sent[0], Data("hola ".utf8), size: 10)) // a repeated piece moves nothing
+        XCTAssertEqual(ch.sent.count, 2)
+        XCTAssertEqual(ch.sent[1]["seq"]?.int, 1)
+        XCTAssertNil(got)
+        t.handle(fetched(ch.sent[1], Data("mundo".utf8), size: 10, last: true))
+        let file = try XCTUnwrap(got?.0)
+        XCTAssertNil(got?.1)
+        XCTAssertEqual(file.lastPathComponent, "a.txt")
+        XCTAssertEqual(try Data(contentsOf: file), Data("hola mundo".utf8))
+        XCTAssertEqual(progress, [5, 10])
+        XCTAssertFalse(t.fetchingFile)
+        // The next fetch removes what the last one left.
+        XCTAssertTrue(t.fetchFile("/x"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testAFileThatChangesHalfwayStops() {
+        let (t, ch) = openTab()
+        var got: (URL?, String?)?
+        t.onFetched = { got = ($0, $1) }
+        XCTAssertTrue(t.fetchFile("/home/me/a.txt"))
+        t.handle(fetched(ch.sent[0], Data(count: 5), size: 10))
+        t.handle(fetched(ch.sent[1], Data(count: 5), size: 10, mtime: 2000, last: true))
+        XCTAssertNil(got?.0)
+        XCTAssertEqual(got?.1, "changed")
+        XCTAssertFalse(t.fetchingFile)
+    }
+
+    func testWhatTheMachineDoesNotSendIsSaidAndTheConsoleGoesOn() {
+        let (t, _) = openTab()
+        var got: (URL?, String?)?
+        t.onFetched = { got = ($0, $1) }
+        XCTAssertTrue(t.fetchFile("/nope"))
+        t.handle(["type": "fail", "code": "no-file", "message": "no such file: /nope"])
+        XCTAssertEqual(got?.1, "no-file")
+        XCTAssertEqual(t.state, .open)
+        XCTAssertFalse(t.fetchingFile)
+    }
+
+    func testAMachineThatNeverAnswersAFetchIsAnOlderTerminal() {
+        let (t, _) = openTab()
+        var got: [String?] = []
+        t.onFetched = { _, problem in got.append(problem) }
+        XCTAssertTrue(t.fetchFile("/x"))
+        t.fetchStalled(); t.fetchStalled()
+        XCTAssertEqual(got, ["timeout"])
+    }
+
+    func testWithoutAConsoleOnScreenNoFetchStarts() {
+        let (t, ch) = tab()
+        XCTAssertFalse(t.fetchFile("/x"))
+        XCTAssertFalse(ch.types.contains("fetch"))
+    }
 }

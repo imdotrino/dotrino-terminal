@@ -67,7 +67,11 @@ targets:
   TerminalTests:
     type: bundle.unit-test
     platform: iOS
-    sources: [TerminalTests]
+    sources:
+      - TerminalTests
+      # The golden vectors of the links rule: the same file the PWA's test reads (LinksTests).
+      - path: ../test/links.vectors.json
+        buildPhase: resources
     dependencies:
       - target: Terminal
     settings:

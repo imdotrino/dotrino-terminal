@@ -79,7 +79,7 @@ final class DemoAgent: Channel {
         let e = "\u{1b}"
         let path = c.title.components(separatedBy: ": ").last ?? "~"
         let wide = c.cols > 100 ? "\(e)[2m" + String(repeating: "·", count: c.cols - 1) + "\(e)[0m\r\n" : ""
-        return "\(e)[1;32mseyacat@loca\(e)[0m:\(e)[1;34m\(path)\(e)[0m$ ls\r\n\(e)[1;34msrc\(e)[0m  \(e)[1;34mdocs\(e)[0m  \(e)[1;32mrun.sh\(e)[0m  README.md\r\n" + wide + "Consola \(c.n) · \(c.cols)×\(c.rows)\r\n$ "
+        return "\(e)[1;32mseyacat@loca\(e)[0m:\(e)[1;34m\(path)\(e)[0m$ ls\r\n\(e)[1;34msrc\(e)[0m  \(e)[1;34mdocs\(e)[0m  \(e)[1;32mrun.sh\(e)[0m  README.md\r\n" + wide + "Informe: ./docs/informe.md · https://dotrino.com\r\nConsola \(c.n) · \(c.cols)×\(c.rows)\r\n$ "
     }
 
     func send(_ p: JSON) throws {
@@ -113,6 +113,15 @@ final class DemoAgent: Channel {
             var o: [String: JSON] = ["type": "filed", "up": p["up"] ?? .null, "seq": p["seq"] ?? .null]
             if p["last"] == .bool(true) { o["path"] = "/home/seyacat/.dotrino/agent/terminal-agent/default/uploads/img-demo.jpg" }
             reply(.object(o))
+        // The sample machine has no files: any path brings a short text that says so, in one piece
+        // (as the PWA's demo). A path with «missing» in it is a file that is not there.
+        case "fetch":
+            let path = p["path"]?.string ?? ""
+            if path.contains("missing") { reply(["type": "fail", "code": "no-file", "message": .string("no such file: \(path)")]); return }
+            let bytes = Data("Demo: \(path)\n".utf8)
+            let name = (path.split(separator: "/").last.map(String.init) ?? "demo") + ".txt"
+            reply(["type": "fetched", "id": p["id"] ?? .null, "seq": p["seq"] ?? .null, "path": .string(path), "name": .string(name),
+                   "size": .int(Int64(bytes.count)), "mtime": .int(1_761_600_000_000), "data": .string(bytes.base64EncodedString()), "last": true])
         case "note":
             guard let c = consoles.first(where: { $0.id == p["id"]?.string }) else { return }
             if let v = p["text"]?.string { c.note = v }

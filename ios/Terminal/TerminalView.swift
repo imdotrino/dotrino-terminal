@@ -8,8 +8,15 @@ import UIKit
 /// The emulator has the CONSOLE's size, which another screen may decide: it is drawn at that size
 /// and the rest of the view is left in another colour (as the PWA does). A console wider than the
 /// view is panned sideways with the finger; up and down is the history.
-final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
+final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
     var terminal: Terminal? { didSet { scrollBack = 0; panX = 0; refit(); setNeedsDisplay() } }
+
+    /// An option of a link's menu was chosen: what to do, with what, and where the finger tapped
+    /// (for a sheet that hangs from it on the iPad).
+    var onLink: (LinkTarget, LinkAction, CGPoint) -> Void = { _, _, _ in }
+    /// The menu of a tapped link: native, at the tap.
+    private lazy var linkMenu = UIEditMenuInteraction(delegate: self)
+    private var menuLink: (target: LinkTarget, at: CGPoint)?
 
     /// What was typed, already as the bytes a shell reads.
     var onInput: (String) -> Void = { _ in }
@@ -84,7 +91,8 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(keyboardChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         nc.addObserver(self, selector: #selector(keyboardChanged(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+        addInteraction(linkMenu)
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.delegate = self
         addGestureRecognizer(pan)
@@ -302,7 +310,36 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     // MARK: touch: scroll the history, pan, zoom the font, open the keyboard
 
-    @objc private func tapped() { clearSelection(); _ = becomeFirstResponder() }
+    /// A tap on a link or a path of the console gives its menu; anywhere else, the keyboard.
+    @objc private func tapped(_ g: UITapGestureRecognizer) {
+        clearSelection()
+        let p = g.location(in: self)
+        if let t = terminal, let c = cell(at: p), let hit = t.link(atLine: c.line - t.historySize, col: c.col), let target = LinkTarget(hit) {
+            menuLink = (target, p)
+            linkMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: p))
+            return
+        }
+        _ = becomeFirstResponder()
+    }
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? {
+        // Only the link's options: the system's (copy, paste…) belong to a selection, not to a tap.
+        guard let link = menuLink else { return nil }
+        return UIMenu(children: link.target.actions.map { action in
+            UIAction(title: Self.title(action, link.target)) { [weak self] _ in self?.onLink(link.target, action, link.at) }
+        })
+    }
+
+    private static func title(_ a: LinkAction, _ target: LinkTarget) -> String {
+        switch (target, a) {
+        case (.web, .open): return t("url.open")
+        case (.web, .copy): return t("url.copy")
+        case (.file, .open): return t("path.open")
+        case (.file, .copy): return t("path.copy")
+        // Sharing is a file's (`LinkTarget.actions`); a web address is copied instead.
+        case (_, .share): return t("path.share")
+        }
+    }
 
     /// Long press: the cell under the finger starts a selection; dragging extends it. Lifting opens
     /// nothing: the handles adjust it and the «copy» key of the key row takes it (owner,
@@ -479,6 +516,8 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 struct TerminalScreen: UIViewRepresentable {
     let tab: Tab
     @Binding var view: TerminalView?
+    /// An option of a tapped link's menu.
+    var onLink: (LinkTarget, LinkAction, CGPoint) -> Void = { _, _, _ in }
 
     func makeUIView(context: Context) -> TerminalView {
         let v = TerminalView(frame: .zero)
@@ -487,6 +526,7 @@ struct TerminalScreen: UIViewRepresentable {
     }
 
     func updateUIView(_ v: TerminalView, context: Context) {
+        v.onLink = onLink
         guard v.terminal !== tab.terminal else { return }
         v.onInput = { [weak tab] in tab?.input($0) }
         v.onResize = { [weak tab] c, r in tab?.screen(c, r) }

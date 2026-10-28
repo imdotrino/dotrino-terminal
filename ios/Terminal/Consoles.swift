@@ -55,6 +55,37 @@ struct ConsoleInfo: Equatable, Identifiable {
 let fileChunk = 96 * 1024
 /// The agent's reasons for not keeping an image (agent/uploads.js).
 let imageFails: Set<String> = ["not-image", "too-big", "bad-file", "no-uploads", "file-failed"]
+/// The agent's reasons for not sending a file of the machine (agent/downloads.js); `fetch-failed`
+/// is what it says when the reason has no name.
+let fetchFails: Set<String> = ["no-file", "is-dir", "not-file", "too-big", "no-read", "no-cwd", "changed", "bad-fetch", "fetch-failed"]
+
+/// Where the files brought from the machine are kept to open them: the app's caches. Only the last
+/// one stays: each new fetch empties the folder.
+enum Fetched {
+    static var folder: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("fetched", isDirectory: true) }
+
+    /// Removes what earlier fetches left.
+    static func clear() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: folder.path) else { return }
+        do { try fm.removeItem(at: folder) } catch { print("[terminal] could not remove old fetched files: \(error)") }
+    }
+
+    /// Writes `data` as `name` in a folder of its own (two files with the same name do not meet).
+    static func save(_ name: String, _ data: Data) throws -> URL {
+        let dir = folder.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name, isDirectory: false)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// The file's name as the machine says it, safe as ONE name in a folder. Nil when it is not one.
+    static func safeName(_ name: String) -> String? {
+        let n = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\0", with: "")
+        return n.isEmpty || n == "." || n == ".." ? nil : n
+    }
+}
 
 /// What a `Tab` needs from its session. A protocol so the protocol can be tested without a network.
 protocol Channel: AnyObject {
@@ -344,6 +375,24 @@ final class Tab: ObservableObject, Identifiable {
         init(up: String, bytes: Data) { self.up = up; self.bytes = bytes }
     }
     private var upload: Upload?
+    /// A file of the machine came (`file`: where it was kept on the phone, to open it), or `problem`
+    /// says why not (`timeout`: the machine's terminal is older than 0.50 and does not answer; the
+    /// agent's `fetchFails`; `locked`; `lost`: the connection dropped; `no-save`).
+    var onFetched: (_ file: URL?, _ problem: String?) -> Void = { _, _ in }
+    /// Bytes of the file that arrived, of its total.
+    var onFetchProgress: (_ got: Int, _ total: Int) -> Void = { _, _ in }
+    /// A file of the machine is on its way.
+    var fetchingFile: Bool { download != nil }
+    /// Moves with every piece that arrives: whoever watches for a stall compares it.
+    private(set) var fetchProgress = 0
+    private final class Download {
+        let id: String, path: String
+        var seq = 0
+        var name = "", size: Int64 = 0, mtime: JSON = .null
+        var data = Data()
+        init(id: String, path: String) { self.id = id; self.path = path }
+    }
+    private var download: Download?
 
     private var channel: Channel?
     private var offs: [() -> Void] = []
@@ -437,6 +486,23 @@ final class Tab: ObservableObject, Identifiable {
                 upload = nil
                 if let path = m["path"]?.string, !path.isEmpty { onImage(path, nil) } else { onImage(nil, "bad-file") }
             } else { u.at = u.end; u.seq += 1; sendPiece(u) }
+        // A piece of the file asked for (agent ≥ 0.50). The size and the date come in every piece:
+        // if they change halfway, the file changed while it was coming, and it stops.
+        case "fetched":
+            guard let d = download, m["id"]?.string == d.id, m["seq"]?.int == Int64(d.seq) else { return }
+            fetchProgress += 1
+            guard let size = m["size"]?.int, let mtime = m["mtime"], let b64 = m["data"]?.string, let part = Data(base64Encoded: b64) else { endFetch(nil, "bad-fetch"); return }
+            if d.seq == 0 {
+                guard let name = (m["name"]?.string).flatMap(Fetched.safeName) else { endFetch(nil, "bad-fetch"); return }
+                d.name = name; d.size = size; d.mtime = mtime
+            } else if size != d.size || mtime != d.mtime { endFetch(nil, "changed"); return }
+            d.data.append(part)
+            guard Int64(d.data.count) <= d.size else { endFetch(nil, "changed"); return }
+            onFetchProgress(d.data.count, Int(d.size))
+            if m["last"]?.bool == true {
+                guard Int64(d.data.count) == d.size else { endFetch(nil, "changed"); return }
+                do { endFetch(try Fetched.save(d.name, d.data), nil) } catch { print("[terminal] could not keep a fetched file: \(error)"); endFetch(nil, "no-save") }
+            } else { d.seq += 1; askPiece(d) }
         case "meta":
             guard let c = m["console"].flatMap(consoleOf) else { return }
             upsert(c)
@@ -454,6 +520,7 @@ final class Tab: ObservableObject, Identifiable {
             // if there is none or it no longer works, the screen asks.
             if code == "locked" {
                 if state != .locked { state = .locked; codeProblem = nil; if Self.codes[machine.pubkey] == nil { codeAsks += 1 } }
+                if download != nil { endFetch(nil, "locked") }
                 if let kept = Self.codes[machine.pubkey], !triedKept, trying == nil { triedKept = true; unlock(kept) }
                 return
             }
@@ -464,6 +531,9 @@ final class Tab: ObservableObject, Identifiable {
                 codeAsks += 1
                 return
             }
+            // The machine did not send the file: the console goes on as it was. `too-big` is also an
+            // image's: with both on their way, it goes to the image.
+            if download != nil, let code, fetchFails.contains(code), !(code == "too-big" && upload != nil) { endFetch(nil, code); return }
             // The machine did not take the image: the console goes on as it was.
             if upload != nil, let code, imageFails.contains(code) { upload = nil; onImage(nil, code); return }
             // The console is gone on the machine (it was closed there, or the agent restarted).
@@ -535,6 +605,29 @@ final class Tab: ObservableObject, Identifiable {
 
     /// The machine has not acknowledged a piece in a long while: an older terminal never answers.
     func imageStalled() { if upload != nil { upload = nil; onImage(nil, "timeout") } }
+
+    /// Brings a file of the machine (a path that showed in the console) to the phone, in pieces,
+    /// each one asked when the last arrived (agent ≥ 0.50). A relative path is the console's folder
+    /// on the machine. Ends with `onFetched`. False if it could not even start: no console on
+    /// screen, or another file is on its way.
+    @discardableResult func fetchFile(_ path: String) -> Bool {
+        guard state == .open, consoleId != nil, download == nil, !path.isEmpty else { return false }
+        Fetched.clear()
+        let d = Download(id: UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased(), path: path)
+        download = d
+        askPiece(d)
+        return true
+    }
+
+    private func askPiece(_ d: Download) {
+        guard let channel else { endFetch(nil, "lost"); return }
+        do { try channel.send(["type": "fetch", "id": .string(d.id), "path": .string(d.path), "seq": .int(Int64(d.seq))]) } catch { endFetch(nil, "lost") }
+    }
+
+    private func endFetch(_ file: URL?, _ problem: String?) { download = nil; onFetched(file, problem) }
+
+    /// No piece has arrived in a long while: an older terminal never answers `fetch`.
+    func fetchStalled() { if download != nil { endFetch(nil, "timeout") } }
 
     /// What was typed while the console was still being attached (a switch, a reconnection): it
     /// goes the moment it is (owner, 2026-10-07: Enter right after changing console sent nothing).
@@ -626,6 +719,7 @@ final class Tab: ObservableObject, Identifiable {
         offs = []
         channel?.close(); channel = nil
         if upload != nil { upload = nil; onImage(nil, "lost") }
+        if download != nil { endFetch(nil, "lost") }
     }
 
     /// The connection dropped under this tab: it comes back by itself.

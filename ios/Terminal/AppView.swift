@@ -263,7 +263,7 @@ private struct ConsoleScreen: View {
                 // does change the console's size, on purpose — over it, it covered what was being read.
                 HStack(spacing: 0) {
                     if drawer { panel } else { strip }
-                    TerminalScreen(tab: tab, view: $view)
+                    TerminalScreen(tab: tab, view: $view, onLink: openLink)
                 }
                 // What the tab has to say («Conectando…», «pide su clave»): a card floating OVER the
                 // console. In the column it pushed the console down each time it showed.
@@ -439,6 +439,66 @@ private struct ConsoleScreen: View {
     private func show(_ s: String) {
         toast = s
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if toast == s { toast = nil } }
+    }
+
+    /// An option of a tapped link's menu. A web address goes to the phone (the browser, the mail);
+    /// a file of the machine is brought over the session and then shown (QuickLook) or shared.
+    private func openLink(_ target: LinkTarget, _ action: LinkAction, _ at: CGPoint) {
+        switch (target, action) {
+        case (_, .copy):
+            UIPasteboard.general.string = target.text
+            show(t("key.copied"))
+        case (.web(let s), _):
+            guard let url = URL(string: s) else { show(t("url.fail")); return }
+            UIApplication.shared.open(url) { ok in if !ok { show(t("url.fail")) } }
+        case (.file(let path), _):
+            fetchFile(path, share: action == .share, at: at)
+        }
+    }
+
+    private func fetchFile(_ path: String, share: Bool, at: CGPoint) {
+        guard tab.state == .open else { show(t("fetch.noConsole")); return }
+        if tab.fetchingFile { show(t("fetch.busy")); return }
+        let name = (path as NSString).lastPathComponent
+        tab.onFetchProgress = { got, total in
+            show(t("fetch.progress", ("name", name), ("pct", total > 0 ? got * 100 / total : 100)))
+        }
+        tab.onFetched = { file, problem in
+            guard let file else { show(t(Self.fetchMessage(problem))); return }
+            toast = nil
+            guard let v = view, share ? FileOpen.share(file, from: v, at: at) : FileOpen.preview(file, from: v) else { show(t("fetch.fail")); return }
+        }
+        show(t("fetch.getting", ("name", name)))
+        guard tab.fetchFile(path) else { show(t("fetch.noConsole")); return }
+        // A machine with a terminal older than 0.50 never answers: after a while without a piece,
+        // it is said instead of waiting forever.
+        Task {
+            var seen = tab.fetchProgress
+            while tab.fetchingFile {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                if !tab.fetchingFile { break }
+                if tab.fetchProgress == seen { tab.fetchStalled(); break }
+                seen = tab.fetchProgress
+            }
+        }
+    }
+
+    /// What the screen says when a file did not come (`Tab.onFetched`).
+    static func fetchMessage(_ problem: String?) -> String {
+        switch problem {
+        case "timeout": return "fetch.old"
+        case "no-file": return "fetch.noFile"
+        case "is-dir": return "fetch.isDir"
+        case "not-file": return "fetch.notFile"
+        case "too-big": return "fetch.big"
+        case "no-read": return "fetch.noRead"
+        case "no-cwd": return "fetch.noCwd"
+        case "changed": return "fetch.changed"
+        case "lost": return "fetch.lost"
+        case "no-save": return "fetch.noSave"
+        case "locked": return "code.note"
+        default: return "fetch.fail"
+        }
     }
 
     /// The consoles panel, collapsed: a strip on the left (», +, ⤢ and the numbers). It scrolls with
