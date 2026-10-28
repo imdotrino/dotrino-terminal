@@ -5,7 +5,7 @@ import UIKit
 /// «open in» another app), or the share sheet straight away. Native, no WebView (§16.2).
 enum FileOpen {
     /// QuickLook's data source: the controller keeps it weakly, so it is kept here while shown.
-    private final class Source: NSObject, QLPreviewControllerDataSource {
+    @MainActor private final class Source: NSObject, QLPreviewControllerDataSource {
         let url: URL
         init(_ url: URL) { self.url = url }
         func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
