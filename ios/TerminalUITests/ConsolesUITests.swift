@@ -19,11 +19,14 @@ final class ConsolesUITests: XCTestCase {
         sleep(1)
         let terminal = app.descendants(matching: .any).matching(identifier: "terminal").firstMatch
         let lines = (terminal.value as? String ?? "").components(separatedBy: "\n")
-        guard let row = lines.firstIndex(where: { $0.hasPrefix("Wrote /tmp/demo/nota.txt") }) else {
+        guard let index = lines.firstIndex(where: { $0.hasPrefix("Wrote /tmp/demo/nota.txt") }) else {
             return XCTFail("the sample path is not on screen: \(lines)")
         }
         shot("link-before")
-        // Font of 12 pt: cells of about 7.2×15 pt. Column 10 is inside the path.
+        // Font of 12 pt: cells of about 7.2×15 pt. Column 10 is inside the path. The screen's text
+        // joins the rows a line wrapped into, so those are counted back.
+        let cols = max(1, Int(terminal.frame.width / 7.2))
+        let row = lines[..<index].reduce(0) { $0 + max(1, ($1.count + cols - 1) / cols) }
         terminal.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 75, dy: (CGFloat(row) + 0.5) * 15)).tap()
         let open = app.buttons.matching(NSPredicate(format: "label IN %@", ["Abrir", "Open"])).firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 5), "the menu of the path comes up")
