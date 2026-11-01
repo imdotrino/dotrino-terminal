@@ -33,7 +33,9 @@ final class ConsolesUITests: XCTestCase {
         shot("link-menu")
         open.tap()
         XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10), "the preview comes up")
-        XCTAssertTrue(app.staticTexts["nota.txt"].waitForExistence(timeout: 5) || app.navigationBars["nota.txt"].exists, "it is the file from the machine")
+        // The preview's title leaves the extension out.
+        let title = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "nota")).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5), "it is the file from the machine")
         shot("link-preview")
     }
 
