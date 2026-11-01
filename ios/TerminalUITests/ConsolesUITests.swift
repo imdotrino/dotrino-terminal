@@ -22,6 +22,7 @@ final class ConsolesUITests: XCTestCase {
         guard let row = lines.firstIndex(where: { $0.hasPrefix("Wrote /tmp/demo/nota.txt") }) else {
             return XCTFail("the sample path is not on screen: \(lines)")
         }
+        shot("link-before")
         // Font of 12 pt: cells of about 7.2×15 pt. Column 10 is inside the path.
         terminal.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 75, dy: (CGFloat(row) + 0.5) * 15)).tap()
         let open = app.buttons.matching(NSPredicate(format: "label IN %@", ["Abrir", "Open"])).firstMatch
