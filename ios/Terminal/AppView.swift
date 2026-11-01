@@ -478,7 +478,7 @@ private struct ConsoleScreen: View {
         if tab.fetching || tab.sendingImage { show(t("file.busy")); return }
         tab.onFetch = { file, problem in
             guard let file else {
-                show(t(switch problem {
+                let key: String = switch problem {
                 case "timeout": "file.old"
                 case "no-file", "not-file": "file.none"
                 case "is-dir": "file.dir"
@@ -488,7 +488,8 @@ private struct ConsoleScreen: View {
                 case "changed": "file.changed"
                 case "lost": "file.lost"
                 default: "file.fail"
-                }))
+                }
+                show(t(key))
                 return
             }
             Task {
