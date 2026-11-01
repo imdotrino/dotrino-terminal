@@ -351,6 +351,69 @@ final class TabTests: XCTestCase {
         XCTAssertEqual(got, ["timeout"])                             // only once
     }
 
+    private func fetched(_ m: JSON, _ bytes: Data, size: Int, mtime: JSON = .double(1730000000123.5), last: Bool = false) -> JSON {
+        var o: [String: JSON] = ["type": "fetched", "id": m["id"]!, "seq": m["seq"]!, "path": "/home/me/a.pdf", "name": "a.pdf",
+                                 "size": .int(Int64(size)), "mtime": mtime, "data": .string(bytes.base64EncodedString())]
+        if last { o["last"] = .bool(true) }
+        return .object(o)
+    }
+
+    func testAFileOfTheMachineComesInPiecesEachOneAskedAfterThePrevious() {
+        let (t, ch) = openTab()
+        var got: (Fetched?, String?)?
+        t.onFetch = { got = ($0, $1) }
+        XCTAssertTrue(t.fetchFile("./a.pdf"))
+        XCTAssertTrue(t.fetching)
+        XCTAssertFalse(t.fetchFile("./b.pdf"))                       // one at a time
+        XCTAssertFalse(t.sendImage(Data(count: 10)))                 // nor an image meanwhile
+        XCTAssertEqual(ch.sent.count, 1)
+        XCTAssertEqual(ch.sent[0]["type"]?.string, "fetch")
+        XCTAssertEqual(ch.sent[0]["path"]?.string, "./a.pdf")
+        XCTAssertEqual(ch.sent[0]["seq"]?.int, 0)
+        t.handle(fetched(ch.sent[0], Data([1, 2, 3]), size: 5))
+        XCTAssertEqual(ch.sent[1]["seq"]?.int, 1)
+        XCTAssertNil(got)
+        t.handle(fetched(ch.sent[1], Data([4, 5]), size: 5, last: true))
+        XCTAssertEqual(got?.0?.name, "a.pdf")
+        XCTAssertEqual(got?.0?.path, "/home/me/a.pdf")
+        XCTAssertEqual(got?.0?.bytes, Data([1, 2, 3, 4, 5]))
+        XCTAssertFalse(t.fetching)
+    }
+
+    func testADateWithoutDecimalsIsTheSameDate() {
+        let (t, ch) = openTab()
+        var got: (Fetched?, String?)?
+        t.onFetch = { got = ($0, $1) }
+        XCTAssertTrue(t.fetchFile("/tmp/x"))
+        t.handle(fetched(ch.sent[0], Data([1]), size: 2, mtime: .int(1730000000123)))
+        t.handle(fetched(ch.sent[1], Data([2]), size: 2, mtime: .int(1730000000123), last: true))
+        XCTAssertEqual(got?.0?.bytes, Data([1, 2]))
+    }
+
+    func testAFileThatChangesOnTheWayStops() {
+        let (t, ch) = openTab()
+        var got: (Fetched?, String?)?
+        t.onFetch = { got = ($0, $1) }
+        XCTAssertTrue(t.fetchFile("/tmp/x"))
+        t.handle(fetched(ch.sent[0], Data([1]), size: 3))
+        t.handle(fetched(ch.sent[1], Data([2]), size: 3, mtime: .double(2)))
+        XCTAssertEqual(got?.1, "changed")
+        XCTAssertFalse(t.fetching)
+    }
+
+    func testWhatTheMachineDoesNotSendIsSaidAndTheConsoleGoesOn() {
+        let (t, _) = openTab()
+        var got: (Fetched?, String?)?
+        t.onFetch = { got = ($0, $1) }
+        XCTAssertTrue(t.fetchFile("/nope"))
+        t.handle(["type": "fail", "code": "no-file", "message": "no such file: /nope"])
+        XCTAssertEqual(got?.1, "no-file")
+        XCTAssertEqual(t.state, .open)
+        XCTAssertTrue(t.fetchFile("/again"))
+        t.fetchStalled()
+        XCTAssertEqual(got?.1, "timeout")
+    }
+
     func testWithoutAConsoleOnScreenNoImageStarts() {
         let (t, ch) = tab()
         XCTAssertFalse(t.sendImage(Data(count: 10)))

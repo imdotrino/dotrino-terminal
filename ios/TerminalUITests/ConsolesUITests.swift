@@ -9,6 +9,30 @@ final class ConsolesUITests: XCTestCase {
         try? XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
     }
 
+    /// A path in the console: a tap gives the choice, and «Open» brings the file and previews it.
+    func testATapOnAPathOpensTheFileOfTheMachine() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-compose", "0"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["console-3"].waitForExistence(timeout: 10))
+        app.staticTexts["console-3"].tap()
+        sleep(1)
+        let terminal = app.descendants(matching: .any).matching(identifier: "terminal").firstMatch
+        let lines = (terminal.value as? String ?? "").components(separatedBy: "\n")
+        guard let row = lines.firstIndex(where: { $0.hasPrefix("Wrote /tmp/demo/nota.txt") }) else {
+            return XCTFail("the sample path is not on screen: \(lines)")
+        }
+        // Font of 12 pt: cells of about 7.2×15 pt. Column 10 is inside the path.
+        terminal.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 75, dy: (CGFloat(row) + 0.5) * 15)).tap()
+        let open = app.buttons.matching(NSPredicate(format: "label IN %@", ["Abrir", "Open"])).firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "the menu of the path comes up")
+        shot("link-menu")
+        open.tap()
+        XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10), "the preview comes up")
+        XCTAssertTrue(app.staticTexts["nota.txt"].waitForExistence(timeout: 5) || app.navigationBars["nota.txt"].exists, "it is the file from the machine")
+        shot("link-preview")
+    }
+
     func testSwitchSizeAndPanel() {
         let app = XCUIApplication()
         // `-compose 0`: the writing line starts OFF whatever an earlier run left in the defaults.

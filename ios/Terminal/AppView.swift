@@ -232,6 +232,8 @@ private struct ConsoleScreen: View {
     /// The strip number whose hold just showed the actions: lifting it is not a tap.
     @State private var actions: ConsoleInfo?
     @State private var toast: String?
+    /// The link or path just tapped in the console, while its menu is up.
+    @State private var tappedLink: Links.Link?
     @State private var mods = (shift: false, ctrl: false, alt: false)
     @State private var hasSelection = false
     @State private var askingCode = false
@@ -290,6 +292,9 @@ private struct ConsoleScreen: View {
             if composing { composeBar }
             extraKeys
         }
+        .confirmationDialog(tappedLink.map { shortTitle($0.text, max: 40) } ?? "",
+                            isPresented: Binding(get: { tappedLink != nil }, set: { if !$0 { tappedLink = nil } }),
+                            titleVisibility: .visible, presenting: tappedLink) { linkActions($0) }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in if tab.state != .locked { tab.list() } }
         // The machine asks for its code (`dotrino-terminal lock`, set on that machine): the dialog
         // comes up by itself each time the agent asks, and from the note.
@@ -432,6 +437,80 @@ private struct ConsoleScreen: View {
                 if !tab.sendingImage { break }
                 if tab.imageProgress == seen { tab.imageStalled(); break }
                 seen = tab.imageProgress
+            }
+        }
+    }
+
+    // A link or a path shown in the console. A tap on it gives the choice (src/links.js, the same
+    // rule as the PWA and Android). A link opens here; a path is of the MACHINE, not of this phone:
+    // it is brought over the session (fetch), kept in the cache and opened or shared from there.
+
+    @ViewBuilder private func linkActions(_ link: Links.Link) -> some View {
+        if let path = linkPath(link) {
+            Button(t("link.open")) { openFile(path, share: false) }
+            Button(t("link.share")) { openFile(path, share: true) }
+            Button(t("link.copyPath")) { copyLink(path) }
+        } else if link.kind == .url {
+            Button(t("link.openUrl")) {
+                guard let url = URL(string: link.target) else { show(t("link.noApp")); return }
+                UIApplication.shared.open(url) { if !$0 { show(t("link.noApp")) } }
+            }
+            Button(t("link.copyUrl")) { copyLink(link.target) }
+        }
+        Button(t("link.cancel"), role: .cancel) {}
+    }
+
+    private func linkPath(_ link: Links.Link) -> String? {
+        do { return try Links.asPath(link) } catch {
+            print("terminal: a file:// link that does not decode: \(link.target)")
+            return link.target
+        }
+    }
+
+    private func copyLink(_ text: String) {
+        UIPasteboard.general.string = text
+        show(t("link.copied"))
+    }
+
+    /// Brings `path` from the machine and shows it (`share`: sends it to another app).
+    private func openFile(_ path: String, share: Bool) {
+        guard tab.state == .open else { show(t("file.noConsole")); return }
+        if tab.fetching || tab.sendingImage { show(t("file.busy")); return }
+        tab.onFetch = { file, problem in
+            guard let file else {
+                show(t(switch problem {
+                case "timeout": "file.old"
+                case "no-file", "not-file": "file.none"
+                case "is-dir": "file.dir"
+                case "too-big": "file.big"
+                case "no-read": "file.noread"
+                case "no-cwd": "file.nocwd"
+                case "changed": "file.changed"
+                case "lost": "file.lost"
+                default: "file.fail"
+                }))
+                return
+            }
+            Task {
+                do {
+                    let url = try await Task.detached(priority: .userInitiated) { try FetchedFiles.save(file) }.value
+                    if !(share ? FetchedFiles.share(url, from: view) : FetchedFiles.open(url)) { show(t("file.fail")) }
+                } catch {
+                    print("terminal: could not keep the fetched file: \(error)")
+                    show(t("file.fail"))
+                }
+            }
+        }
+        guard tab.fetchFile(path) else { show(t("file.noConsole")); return }
+        show(t("file.fetching"))
+        // A machine with an older terminal never answers: after a while without a piece, it is said.
+        Task {
+            var seen = tab.fetchProgress
+            while tab.fetching {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                if !tab.fetching { break }
+                if tab.fetchProgress == seen { tab.fetchStalled(); break }
+                seen = tab.fetchProgress
             }
         }
     }
@@ -768,6 +847,7 @@ private struct ConsoleScreen: View {
 
     private func wire(_ v: TerminalView?) {
         v?.onModifiersChanged = { syncMods() }
+        v?.onLink = { tappedLink = $0 }
         v?.onSelectionChanged = { hasSelection = view?.hasSelection ?? false }
         hasSelection = v?.hasSelection ?? false
     }

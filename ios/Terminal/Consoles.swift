@@ -55,6 +55,13 @@ struct ConsoleInfo: Equatable, Identifiable {
 let fileChunk = 96 * 1024
 /// The agent's reasons for not keeping an image (agent/uploads.js).
 let imageFails: Set<String> = ["not-image", "too-big", "bad-file", "no-uploads", "file-failed"]
+/// The agent's reasons for not sending a file of the machine (agent/downloads.js, `fetch` in agent/index.js).
+let fetchFails: Set<String> = ["no-file", "is-dir", "not-file", "too-big", "no-read", "no-cwd", "changed", "bad-fetch", "fetch-failed"]
+/// The most a file brought from the machine weighs (FETCH_MAX of agent/downloads.js).
+let fetchMax: Int64 = 50 * 1024 * 1024
+
+/// A file of the machine, brought whole: `path` is where it is there, `name` its name.
+struct Fetched { let name: String, path: String, bytes: Data }
 
 /// What a `Tab` needs from its session. A protocol so the protocol can be tested without a network.
 protocol Channel: AnyObject {
@@ -345,6 +352,22 @@ final class Tab: ObservableObject, Identifiable {
     }
     private var upload: Upload?
 
+    /// A file of the machine asked with `fetchFile` ended: `file` is it, or `problem` says why not
+    /// (one of `fetchFails`; `timeout`: the machine's terminal is older than 0.50 and does not
+    /// answer; `lost`: the connection dropped).
+    var onFetch: (_ file: Fetched?, _ problem: String?) -> Void = { _, _ in }
+    /// A file is on its way from the machine.
+    var fetching: Bool { fetch != nil }
+    /// Moves with every piece that arrives: whoever watches for a stall compares it.
+    private(set) var fetchProgress = 0
+    private final class Fetch {
+        let id: String, path: String
+        var seq = 0, size: Int64 = -1, mtime = 0.0, name = "", place = ""
+        var bytes = Data()
+        init(id: String, path: String) { self.id = id; self.path = path }
+    }
+    private var fetch: Fetch?
+
     private var channel: Channel?
     private var offs: [() -> Void] = []
     private var fresh = true                      // the next replay starts a clean screen
@@ -437,6 +460,10 @@ final class Tab: ObservableObject, Identifiable {
                 upload = nil
                 if let path = m["path"]?.string, !path.isEmpty { onImage(path, nil) } else { onImage(nil, "bad-file") }
             } else { u.at = u.end; u.seq += 1; sendPiece(u) }
+        // A piece of the file asked with fetchFile; the last one says so.
+        case "fetched":
+            guard let f = fetch, m["id"]?.string == f.id else { return }
+            gotPiece(f, m)
         case "meta":
             guard let c = m["console"].flatMap(consoleOf) else { return }
             upsert(c)
@@ -466,6 +493,8 @@ final class Tab: ObservableObject, Identifiable {
             }
             // The machine did not take the image: the console goes on as it was.
             if upload != nil, let code, imageFails.contains(code) { upload = nil; onImage(nil, code); return }
+            // The machine did not send the file: the console goes on as it was.
+            if fetch != nil, let code, fetchFails.contains(code) { endFetch(nil, code); return }
             // The console is gone on the machine (it was closed there, or the agent restarted).
             if code == "no-console" { state = .exited; note = code } else { state = .failed; note = m["message"]?.string ?? code }
             list()
@@ -516,7 +545,7 @@ final class Tab: ObservableObject, Identifiable {
     /// goes into the console. In pieces, each one waiting for its acknowledgement (agent ≥ 0.43).
     /// False if it could not even start: no console on screen, or another image is on its way.
     @discardableResult func sendImage(_ bytes: Data) -> Bool {
-        guard state == .open, consoleId != nil, upload == nil, !bytes.isEmpty else { return false }
+        guard state == .open, consoleId != nil, upload == nil, fetch == nil, !bytes.isEmpty else { return false }
         let u = Upload(up: UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased(), bytes: bytes)
         upload = u
         sendPiece(u)
@@ -535,6 +564,57 @@ final class Tab: ObservableObject, Identifiable {
 
     /// The machine has not acknowledged a piece in a long while: an older terminal never answers.
     func imageStalled() { if upload != nil { upload = nil; onImage(nil, "timeout") } }
+
+    /// Brings a file of the machine (a path that showed in the console) and says it on `onFetch`. A
+    /// relative path hangs from the folder of the console on screen (the agent resolves it). In
+    /// pieces, one asked after the other (agent ≥ 0.50; an older one never answers: `fetchStalled`).
+    /// If its size or date change on the way, it stops with `changed`. False if it could not even
+    /// start: no console on screen, or something else is on its way.
+    @discardableResult func fetchFile(_ path: String) -> Bool {
+        guard state == .open, consoleId != nil, upload == nil, fetch == nil, !path.isEmpty else { return false }
+        let f = Fetch(id: UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased(), path: path)
+        fetch = f
+        askPiece(f)
+        return true
+    }
+
+    private func askPiece(_ f: Fetch) {
+        guard let channel else { endFetch(nil, "lost"); return }
+        do { try channel.send(["type": "fetch", "id": .string(f.id), "path": .string(f.path), "seq": .int(Int64(f.seq))]) }
+        catch { endFetch(nil, "lost") }
+    }
+
+    private func gotPiece(_ f: Fetch, _ m: JSON) {
+        // A date without decimals arrives as an integer.
+        var mtime: Double?
+        switch m["mtime"] {
+        case .double(let d): mtime = d
+        case .int(let n): mtime = Double(n)
+        default: mtime = nil
+        }
+        guard m["seq"]?.int == Int64(f.seq), let size = m["size"]?.int, size >= 0, size <= fetchMax, let mtime,
+              let name = m["name"]?.string, !name.isEmpty, let place = m["path"]?.string, !place.isEmpty,
+              let data = m["data"]?.string else {
+            print("terminal: fetch: the machine answered a piece that does not fit (want seq \(f.seq))")
+            endFetch(nil, "bad-fetch"); return
+        }
+        if f.size < 0 { f.size = size; f.mtime = mtime; f.name = name; f.place = place }
+        else if size != f.size || mtime != f.mtime { endFetch(nil, "changed"); return }
+        guard let part = Data(base64Encoded: data) else { endFetch(nil, "bad-fetch"); return }
+        f.bytes.append(part)
+        fetchProgress += 1
+        if Int64(f.bytes.count) > f.size { endFetch(nil, "bad-fetch"); return }
+        if m["last"]?.bool == true {
+            if Int64(f.bytes.count) != f.size { endFetch(nil, "changed"); return }
+            endFetch(Fetched(name: f.name, path: f.place, bytes: f.bytes), nil)
+        } else if part.isEmpty { endFetch(nil, "bad-fetch") }
+        else { f.seq += 1; askPiece(f) }
+    }
+
+    private func endFetch(_ file: Fetched?, _ problem: String?) { fetch = nil; onFetch(file, problem) }
+
+    /// No piece arrived in a long while: an older terminal never answers.
+    func fetchStalled() { if fetch != nil { endFetch(nil, "timeout") } }
 
     /// What was typed while the console was still being attached (a switch, a reconnection): it
     /// goes the moment it is (owner, 2026-10-07: Enter right after changing console sent nothing).
@@ -626,6 +706,7 @@ final class Tab: ObservableObject, Identifiable {
         offs = []
         channel?.close(); channel = nil
         if upload != nil { upload = nil; onImage(nil, "lost") }
+        if fetch != nil { endFetch(nil, "lost") }
     }
 
     /// The connection dropped under this tab: it comes back by itself.

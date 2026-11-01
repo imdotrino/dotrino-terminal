@@ -72,7 +72,9 @@ final class DemoAgent: Channel {
         if let prev = current, prev.holder == "phone" { prev.holder = nil }
         current = c; c.holder = "phone"; applySize(c)
         reply(["type": "attached", "id": .string(c.id), "console": info(c)])
-        reply(["type": "replay", "data": .string(sample(c))])
+        // Console 3 ends with a path, low enough on the screen to tap it clear of the card.
+        let tail = c.id == "c3" ? String(repeating: "\r\n", count: 16) + "Wrote /tmp/demo/nota.txt\r\n" : ""
+        reply(["type": "replay", "data": .string(sample(c) + tail)])
     }
 
     private func sample(_ c: C) -> String {
@@ -113,6 +115,11 @@ final class DemoAgent: Channel {
             var o: [String: JSON] = ["type": "filed", "up": p["up"] ?? .null, "seq": p["seq"] ?? .null]
             if p["last"] == .bool(true) { o["path"] = "/home/seyacat/.dotrino/agent/terminal-agent/default/uploads/img-demo.jpg" }
             reply(.object(o))
+        // The sample machine «sends» a small text file, whole, in one piece.
+        case "fetch":
+            let text = Data("demo\n".utf8)
+            reply(["type": "fetched", "id": p["id"] ?? .null, "seq": p["seq"] ?? .null, "path": .string(p["path"]?.string ?? ""), "name": "nota.txt",
+                   "size": .int(Int64(text.count)), "mtime": .int(nowMs()), "data": .string(text.base64EncodedString()), "last": .bool(true)])
         case "note":
             guard let c = consoles.first(where: { $0.id == p["id"]?.string }) else { return }
             if let v = p["text"]?.string { c.note = v }

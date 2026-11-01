@@ -19,6 +19,8 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     var onSelectionChanged: () -> Void = {}
     /// A sticky modifier was used up by the key that followed it.
     var onModifiersChanged: () -> Void = {}
+    /// A tap fell on a link or a path. Without it, a tap on a link opens the keyboard like any other.
+    var onLink: ((Links.Link) -> Void)?
 
     /// Sticky modifiers of the extra-keys row: they apply to the NEXT key and switch off.
     var ctrl = false
@@ -84,7 +86,7 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(keyboardChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         nc.addObserver(self, selector: #selector(keyboardChanged(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.delegate = self
         addGestureRecognizer(pan)
@@ -302,7 +304,16 @@ final class TerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     // MARK: touch: scroll the history, pan, zoom the font, open the keyboard
 
-    @objc private func tapped() { clearSelection(); _ = becomeFirstResponder() }
+    /// A tap on a link or a path gives the choice of how to open it; anywhere else (or with a
+    /// selection, which the tap clears) it opens the keyboard.
+    @objc private func tapped(_ g: UITapGestureRecognizer) {
+        if let take = onLink, selection == nil, let t = terminal, let c = cell(at: g.location(in: self)),
+           let link = Links.at(t, c.line - t.historySize, c.col) {
+            take(link)
+            return
+        }
+        clearSelection(); _ = becomeFirstResponder()
+    }
 
     /// Long press: the cell under the finger starts a selection; dragging extends it. Lifting opens
     /// nothing: the handles adjust it and the «copy» key of the key row takes it (owner,
