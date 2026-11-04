@@ -59,6 +59,13 @@ export const HISTORY_WAIT_MS = 8000
 
 export { LABEL }
 
+/**
+ * Cuánto dura sin mensajes una sesión de otro aparato (una ventana en otra máquina, el
+ * teléfono). Una consola quieta no manda nada, y con los 30 min del pilar la ventana se
+ * perdía a media tarea (dueño, 2026-11-04: «al menos debería intentar estar abierta una hora»).
+ */
+export const SESSION_IDLE_MS = 60 * 60_000
+
 /** Cada cuánto mira un agente sin enlazar si ya lo enlazaron. */
 export const LINK_POLL_MS = 2000
 /** Cada cuánto se reintenta la parte remota cuando no pudo arrancar (sin red, proxio caído). */
@@ -360,6 +367,7 @@ export async function startAgent (opts = {}) {
     dir,
     proxyUrl: opts.proxyUrl,
     quiet: opts.quiet,
+    sessionTtlMs: SESSION_IDLE_MS,
     onRevoked: () => { hub.killAll(); opts.onRevoked?.() },
     onSession: (session) => serveSession(session, hub, { origin: 'remote', gate, uploadsDir })
   })

@@ -50,6 +50,7 @@ import { resolveInstance, isValidName } from '@dotrino/remote-agent/instances'
 import readline from 'node:readline'
 import { connectLocal } from '../local.js'
 import { titleFilter } from '../title.js'
+import { clipboardImage, uploadImage, typedPath } from '../clipboard.js'
 import { farMessage as farMessageFor } from '../far-messages.js'
 import { hasAccessCode, setAccessCode, clearAccessCode, MIN_LENGTH } from '../access.js'
 import { configureEditors, terminalProfile } from '../editors.js'
@@ -859,6 +860,11 @@ async function note () {
   }
 }
 
+/** Ctrl+V: con una imagen copiada y la consola en otra máquina, se sube la imagen. */
+const PASTE_KEY = '\x16'
+/** Los fallos que contesta la máquina a una subida: son de la subida, no cierran la ventana. */
+const UPLOAD_FAILS = new Set(['not-image', 'too-big', 'bad-file', 'no-uploads', 'file-failed'])
+
 /** La ventana: la TTY enganchada a una consola del agente. */
 function interactive (conn, first, dir) {
   // Hasta que el agente diga `attached` no hay consola a la que escribir: se guarda.
@@ -877,10 +883,19 @@ function interactive (conn, first, dir) {
   let remote = new Set()
   let ending = false
 
+  // Lo que se dice un momento en el título (mandar una imagen): la pantalla es del programa.
+  let status = ''
+  let statusTimer = null
   const showTitle = () => {
     const base = subject || shellTitle || 'Dotrino Terminal'
     const mark = remote.size ? `  ● ${t('abierta desde otro aparato', 'open on another device')}${remote.size > 1 ? ` ×${remote.size}` : ''}` : ''
-    out.write(`\x1b]2;${base}${mark}\x07`)
+    out.write(`\x1b]2;${base}${mark}${status ? `  · ${status}` : ''}\x07`)
+  }
+  const say = (text, ms = 0) => {
+    clearTimeout(statusTimer)
+    status = text
+    showTitle()
+    if (ms) statusTimer = setTimeout(() => { status = ''; showTitle() }, ms)
   }
   const onInfo = (info) => {
     if (!info) return
@@ -950,9 +965,19 @@ function interactive (conn, first, dir) {
       showEmpty()
     })
   }
+  // ¿El programa pidió pegado entre corchetes? Así recibe la ruta de una imagen como algo
+  // pegado, que es como Claude Code reconoce un archivo.
+  let bracketed = false
+  const watchModes = (data) => {
+    const all = [...String(data).matchAll(/\x1b\[\?2004([hl])/g)]
+    if (all.length) bracketed = all[all.length - 1][1] === 'h'
+  }
+  // La subida en curso: sus respuestas (`filed`, o un `fail` suyo) son de ella y de nadie más.
+  let uploadReply = null
   conn.on('message', (m) => {
     if (m.type === 'replay' && !clean) { clean = true; out.write('\x1b[H\x1b[2J') }
-    if (m.type === 'out' || m.type === 'replay') { out.write(filter(m.data)); return }
+    if (m.type === 'out' || m.type === 'replay') { watchModes(m.data); out.write(filter(m.data)); return }
+    if (uploadReply && (m.type === 'filed' || (m.type === 'fail' && UPLOAD_FAILS.has(m.code)))) { const r = uploadReply; uploadReply = null; r(m); return }
     if (m.type === 'attached') {
       switching = false; recovering = false
       consoleId = m.id
@@ -1064,9 +1089,42 @@ function interactive (conn, first, dir) {
         }
         send += ch === DETACH_PREFIX ? ch : DETACH_PREFIX + ch
       } else if (ch === DETACH_PREFIX) prefixed = true
-      else send += ch
+      else if (ch === PASTE_KEY && opt('--machine')) {
+        if (send) { input(send); send = '' }
+        pasteImage()
+      } else send += ch
     }
     if (send) input(send)
+  }
+  // CTRL+V EN UNA CONSOLA DE OTRA MÁQUINA. Con una imagen copiada, el programa de la consola
+  // (Claude Code) la busca en el portapapeles de AQUELLA máquina, y la imagen está en esta: no
+  // salía nada. Si aquí hay una imagen, se sube (la misma subida que usa el teléfono) y se pega
+  // la ruta donde quedó. Sin imagen, Ctrl+V sigue su camino, como siempre.
+  let pasting = false
+  const ask = (msg) => new Promise((resolve) => {
+    const timer = setTimeout(() => { uploadReply = null; resolve({ type: 'fail', code: 'timeout', message: 'the machine did not answer (its agent may predate 0.43)' }) }, 20000)
+    uploadReply = (m) => { clearTimeout(timer); resolve(m) }
+    conn.send(msg)
+  })
+  const pasteImage = async () => {
+    if (pasting) return
+    pasting = true
+    try {
+      let bytes
+      try { bytes = await clipboardImage() } catch (e) {
+        say(t(`no pude leer el portapapeles (${e.code})`, `could not read the clipboard (${e.code})`), 8000)
+        input(PASTE_KEY)
+        return
+      }
+      if (!bytes) { input(PASTE_KEY); return }
+      say(t('mandando la imagen…', 'sending the image…'))
+      const where = await uploadImage(ask, bytes)
+      const text = typedPath(where) + ' '
+      input(bracketed ? `\x1b[200~${text}\x1b[201~` : text)
+      say(t('imagen enviada', 'image sent'), 3000)
+    } catch (e) {
+      say(t(`no se pudo mandar la imagen: ${e.message} (${e.code || '?'})`, `could not send the image: ${e.message} (${e.code || '?'})`), 10000)
+    } finally { pasting = false }
   }
   process.stdin.on('data', onKeys)
   // Lo tecleado antes de llegar aquí pasa por el mismo camino (el atajo de soltar incluido).

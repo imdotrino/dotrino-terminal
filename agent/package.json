@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/terminal-agent",
-  "version": "0.50.1",
+  "version": "0.51.0",
   "description": "Dotrino Terminal: las ventanas de esta máquina (dotrino-terminal) y su agente, que deja abrir esas mismas consolas desde los otros aparatos de tu cuenta, cifrado punto a punto.",
   "type": "module",
   "bin": {
@@ -17,6 +17,7 @@
     "far-messages.js",
     "editors.js",
     "claude.js",
+    "clipboard.js",
     "consoles.js",
     "desktop.js",
     "downloads.js",
@@ -37,7 +38,7 @@
   "dependencies": {
     "@dotrino/identity": "0.131.0",
     "@dotrino/proxy-client": "0.45.1",
-    "@dotrino/remote-agent": "0.25.0",
+    "@dotrino/remote-agent": "0.27.0",
     "@dotrino/update": "0.9.2",
     "@dotrino/vault": "0.109.2",
     "@xterm/addon-serialize": "0.13.0",

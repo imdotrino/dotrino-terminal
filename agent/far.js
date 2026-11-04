@@ -287,7 +287,8 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     })
     rc.on('error', (e) => session.send({ type: 'fail', code: e.code || 'far-error', message: e.message }))
     // LA SESIÓN CON LA OTRA MÁQUINA SE PERDIÓ y se abrió otra: o la máquina se reinició, o la
-    // sesión venció (30 min sin mensajes: una consola quieta). Se pregunta a la sesión nueva:
+    // sesión venció (una hora sin mensajes, SESSION_IDLE_MS: una consola quieta; la otra máquina
+    // lo avisa en el momento, remote-agent ≥ 0.27). Se pregunta a la sesión nueva:
     // - pide la clave: DESCONECTADA. La clave guardada se olvida y el panel suelta su conexión,
     //   así deja de enseñar sus consolas y vuelve a salir «Escribir la clave» (dueño,
     //   2026-10-27). Antes el panel la reenviaba solo y las consolas seguían a la vista.
