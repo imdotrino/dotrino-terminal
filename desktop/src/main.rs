@@ -247,8 +247,22 @@ struct MachineChoice {
 
 impl std::fmt::Display for MachineChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.label)
+        f.write_str(&fit_label(&self.label, MACHINE_LABEL_CHARS))
     }
+}
+
+/// Cuántos caracteres caben en una línea del desplegable de máquinas. pick_list no deja quitar el
+/// salto de línea: con un nombre largo («crifa-MacBookPro16-2») la opción salía en dos líneas.
+const MACHINE_LABEL_CHARS: usize = 28;
+
+/// `label` en `max` caracteres como mucho, con «…» al final si no cabe.
+fn fit_label(label: &str, max: usize) -> String {
+    if label.chars().count() <= max {
+        return label.to_string();
+    }
+    let mut s: String = label.chars().take(max.saturating_sub(1)).collect();
+    s.push('…');
+    s
 }
 
 impl Machine {
@@ -503,6 +517,14 @@ mod tests {
     }
 
     /// A mano, en una máquina con altavoces: `cargo test -- --ignored the_ring_sounds`.
+    #[test]
+    fn a_long_machine_name_fits_in_one_line() {
+        assert_eq!(super::fit_label("This machine · loca", 28), "This machine · loca");
+        let long = super::fit_label("This machine · crifa-MacBookPro16-2", 28);
+        assert_eq!(long.chars().count(), 28);
+        assert!(long.ends_with('…'));
+    }
+
     #[test]
     #[ignore]
     fn the_ring_sounds_on_this_machine() {
@@ -3548,7 +3570,7 @@ impl App {
         let picker = iced::widget::pick_list(options, selected, move |c: MachineChoice| Message::ViewMachine(id, c.id))
             .text_size(13)
             // pick_list mide con un tamaño de letra que no es el suyo y cortaba la opción más larga.
-            .width(Length::Fixed(240.0))
+            .width(Length::Fixed(260.0))
             .padding([2, 8]);
         Some(picker.into())
     }
