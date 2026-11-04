@@ -3097,11 +3097,27 @@ impl App {
                 }
                 Task::none()
             }
+            // El desplegable cambia el CONTEXTO de la ventana (dueño, 2026-11-04): pasa a esa
+            // máquina y toma una consola que nadie mire, o abre una si no queda ninguna libre, la
+            // misma regla que una ventana nueva. Antes solo cambiaba el panel y la ventana se
+            // quedaba en la consola de antes hasta elegir una.
             Message::ViewMachine(id, machine) => {
-                if let Some(w) = self.windows.get_mut(&id) {
-                    w.view = machine;
+                let Some(w) = self.windows.get_mut(&id) else { return Task::none() };
+                w.view = machine.clone();
+                if w.machine == machine {
+                    return Task::none();
                 }
-                Task::none()
+                let Some(profile) = w.profile.clone() else { return Task::none() };
+                let pick = match &machine {
+                    None => self.consoles.get(&scope_key(&profile, None)).and_then(|l| unattended(l)),
+                    Some(m) => self
+                        .far
+                        .get(&profile)
+                        .and_then(|l| l.iter().find(|x| &x.id == m))
+                        .and_then(|x| x.consoles.as_ref())
+                        .and_then(|l| l.iter().find(|c| c.watchers.is_empty()).map(|c| c.id.clone())),
+                };
+                self.handle(Message::Go(id, machine, pick))
             }
             Message::Poll => {
                 self.poll_consoles();
