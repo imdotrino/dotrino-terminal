@@ -3380,6 +3380,7 @@ impl App {
                         Task::none()
                     }
                     iced_term::actions::Action::OpenLink(link) => self.handle(Message::OpenLink(id, link, false)),
+                    iced_term::actions::Action::CopyToClipboard(text) => iced::clipboard::write(text),
                     _ => Task::none(),
                 }
             }

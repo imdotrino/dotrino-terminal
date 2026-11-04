@@ -215,6 +215,12 @@ impl Backend {
                     Event::PtyWrite(pty) => {
                         self.notifier.notify(pty.into_bytes())
                     },
+                    // Parche de Dotrino: OSC 52 escribe el portapapeles. LEERLO (ClipboardLoad) no
+                    // se atiende a propósito: dejaría a cualquier programa de la consola, o de otra
+                    // máquina, llevarse lo que copiaste.
+                    Event::ClipboardStore(_, text) => {
+                        action = Action::CopyToClipboard(text);
+                    },
                     _ => {},
                 };
             },

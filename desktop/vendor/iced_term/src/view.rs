@@ -195,7 +195,10 @@ impl<'a> TerminalView<'a> {
         layout_position: Point,
         commands: &mut Vec<Command>,
     ) {
-        let cmd = if terminal_mode.intersects(TermMode::MOUSE_MODE) {
+        // Con Shift, la terminal selecciona aunque el programa tenga el ratón.
+        let to_app = terminal_mode.intersects(TermMode::MOUSE_MODE) && !state.keyboard_modifiers.shift();
+        state.selecting_over_app = terminal_mode.intersects(TermMode::MOUSE_MODE) && !to_app;
+        let cmd = if to_app {
             Command::MouseReport(
                 MouseButton::LeftButton,
                 state.keyboard_modifiers,
@@ -245,7 +248,7 @@ impl<'a> TerminalView<'a> {
         // Handle command or selection update based on terminal mode and modifiers
         if state.is_dragged {
             let terminal_mode = terminal_content.terminal_mode;
-            let cmd = if terminal_mode.intersects(TermMode::MOUSE_MOTION) {
+            let cmd = if terminal_mode.intersects(TermMode::MOUSE_MOTION) && !state.selecting_over_app {
                 Command::MouseReport(
                     MouseButton::LeftMove,
                     state.keyboard_modifiers,
@@ -274,8 +277,9 @@ impl<'a> TerminalView<'a> {
         commands: &mut Vec<Command>,
     ) {
         state.is_dragged = false;
+        let selected_over_app = std::mem::take(&mut state.selecting_over_app);
 
-        if terminal_mode.intersects(TermMode::MOUSE_MODE) {
+        if terminal_mode.intersects(TermMode::MOUSE_MODE) && !selected_over_app {
             commands.push(Command::MouseReport(
                 MouseButton::LeftButton,
                 state.keyboard_modifiers,
@@ -751,6 +755,10 @@ struct TerminalViewState {
     keyboard_modifiers: Modifiers,
     size: Size<f32>,
     mouse_position_on_grid: TerminalGridPoint,
+    /// Parche de Dotrino: el arrastre en curso selecciona con la TERMINAL aunque el programa de
+    /// dentro tenga el ratón (empezó con Shift, como en xterm y alacritty). Sin esto, con Claude
+    /// Code el arrastre iba al programa y «Copiar» no tenía nada que copiar.
+    selecting_over_app: bool,
 }
 
 impl TerminalViewState {
@@ -763,6 +771,7 @@ impl TerminalViewState {
             keyboard_modifiers: Modifiers::empty(),
             size: Size::from([0.0, 0.0]),
             mouse_position_on_grid: TerminalGridPoint::default(),
+            selecting_over_app: false,
         }
     }
 }
@@ -897,6 +906,29 @@ mod tests {
                 )
             ));
             assert!(state.is_dragged);
+        }
+
+        #[test]
+        fn shift_selects_even_when_the_app_has_the_mouse() {
+            let mut state = TerminalViewState::new();
+            state.keyboard_modifiers = Modifiers::SHIFT;
+            let mut commands = Vec::new();
+            TerminalView::handle_left_button_pressed(
+                &mut state,
+                &(TermMode::MOUSE_MODE | TermMode::MOUSE_MOTION),
+                Point { x: 100.0, y: 150.0 },
+                Point { x: 0.0, y: 0.0 },
+                &mut commands,
+            );
+            assert!(matches!(commands[0], Command::SelectStart(..)));
+            assert!(state.selecting_over_app);
+            // Ya sin Shift, el arrastre sigue siendo de la terminal.
+            state.keyboard_modifiers = Modifiers::empty();
+            let mut content = RenderableContent::default();
+            content.terminal_mode = TermMode::MOUSE_MODE | TermMode::MOUSE_MOTION;
+            let mut commands = Vec::new();
+            TerminalView::handle_cursor_moved(&mut state, &content, &Point { x: 120.0, y: 150.0 }, Point { x: 0.0, y: 0.0 }, &mut commands);
+            assert!(matches!(commands[0], Command::SelectUpdate(_)));
         }
 
         #[test]
