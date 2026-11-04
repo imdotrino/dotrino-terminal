@@ -66,8 +66,16 @@ async function discoverReal ({ link, dir, kind, state }) {
 }
 
 /** Una sesión con el agente de otra máquina. */
-async function connectReal ({ link, dir, sub }) {
-  const rc = new RemoteAgentClient(clientLink(link, { dir }), { agentPubkey: sub })
+async function connectReal ({ link, dir, sub, loadLink }) {
+  // EL ACTA DE CONFIANZA DE ESTE AGENTE, leída del disco en cada saludo: la mantiene al día su
+  // lado de agente (cada 5 min y con los avisos de la bóveda). Sin ella el cliente le pedía el
+  // acta a la bóveda en cada conexión, y la ventana esperaba 4-17 s a pedir la clave de otra
+  // máquina (2026-11-04). Si con ella no pasa, el cliente sí pregunta a la bóveda.
+  const trustedActa = () => {
+    const l = loadLink?.() || link
+    return l?.actaTrusted === true && l.acta ? l.acta : null
+  }
+  const rc = new RemoteAgentClient(clientLink(link, { dir }), { agentPubkey: sub, trustedActa })
   await rc.connect()
   return rc
 }
@@ -139,7 +147,7 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
   async function readOne (m) {
     const t0 = Date.now()
     try {
-      if (!m.rc) m.rc = await connect({ link: link(), dir, sub: m.sub })
+      if (!m.rc) m.rc = await connect({ link: link(), dir, sub: m.sub, loadLink })
       let r = await ask(m.rc, { type: 'list' }, 'consoles')
       if (r.type === 'fail' && r.code === 'locked' && codes.has(m.sub)) {
         const u = await ask(m.rc, { type: 'unlock', code: codes.get(m.sub) }, 'unlocked')
@@ -272,7 +280,7 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     let m
     try {
       m = await resolve(ref)
-      rc = await connect({ link: link(), dir, sub: m.sub })
+      rc = await connect({ link: link(), dir, sub: m.sub, loadLink })
     } catch (e) {
       session.send({ type: 'fail', code: e.code || 'unreachable', message: e.message })
       return
