@@ -3894,12 +3894,14 @@ impl App {
                 let head = centered(label.chars().take(2).collect::<String>(), 11);
                 let about = match state { Some(s) => format!("{label} · {}\n{s}", m.id), None => format!("{label} · {}", m.id) };
                 let head: Element<'_, Message> = iced::widget::tooltip(container(head).width(24).padding([3, 0]), container(text(about).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
-                // Con clave, el «+» es por donde se escribe (la pide la terminal al pasar allí).
-                let (sign, what) = if m.locked { (">", t("Escribir la clave de", "Type the code of")) } else { ("+", t("Consola nueva en", "New console on")) };
-                let plus = button(centered(sign.into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
-                let plus: Element<'_, Message> = iced::widget::tooltip(plus, container(text(format!("{what} {label}")).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
                 strip = strip.push(container(head).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
-                strip = strip.push(container(plus).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+                // Con clave no hay «+»: la clave se escribe al elegir la máquina en el desplegable
+                // (antes había aquí un «>» para eso; dueño, 2026-11-04).
+                if !m.locked {
+                    let plus = button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
+                    let plus: Element<'_, Message> = iced::widget::tooltip(plus, container(text(format!("{} {label}", t("Consola nueva en", "New console on"))).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
+                    strip = strip.push(container(plus).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
+                }
                 strip = strip.push(container(pin_btn(24.0, here.as_deref() == Some(m.id.as_str()))).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
                 for (i, c) in m.consoles.iter().flatten().enumerate() {
                     let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
@@ -4012,17 +4014,18 @@ impl App {
             let mut head = column![text(m.label()).size(13)];
             head = head.push(text(match state { Some(s) => format!("{} · {s}", m.id), None => m.id.clone() }).size(11).style(dim));
             items = items.push(container(head).padding(iced::Padding { left: 8.0, top: 2.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
-            // Con clave, en vez de «Nueva consola»: la clave se teclea en la terminal de esta ventana
-            // (la pide el cliente al pasar a esa máquina) y vale hasta que el agente de aquí se reinicie.
-            let (what, sign) = if m.locked { (t("Escribir la clave", "Type its code"), ">") } else { (t("Nueva consola", "New console"), "+") };
-            items = items.push(
-                row![
-                    text(what).size(12).width(Length::Fill),
-                    button(text(sign).size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None))),
-                ]
-                .align_y(iced::Alignment::Center)
-                .padding(iced::Padding { left: 8.0, top: 0.0, right: 4.0 + ARROW_W, bottom: 0.0 }),
-            );
+            // Con clave no hay «Nueva consola»: la clave se escribe al elegir la máquina en el
+            // desplegable (la pide el cliente al pasar allí; antes había aquí un «>» para eso).
+            if !m.locked {
+                items = items.push(
+                    row![
+                        text(t("Nueva consola", "New console")).size(12).width(Length::Fill),
+                        button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None))),
+                    ]
+                    .align_y(iced::Alignment::Center)
+                    .padding(iced::Padding { left: 8.0, top: 0.0, right: 4.0 + ARROW_W, bottom: 0.0 }),
+                );
+            }
             // El tamaño, bajo el «+» de CADA máquina (dueño, 2026-10-13): el de la consola de esta
             // ventana si está en esa máquina; si no, el botón se ve deshabilitado.
             let on_it = here.as_deref() == Some(m.id.as_str());
