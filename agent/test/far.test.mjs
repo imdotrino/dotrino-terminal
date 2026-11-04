@@ -241,3 +241,25 @@ test('una máquina que deja de contestar sale con su error, sin tumbar la lista 
   assert.equal(list.find((m) => m.id === 'CCCC-0002').error.code, 'unreachable')
   done()
 })
+
+test('un fallo de la bóveda queda en el log con su hora una sola vez, y también cuándo vuelve', async () => {
+  const lines = []
+  let fails = 2
+  const far = makeFar({
+    dir: fs.mkdtempSync(path.join(os.tmpdir(), 'dt-')), kind: 'terminal-agent', refreshMs: 0, discoverMs: 0,
+    loadLink: () => ({ fake: true }),
+    discover: async () => {
+      if (fails-- > 0) throw Object.assign(new Error('could not get the account record'), { code: 'no-record' })
+      return []
+    },
+    connect: async () => { throw new Error('unused') },
+    log: (l) => lines.push(l)
+  })
+  await assert.rejects(far.list(), { code: 'no-record' })
+  await assert.rejects(far.list(), { code: 'no-record' })
+  await far.list()
+  far.close()
+  assert.equal(lines.length, 2, lines.join('\n'))
+  assert.match(lines[0], /^\[far\] \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z vault \(list of machines\): no-record after \d+ ms · could not get the account record$/)
+  assert.match(lines[1], /^\[far\] \S+ vault \(list of machines\): ok again after \d+ ms$/)
+})

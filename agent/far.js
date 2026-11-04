@@ -84,7 +84,7 @@ async function connectReal ({ link, dir, sub }) {
  * @param {number} [opts.idleMs]
  * @param {number} [opts.answerMs]
  */
-export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect = connectReal, refreshMs = REFRESH_MS, discoverMs = DISCOVER_MS, idleMs = IDLE_MS, answerMs = ANSWER_MS }) {
+export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect = connectReal, refreshMs = REFRESH_MS, discoverMs = DISCOVER_MS, idleMs = IDLE_MS, answerMs = ANSWER_MS, log = (line) => console.error(line) }) {
   /** sub → { sub, id, name, rc, consoles, locked, error } */
   const machines = new Map()
   /** sub → la clave que una ventana escribió bien (solo en memoria). */
@@ -95,6 +95,23 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
   let refreshing = null
   let idle = null
   let closed = false
+
+  /**
+   * LO QUE FALLA QUEDA ESCRITO, CON SU HORA. Sin esto, «no se pudo preguntar a tu bóveda» salía
+   * en la ventana y en `agent.log` no quedaba nada: ni cuándo, ni cuánto tardó, ni por qué
+   * (2026-11-04, dos minutos de Terminal sin conectar que no se pudieron explicar). Se escribe
+   * solo al CAMBIAR (falla, cambia de motivo o se recupera): el refresco va cada pocos segundos
+   * y una línea por vuelta ahogaría el log.
+   */
+  const lastError = new Map()
+  function report (what, err, ms) {
+    const code = err ? (err.code || 'error') : null
+    if ((lastError.get(what) ?? null) === code) return
+    const took = typeof ms === 'number' ? ` after ${ms} ms` : ''
+    if (code) log(`[far] ${new Date().toISOString()} ${what}: ${code}${took} · ${err.message || ''}`)
+    else log(`[far] ${new Date().toISOString()} ${what}: ok again${took}`)
+    if (code) lastError.set(what, code); else lastError.delete(what)
+  }
 
   const link = () => {
     const l = loadLink()
@@ -120,6 +137,7 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
 
   /** Las consolas de una máquina, abriendo su conexión de control si hace falta. */
   async function readOne (m) {
+    const t0 = Date.now()
     try {
       if (!m.rc) m.rc = await connect({ link: link(), dir, sub: m.sub })
       let r = await ask(m.rc, { type: 'list' }, 'consoles')
@@ -133,21 +151,30 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
         m.locked = r.code === 'locked'
         m.consoles = null
         m.error = m.locked ? null : { code: r.code, message: r.message }
+        report(`machine ${m.id}`, m.error, Date.now() - t0)
         return
       }
       m.locked = false; m.error = null; m.consoles = r.list
+      report(`machine ${m.id}`, null, Date.now() - t0)
     } catch (e) {
       // No contestó o la sesión cayó: la conexión se suelta y la próxima pasada abre otra.
       drop(m)
       m.consoles = null; m.locked = false
       m.error = { code: e.code || 'unreachable', message: e.message }
+      report(`machine ${m.id}`, m.error, Date.now() - t0)
     }
   }
 
   async function refresh () {
     const now = Date.now()
     if (now - discoveredAt >= discoverMs || !discoveredAt) {
-      const found = await discover({ link: link(), dir, kind, state })
+      const t0 = Date.now()
+      let found
+      try { found = await discover({ link: link(), dir, kind, state }) } catch (e) {
+        report('vault (list of machines)', e, Date.now() - t0)
+        throw e
+      }
+      report('vault (list of machines)', null, Date.now() - t0)
       discoveredAt = Date.now()
       const alive = new Set(found.map((f) => f.sub))
       for (const [sub, m] of machines) if (!alive.has(sub)) { drop(m); machines.delete(sub) }
