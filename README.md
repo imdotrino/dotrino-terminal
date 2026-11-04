@@ -124,7 +124,8 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   máquina, la que se elige en el desplegable delante de «Archivo» (esta u otra de la cuenta;
   escritorio ≥ 0.2.84). Lo que copia el programa de dentro (OSC 52, como copia Claude Code su
   selección) llega al portapapeles, y Shift+arrastre selecciona con la terminal aunque el programa
-  tenga el ratón (escritorio ≥ 0.2.85). `vendor/iced_term`
+  tenga el ratón (escritorio ≥ 0.2.85). Con el ratón en manos del programa, la rueda le llega como
+  rueda y no como flechas ↑/↓; con Shift sigue siendo de la terminal (escritorio ≥ 0.2.86). `vendor/iced_term`
   es el crate con un método público más (ver su README).
 - **Enlaces y rutas** de la consola (≥ PWA 0.14.0, escritorio 0.2.83, agente 0.50.0): una sola regla
   (`src/links.js`, portada a `vendor/iced_term/src/links.rs`, `term/Links.kt` y `Links.swift`) y unos

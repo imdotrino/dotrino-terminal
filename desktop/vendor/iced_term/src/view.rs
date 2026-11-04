@@ -177,6 +177,7 @@ impl<'a> TerminalView<'a> {
             iced::mouse::Event::WheelScrolled { delta } => {
                 Self::handle_wheel_scrolled(
                     state,
+                    &terminal_mode,
                     *delta,
                     &self.term.font.measure,
                     &mut commands,
@@ -303,25 +304,51 @@ impl<'a> TerminalView<'a> {
 
     fn handle_wheel_scrolled(
         state: &mut TerminalViewState,
+        terminal_mode: &TermMode,
         delta: ScrollDelta,
         font_measure: &Size<f32>,
         commands: &mut Vec<Command>,
     ) {
-        match delta {
+        // Parche de Dotrino: si el programa de dentro tiene el ratón, la rueda le llega COMO
+        // RUEDA (botones 64/65), como en xterm y alacritty. Antes se convertía en flechas ↑/↓
+        // en la pantalla alterna, y Claude Code las leía como «mensaje anterior» en vez de
+        // desplazar su vista. Con Shift, la rueda sigue siendo de la terminal.
+        let to_app = terminal_mode.intersects(TermMode::MOUSE_MODE) && !state.keyboard_modifiers.shift();
+        // Cuántos golpes hacia arriba (positivo) o abajo (negativo).
+        let notches = match delta {
             ScrollDelta::Lines { y, .. } => {
-                // Parche de Dotrino: 3 líneas por golpe de rueda, como las demás terminales.
-                let lines = y.signum() * y.abs().round() * 3.0;
-                commands.push(Command::Scroll(lines as i32));
+                if to_app {
+                    (y.signum() * y.abs().round()) as i32
+                } else {
+                    // Parche de Dotrino: 3 líneas por golpe de rueda, como las demás terminales.
+                    commands.push(Command::Scroll((y.signum() * y.abs().round() * 3.0) as i32));
+                    return;
+                }
             },
             ScrollDelta::Pixels { y, .. } => {
                 state.scroll_pixels -= y;
-                let line_height = font_measure.height; // Assume this method exists and gives the height of a line
+                let line_height = font_measure.height;
                 let lines = (state.scroll_pixels / line_height).trunc();
                 state.scroll_pixels %= line_height;
-                if lines != 0.0 {
-                    commands.push(Command::Scroll(lines as i32));
+                if lines == 0.0 {
+                    return;
                 }
+                if !to_app {
+                    commands.push(Command::Scroll(lines as i32));
+                    return;
+                }
+                // El mismo signo que `Command::Scroll`: positivo es hacia arriba.
+                lines as i32
             },
+        };
+        let button = if notches > 0 { MouseButton::ScrollUp } else { MouseButton::ScrollDown };
+        for _ in 0..notches.unsigned_abs() {
+            commands.push(Command::MouseReport(
+                button.clone(),
+                state.keyboard_modifiers,
+                state.mouse_position_on_grid,
+                true,
+            ));
         }
     }
 
@@ -1268,6 +1295,25 @@ mod tests {
         use crate::settings::FontSettings;
 
         #[test]
+        fn the_wheel_reaches_an_app_that_has_the_mouse_as_a_wheel() {
+            let mut state = TerminalViewState::new();
+            let font = TermFont::new(FontSettings::default());
+            let mode = TermMode::MOUSE_MODE | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+            let mut commands = Vec::new();
+            TerminalView::handle_wheel_scrolled(&mut state, &mode, ScrollDelta::Lines { y: 2.0, x: 0.0 }, &font.measure, &mut commands);
+            assert_eq!(commands.len(), 2, "one report per notch, not arrow keys");
+            assert!(commands.iter().all(|c| matches!(c, Command::MouseReport(MouseButton::ScrollUp, _, _, true))));
+            let mut commands = Vec::new();
+            TerminalView::handle_wheel_scrolled(&mut state, &mode, ScrollDelta::Lines { y: -1.0, x: 0.0 }, &font.measure, &mut commands);
+            assert!(matches!(commands[..], [Command::MouseReport(MouseButton::ScrollDown, _, _, true)]));
+            // With Shift the wheel stays the terminal's.
+            state.keyboard_modifiers = Modifiers::SHIFT;
+            let mut commands = Vec::new();
+            TerminalView::handle_wheel_scrolled(&mut state, &mode, ScrollDelta::Lines { y: 1.0, x: 0.0 }, &font.measure, &mut commands);
+            assert!(matches!(commands[..], [Command::Scroll(3)]));
+        }
+
+        #[test]
         fn scroll_with_lines_downward() {
             let mut state = TerminalViewState::new();
             let font = TermFont::new(FontSettings::default());
@@ -1275,11 +1321,13 @@ mod tests {
 
             TerminalView::handle_wheel_scrolled(
                 &mut state,
-                ScrollDelta::Lines { y: 3.0, x: 0.0 }, // Scroll down 3 lines
+                &TermMode::empty(),
+                ScrollDelta::Lines { y: 1.0, x: 0.0 },
                 &font.measure,
                 &mut commands,
             );
 
+            // Parche de Dotrino: 3 líneas por golpe.
             assert_eq!(commands.len(), 1);
             assert!(matches!(commands[0], Command::Scroll(3)));
         }
@@ -1292,13 +1340,14 @@ mod tests {
 
             TerminalView::handle_wheel_scrolled(
                 &mut state,
+                &TermMode::empty(),
                 ScrollDelta::Lines { y: -2.0, x: 0.0 },
                 &font.measure,
                 &mut commands,
             );
 
             assert_eq!(commands.len(), 1);
-            assert!(matches!(commands[0], Command::Scroll(-2)));
+            assert!(matches!(commands[0], Command::Scroll(-6)));
         }
 
         #[test]
@@ -1309,6 +1358,7 @@ mod tests {
 
             TerminalView::handle_wheel_scrolled(
                 &mut state,
+                &TermMode::empty(),
                 ScrollDelta::Pixels { y: 45.0, x: 0.0 },
                 &font.measure,
                 &mut commands,
@@ -1327,6 +1377,7 @@ mod tests {
 
             TerminalView::handle_wheel_scrolled(
                 &mut state,
+                &TermMode::empty(),
                 ScrollDelta::Pixels { y: -60.0, x: 0.0 },
                 &font.measure,
                 &mut commands,
