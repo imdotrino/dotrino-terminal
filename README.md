@@ -120,7 +120,9 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   se rechaza (`bad-cwd`), no se abre en otra. El menú Perfil cambia de perfil (cierra la TTY y abre
   otra) o enrola uno nuevo dentro de la ventana. El **panel de consolas** (a la izquierda) lista
   las del perfil leyendo el socket del agente cada 1,5 s, y cambia de consola sin reiniciar nada:
-  le manda al cliente de la ventana `Ctrl+] a<id>⏎` o `Ctrl+] n`. `vendor/iced_term`
+  le manda al cliente de la ventana `Ctrl+] a<id>⏎` o `Ctrl+] n`. El panel enseña las consolas de UNA
+  máquina, la que se elige en el desplegable delante de «Archivo» (esta u otra de la cuenta;
+  escritorio ≥ 0.2.84). `vendor/iced_term`
   es el crate con un método público más (ver su README).
 - **Enlaces y rutas** de la consola (≥ PWA 0.14.0, escritorio 0.2.83, agente 0.50.0): una sola regla
   (`src/links.js`, portada a `vendor/iced_term/src/links.rs`, `term/Links.kt` y `Links.swift`) y unos

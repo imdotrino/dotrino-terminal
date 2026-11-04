@@ -238,6 +238,19 @@ struct Machine {
     consoles: Option<Vec<ConsoleInfo>>,
 }
 
+/// Una opción del desplegable de máquinas de la barra: esta (`id: None`) u otra de la cuenta.
+#[derive(Debug, Clone, PartialEq)]
+struct MachineChoice {
+    id: Option<String>,
+    label: String,
+}
+
+impl std::fmt::Display for MachineChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
 impl Machine {
     fn label(&self) -> String {
         if self.name.is_empty() { self.id.clone() } else { self.name.clone() }
@@ -974,6 +987,10 @@ struct Win {
     sidebar: bool,
     /// Panel colapsado: una franja con un botón numerado por consola, para que ocupe poco.
     sidebar_collapsed: bool,
+    /// De qué máquina enseña el panel las consolas (`None`: esta). Se elige en el desplegable de
+    /// la barra de arriba; ver las de todas juntas confundía (dueño, 2026-11-04). Sigue a la
+    /// máquina de la ventana cuando esta cambia.
+    view: Option<String>,
     /// La nota que se está editando en la tarjeta «de qué va»: de qué consola y el texto.
     note_edit: Option<(String, iced::widget::text_editor::Content)>,
     /// La tarea y la nota tal como se leen en la tarjeta (el texto y su editor de solo lectura,
@@ -1176,6 +1193,8 @@ enum Message {
     PanelScrollTo(window::Id, f32),
     /// Colapsar el panel a solo botones (o volver a abrirlo).
     CollapseSidebar(window::Id),
+    /// El desplegable de la barra: el panel pasa a enseñar las consolas de esa máquina (`None`: esta).
+    ViewMachine(window::Id, Option<String>),
     /// La tarjeta «de qué va» de una ventana: plegarla o abrirla.
     AboutFold(window::Id),
     /// Empezar a editar la nota de la consola de la ventana.
@@ -1863,7 +1882,7 @@ impl App {
         });
         self.next_tag += 1;
         let tag = format!("desktop-{}-{}", std::process::id(), self.next_tag);
-        self.windows.insert(id, Win { profile, machine, cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, reopening: false, showing: attach, sidebar: true, sidebar_collapsed: true, note_edit: None, task_read: None, note_read: None, about_folded: about_folded(), panel: PanelScroll::default() });
+        self.windows.insert(id, Win { profile, machine: machine.clone(), cwd, command, mode: Mode::Console, term: None, took_size: None, title: String::new(), error: None, tag, attach: attach.clone(), pending: None, reopening: false, showing: attach, sidebar: true, sidebar_collapsed: true, view: machine, note_edit: None, task_read: None, note_read: None, about_folded: about_folded(), panel: PanelScroll::default() });
         self.start(id, Mode::Console);
         (id, task.map(Message::Opened))
     }
@@ -2607,6 +2626,7 @@ impl App {
                     Some(Pending::Attach(cid)) => win.attach = Some(cid),
                     // La consola de aquí ya está suelta: la ventana pasa a la otra máquina.
                     Some(Pending::Far { machine, attach }) => {
+                        win.view = machine.clone();
                         win.machine = machine;
                         win.showing = attach.clone();
                         win.attach = attach;
@@ -2638,6 +2658,7 @@ impl App {
                         let pick = local.iter().find(|c| c.watchers.is_empty()).or(local.first()).map(|c| c.id.clone());
                         if let Some(win) = self.windows.get_mut(&id) {
                             win.machine = None;
+                            win.view = None;
                             win.showing = pick.clone();
                             win.attach = pick;
                         }
@@ -3051,6 +3072,12 @@ impl App {
             Message::CollapseSidebar(id) => {
                 if let Some(w) = self.windows.get_mut(&id) {
                     w.sidebar_collapsed = !w.sidebar_collapsed;
+                }
+                Task::none()
+            }
+            Message::ViewMachine(id, machine) => {
+                if let Some(w) = self.windows.get_mut(&id) {
+                    w.view = machine;
                 }
                 Task::none()
             }
@@ -3481,10 +3508,48 @@ impl App {
                 ..base
             }
         });
+        // DELANTE DE «ARCHIVO», el desplegable de máquinas (dueño, 2026-11-04): de cuál enseña
+        // el panel las consolas. Solo con perfil: sin él no hay otras máquinas.
+        let bar: Element<'_, Message> = match self.machine_picker(id, win) {
+            Some(picker) => row![picker, bar].spacing(4).align_y(iced::Alignment::Center).into(),
+            None => bar.into(),
+        };
         container(bar)
             .width(Length::Fill)
+            .padding(iced::Padding { left: 4.0, ..Default::default() })
             .style(|theme: &Theme| container::Style { background: Some(theme.extended_palette().background.weak.color.into()), ..Default::default() })
             .into()
+    }
+
+    /// El desplegable «esta máquina / otra máquina de la cuenta» de la barra de arriba.
+    fn machine_picker(&self, id: window::Id, win: &Win) -> Option<Element<'_, Message>> {
+        let profile = win.profile.as_deref()?;
+        if !matches!(win.mode, Mode::Console) {
+            return None;
+        }
+        // El nombre de la máquina, sin el usuario (`usuario@máquina`): las otras salen por el suyo.
+        let host = user_at_host().and_then(|h| h.rsplit('@').next().map(String::from));
+        let here = match host { Some(h) => format!("{} · {h}", t("Esta máquina", "This machine")), None => t("Esta máquina", "This machine") };
+        let mut options = vec![MachineChoice { id: None, label: here }];
+        for m in self.far.get(profile).into_iter().flatten() {
+            let state = if m.locked { Some(t("pide su clave", "asks for its code")) } else if m.consoles.is_none() { Some(t("no contesta", "not answering")) } else { None };
+            let label = match state { Some(s) => format!("{} · {s}", m.label()), None => m.label() };
+            options.push(MachineChoice { id: Some(m.id.clone()), label });
+        }
+        // La elegida ya no está en la lista (se apagó): se la sigue nombrando, para que el panel
+        // vacío se entienda.
+        if let Some(v) = &win.view {
+            if !options.iter().any(|o| o.id.as_deref() == Some(v.as_str())) {
+                options.push(MachineChoice { id: Some(v.clone()), label: format!("{} · {}", self.machine_label(profile, v), t("no está encendida", "not on")) });
+            }
+        }
+        let selected = options.iter().find(|o| o.id == win.view).cloned();
+        let picker = iced::widget::pick_list(options, selected, move |c: MachineChoice| Message::ViewMachine(id, c.id))
+            .text_size(13)
+            // pick_list mide con un tamaño de letra que no es el suyo y cortaba la opción más larga.
+            .width(Length::Fixed(240.0))
+            .padding([2, 8]);
+        Some(picker.into())
     }
 
     fn view(&self, id: window::Id) -> Element<'_, Message> {
@@ -3677,10 +3742,14 @@ impl App {
     fn side<'a>(&'a self, id: window::Id, profile: &str) -> Element<'a, Message> {
         let mine = self.mine(id);
         let here = self.windows.get(&id).and_then(|w| w.machine.clone());
-        // El panel es EL MISMO mire la ventana la máquina que mire: primero las consolas de esta
-        // máquina y después las de las otras. La consola de la ventana se marca donde esté.
-        let list = self.consoles.get(&scope_key(profile, None)).cloned().unwrap_or_default();
-        let others: Vec<&Machine> = self.far.get(profile).map(|l| l.iter().collect()).unwrap_or_default();
+        // El panel enseña las consolas de UNA máquina, la del desplegable de la barra (`view`):
+        // juntas las de todas confundían (dueño, 2026-11-04). La consola de la ventana se marca
+        // si es de esa máquina.
+        let view = self.windows.get(&id).and_then(|w| w.view.clone());
+        let list = if view.is_none() { self.consoles.get(&scope_key(profile, None)).cloned().unwrap_or_default() } else { Vec::new() };
+        let others: Vec<&Machine> = self.far.get(profile).map(|l| l.iter().filter(|m| view.as_deref() == Some(m.id.as_str())).collect()).unwrap_or_default();
+        // La elegida ya no está entre las encendidas: el panel lo dice en vez de quedarse vacío.
+        let gone = view.as_ref().filter(|_| others.is_empty()).map(|v| format!("{} {}", self.machine_label(profile, v), t("no está encendida o no contesta.", "is not on or not answering.")));
         // ¿Mira la ventana una consola de ESTA máquina? Ordenar arrastrando y el menú de una
         // consola hablan con la máquina de la ventana: solo se ofrecen sobre sus consolas.
         let local = here.is_none();
@@ -3740,12 +3809,15 @@ impl App {
             }
         };
         if collapsed {
-            let mut strip = column![
-                button(centered("»".into(), 13)).width(24).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id)),
-                button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, None, None))),
-                pin_btn(24.0, local),
-            ]
-            .spacing(4);
+            let mut strip = column![button(centered("»".into(), 13)).width(24).padding([2, 0]).style(menu_button).on_press(Message::CollapseSidebar(id))].spacing(4);
+            if view.is_none() {
+                strip = strip.push(button(centered("+".into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, None, None))));
+                strip = strip.push(pin_btn(24.0, local));
+            }
+            if let Some(why) = &gone {
+                let mark = text("?").size(13).width(Length::Fill).align_x(iced::alignment::Horizontal::Center);
+                strip = strip.push(iced::widget::tooltip(container(mark).width(24).padding([3, 0]), container(text(why.clone()).size(12)).padding(6).max_width(320).style(panel_style), iced::widget::tooltip::Position::Right));
+            }
             for (i, c) in list.iter().enumerate() {
                 let n = c.n.map(|n| n as usize).unwrap_or(i + 1);
                 let is_mine = local && mine.as_deref() == Some(c.id.as_str());
@@ -3787,7 +3859,6 @@ impl App {
                 let (sign, what) = if m.locked { (">", t("Escribir la clave de", "Type the code of")) } else { ("+", t("Consola nueva en", "New console on")) };
                 let plus = button(centered(sign.into(), 14)).width(24).padding([2, 0]).style(menu_button).on_press_maybe(act(Message::Go(id, Some(m.id.clone()), None)));
                 let plus: Element<'_, Message> = iced::widget::tooltip(plus, container(text(format!("{what} {label}")).size(12)).padding(6).style(panel_style), iced::widget::tooltip::Position::Right).into();
-                strip = strip.push(container(separator()).width(24));
                 strip = strip.push(container(head).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
                 strip = strip.push(container(plus).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
                 strip = strip.push(container(pin_btn(24.0, here.as_deref() == Some(m.id.as_str()))).padding(iced::Padding { right: ARROW_W, ..Default::default() }));
@@ -3823,17 +3894,24 @@ impl App {
             .spacing(4)
             .align_y(iced::Alignment::Center)
             .padding([4, 2]),
-            // El «+» en la misma columna que las «×» de abajo.
-            row![
-                text(t("Nueva consola", "New console")).size(12).width(Length::Fill),
-                button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, None, None))),
-            ]
-            .align_y(iced::Alignment::Center)
-            .padding(iced::Padding { left: 8.0, ..Default::default() }),
         ]
         .spacing(2);
+        // El «+» en la misma columna que las «×» de abajo. El de otra máquina va en su bloque.
+        if view.is_none() {
+            items = items.push(
+                row![
+                    text(t("Nueva consola", "New console")).size(12).width(Length::Fill),
+                    button(text("+").size(14)).padding([2, 6]).style(menu_button).on_press_maybe(act(Message::Go(id, None, None))),
+                ]
+                .align_y(iced::Alignment::Center)
+                .padding(iced::Padding { left: 8.0, ..Default::default() }),
+            );
+        }
+        if let Some(why) = &gone {
+            items = items.push(container(text(why.clone()).size(12)).padding(iced::Padding { left: 8.0, top: 4.0, ..Default::default() }));
+        }
         // Solo el tamaño (dueño, 2026-10-07): quién lo tiene ya lo dice el ⤢ encendido y su aviso.
-        if let Some((_, c)) = cur.filter(|_| local) {
+        if let Some((_, c)) = cur.filter(|_| local && view.is_none()) {
             items = items.push(
                 row![text(format!("{}×{}", c.cols, c.rows)).size(12).width(Length::Fill), pin_btn(28.0, true)]
                     .align_y(iced::Alignment::Center)
@@ -3894,8 +3972,7 @@ impl App {
             let state = if m.locked { Some(t("pide su clave", "asks for its code")) } else if m.consoles.is_none() { Some(t("no contesta", "not answering")) } else { None };
             let mut head = column![text(m.label()).size(13)];
             head = head.push(text(match state { Some(s) => format!("{} · {s}", m.id), None => m.id.clone() }).size(11).style(dim));
-            items = items.push(container(separator()).padding(iced::Padding { top: 6.0, right: ARROW_W, ..Default::default() }));
-            items = items.push(container(head).padding(iced::Padding { left: 8.0, top: 6.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
+            items = items.push(container(head).padding(iced::Padding { left: 8.0, top: 2.0, right: 4.0 + ARROW_W, bottom: 0.0 }));
             // Con clave, en vez de «Nueva consola»: la clave se teclea en la terminal de esta ventana
             // (la pide el cliente al pasar a esa máquina) y vale hasta que el agente de aquí se reinicie.
             let (what, sign) = if m.locked { (t("Escribir la clave", "Type its code"), ">") } else { (t("Nueva consola", "New console"), "+") };
