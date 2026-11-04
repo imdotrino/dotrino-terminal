@@ -121,7 +121,7 @@ Las máquinas se encuentran preguntándoles qué son (`probeAgents`): salen las 
   otra) o enrola uno nuevo dentro de la ventana. El **panel de consolas** (a la izquierda) lista
   las del perfil leyendo el socket del agente cada 1,5 s, y cambia de consola sin reiniciar nada:
   le manda al cliente de la ventana `Ctrl+] a<id>⏎` o `Ctrl+] n`. El panel enseña las consolas de UNA
-  máquina, la que se elige en el desplegable delante de «Archivo» (esta u otra de la cuenta;
+  máquina, la que se elige en el desplegable después de «Ayuda» (esta u otra de la cuenta;
   escritorio ≥ 0.2.84). Elegir otra lleva la ventana allí y toma una consola que nadie mire, o abre
   una si no queda ninguna (≥ 0.2.88). Lo que copia el programa de dentro (OSC 52, como copia Claude Code su
   selección) llega al portapapeles, y Shift+arrastre selecciona con la terminal aunque el programa

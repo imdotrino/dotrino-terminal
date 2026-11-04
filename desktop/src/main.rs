@@ -3547,10 +3547,10 @@ impl App {
                 ..base
             }
         });
-        // DELANTE DE «ARCHIVO», el desplegable de máquinas (dueño, 2026-11-04): de cuál enseña
-        // el panel las consolas. Solo con perfil: sin él no hay otras máquinas.
+        // DESPUÉS DE «AYUDA», el desplegable de máquinas (dueño, 2026-11-04): en qué máquina
+        // trabaja la ventana. Solo con perfil: sin él no hay otras máquinas.
         let bar: Element<'_, Message> = match self.machine_picker(id, win) {
-            Some(picker) => row![picker, bar].spacing(4).align_y(iced::Alignment::Center).into(),
+            Some(picker) => row![bar, picker].spacing(8).align_y(iced::Alignment::Center).into(),
             None => bar.into(),
         };
         container(bar)
