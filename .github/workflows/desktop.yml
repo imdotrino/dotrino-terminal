@@ -56,7 +56,7 @@ jobs:
 
   macos:
     needs: linux        # la release la crea el de Linux; aquí solo se suben los archivos
-    runs-on: macos-14
+    runs-on: macos-15
     defaults:
       run:
         working-directory: desktop
