@@ -24,13 +24,14 @@ const END = /[.:;!?]$/
 const URL_CHAR = /[A-Za-z0-9%&=?\/._~:+#@!$'()*,;[\]-]/
 
 /** Quita los huecos de 2+ espacios que caen dentro de un enlace. */
+/** @param {string} s */
 function closeUrlGaps (s) {
   let out = ''
   let i = 0
   while (i < s.length) {
     const m = s.slice(i).match(URL)
     if (!m) { out += s.slice(i); break }
-    const start = i + m.index
+    const start = i + /** @type {number} */ (m.index)
     out += s.slice(i, start)
     let j = start
     for (;;) {
@@ -45,12 +46,22 @@ function closeUrlGaps (s) {
   return out
 }
 
+/** @param {string} s */
 const len = (s) => [...s].length
+/** @param {string} s */
 const indent = (s) => s.length - s.trimStart().length
+/** @param {string} s */
 const lastToken = (s) => { const t = s.split(/\s+/).filter(Boolean); return t.length ? t[t.length - 1] : '' }
+/** @param {string} c */
 const isLower = (c) => c !== c.toUpperCase() && c === c.toLowerCase()
+/** @param {string} c */
 const isUpper = (c) => c !== c.toLowerCase() && c === c.toUpperCase()
 
+/**
+ * El texto copiado con los saltos de ajuste deshechos.
+ * @param {string} text
+ * @returns {string}
+ */
 export function unwrap (text) {
   const lines = text.replace(/\r/g, '').split('\n').map((l) => l.trimEnd())
   if (lines.length < 2) return closeUrlGaps(text.trim())

@@ -13,8 +13,10 @@
 import { Identity } from '@dotrino/identity'
 import { linkFromIdentity } from '@dotrino/remote-agent/browser-link'
 
+/** @type {Identity | null} */
 let _id = null
 
+/** La identidad del ecosistema (iframe id.dotrino.com), conectada una vez. */
 export async function identity () {
   if (!_id) _id = await Identity.connect(identityOptions())
   return _id
@@ -41,6 +43,7 @@ const LS_MODE = 'dotrino-terminal:mode'
 export function selfModeEnabled () {
   try { return sessionStorage.getItem(LS_MODE) === 'self' } catch { return false }
 }
+/** @param {boolean} on */
 export function setSelfMode (on) {
   try { on ? sessionStorage.setItem(LS_MODE, 'self') : sessionStorage.removeItem(LS_MODE) } catch {}
 }
@@ -56,7 +59,8 @@ export async function getLink () {
 /** Desvincula este dispositivo (borra sub-clave + cert en el iframe de identidad). */
 export async function unpair () {
   const id = await identity()
-  return id.unpairDevice()
+  // `unpairDevice` existe en @dotrino/identity (src/index.js) pero su index.d.ts no lo declara.
+  return /** @type {Identity & { unpairDevice: () => Promise<unknown> }} */ (id).unpairDevice()
 }
 
 /**
@@ -64,12 +68,13 @@ export async function unpair () {
  * vault. No hay vault externo ni cert de dispositivo `P ← M`; en su lugar se usa un
  * self-cert `P ← P` (refrescado bajo demanda por el agente). La maestra pineada que
  * verifica el agente es la propia P. Ver @dotrino/vault (startDeviceVault).
- * @returns {Promise<{mode:'self', id:any, iss?:string, proxy?:string, paired?:boolean, cert?:object, getSelfCert?:()=>Promise<any>}>}
+ * @returns {Promise<{mode:'self', id:Identity, iss?:string, proxy?:string, paired?:boolean, cert?:object|null, getSelfCert?:()=>Promise<object>}>}
  */
 export async function getSelfLink () {
   const id = await identity()
   const iss = id.me?.publickey
   if (!iss) return { mode: 'self', id, paired: false }
+  /** @type {(object & { exp: number }) | null} */
   let selfCert = null
   return {
     mode: 'self',

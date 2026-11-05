@@ -26,11 +26,21 @@ import { playDone } from '@dotrino/notifications/ring'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { keyLabel } from '@dotrino/identity/capabilities'
 
+/** @typedef {import('./types').Pane} Pane */
+/** @typedef {import('./types').Session} Session */
+/** @typedef {import('./types').ConsoleInfo} ConsoleInfo */
+/** @typedef {import('./types').AgentError} AgentError */
+/** @typedef {import('./types').FoundLink} FoundLink */
+/** @typedef {import('./types').TerminalLink} TerminalLink */
+
 // Lo que contesta el agente de terminal cuando se le pregunta qué es (agent/link.js).
 // NO es el nombre del acta: ese lo pone el dueño al emparejar («TerminalLocal»).
 const AGENT_KIND = 'terminal-agent'
 
 // ---------- i18n (bilingüe es/en, §9) ----------
+/** Un texto, o una función que lo arma con lo que se le pase. */
+/** @typedef {string | ((...a: (string | number)[]) => string)} Msg */
+/** @type {Record<'es' | 'en', Record<string, Msg>>} */
 const M = {
   es: {
     home_title: 'Tu terminal, también desde el teléfono',
@@ -229,30 +239,79 @@ const M = {
 }
 // Idioma: lo gobierna <dotrino-topbar> (clave compartida del ecosistema
 // 'dotrino.lang'); aquí solo reflejamos su valor para traducir el contenido.
-const topbar = document.getElementById('topbar')
+const topbar = /** @type {import('@dotrino/topbar').DotrinoTopbar | null} */ (document.getElementById('topbar')) ?? missing('#topbar')
+/** @type {'es' | 'en'} */
 let lang = 'es'
 try { lang = (localStorage.getItem('dotrino.lang') || (navigator.language || 'es').slice(0, 2)) === 'en' ? 'en' : 'es' } catch {}
+/**
+ * El texto de `k` en el idioma activo; si es una función, con `a`.
+ * @param {string} k
+ * @param {...(string | number)} a
+ * @returns {string}
+ */
 const t = (k, ...a) => { const v = M[lang][k]; return typeof v === 'function' ? v(...a) : v }
 topbar.addEventListener('dotrino-lang', (e) => { lang = e.detail.lang; render() })
 /**
  * Lo que se le enseña al usuario de un error del agente: por su `code`, traducido. Un error
  * sin código es de desarrollo y sale tal cual (e.message), que es lo que hay que pegar en un issue.
  */
-const errorText = (e) => {
+/** @param {unknown} err */
+const errorText = (err) => {
+  const e = /** @type {AgentError | null | undefined} */ (err)
   if (e?.code === 'unauthorized') return t('err_unauthorized', e.reason || '?')
   if (e?.code === 'blocked') return t('err_blocked')
   if (e?.code === 'unknown-session') return t('err_unknown_session')
   return t('error') + (e?.message || String(e))
 }
 
-const app = document.getElementById('app')
+/**
+ * Un elemento que index.html tiene que traer: sin él la página no se puede pintar.
+ * @param {string} what
+ * @returns {never}
+ */
+function missing (what) { throw new Error(`index.html has no ${what}`) }
 
-const installEl = document.getElementById('install')
+const app = document.getElementById('app') ?? missing('#app')
+
+const installEl = document.getElementById('install') ?? missing('#install')
 
 // importNode: los nodos nacen en el documento de la página. Sacados tal cual del <template> (un
 // documento inerte), Chrome no carga el poster de un <video>.
-function el (html) { const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); return document.importNode(tpl.content, true).firstElementChild }
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+/**
+ * @param {string} html  un solo elemento
+ * @returns {HTMLElement}
+ */
+function el (html) {
+  const tpl = document.createElement('template'); tpl.innerHTML = html.trim()
+  const node = document.importNode(tpl.content, true).firstElementChild
+  if (!(node instanceof HTMLElement)) throw new Error('el: the html has no element')
+  return node
+}
+/** @type {Record<string, string>} */
+const ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+/** @param {unknown} s */
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ENTITIES[c])
+
+/**
+ * El elemento de `root` que casa con `sel`: la plantilla lo trae, así que si falta es un fallo.
+ * @template {HTMLElement} [T=HTMLElement]
+ * @param {ParentNode} root
+ * @param {string} sel
+ * @returns {T}
+ */
+function $ (root, sel) {
+  const found = root.querySelector(sel)
+  if (!(found instanceof HTMLElement)) throw new Error(`missing ${sel}`)
+  return /** @type {T} */ (found)
+}
+
+/** El elemento sobre el que ocurrió un evento del DOM. @param {Event} e */
+const targetOf = (e) => /** @type {HTMLElement} */ (e.target)
+
+/** El `code` de un error (del agente o de una petición); `undefined` si no trae. @param {unknown} e */
+const codeOf = (e) => /** @type {AgentError | null | undefined} */ (e)?.code
+/** El mensaje de un error. @param {unknown} e */
+const messageOf = (e) => /** @type {Error | null | undefined} */ (e)?.message
 
 // ---------- Mi perfil (§6.1) ----------
 // Le pasamos identity + reputation al topbar: con eso pinta el avatar del perfil activo y
@@ -271,12 +330,16 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 // gestor de dispositivos del vault), no desde cada app — por eso no hay botón aquí.
 
 // ---------- Render de estados ----------
+/** @type {TerminalLink | null} */
 let link = null // { paired, id, cert, iss, proxy, deviceId } (modo vault)
+/** @type {ReturnType<typeof setInterval> | null} */
 let _probeTimer = null // re-sondeo de presencia; se limpia al re-renderizar
+/** @type {import('@dotrino/proxy-client').WebSocketProxyClient | null} */
 let _probeClient = null // cliente del proxy solo para la sonda de presencia (modo vault externo)
 
 // ¿Este navegador (su propia identidad) tiene aparatos enrolados bajo su self-vault
 // (activado en profile.dotrino.com/#myvault)? Cuáles son terminales lo dice la sonda.
+/** @param {import('@dotrino/identity').Identity} id */
 async function selfMachines (id) {
   return listAgentsByLabel(id)
 }
@@ -288,6 +351,7 @@ const onConsoles = /\/consoles\/?$/.test(location.pathname)
 const RELEASES = 'https://github.com/imdotrino/dotrino-terminal/releases/latest'
 // La portada es la página de entrada: no se vuelve de ninguna parte.
 if (!onConsoles) topbar.setAttribute('no-back', '')
+/** @param {string} page */
 const WIKI = (page) => `https://wiki.dotrino.com${lang === 'en' ? '/en' : ''}/herramientas/${page}/`
 
 function homeScreen () {
@@ -315,10 +379,12 @@ async function render () {
   if (!onConsoles) { app.replaceChildren(homeScreen()); return }
   // `?demo`: la pantalla con un agente de muestra, sin red ni perfil (como en Android e iOS).
   if (new URLSearchParams(location.search).has('demo')) { app.replaceChildren(terminalScreen({ mode: 'demo', paired: true })); return }
-  link = await getLink().catch(() => ({ paired: false }))
+  /** @type {TerminalLink} */
+  const got = await getLink().catch(() => ({ paired: /** @type {const} */ (false) }))
+  link = got
   app.innerHTML = ''
-  if (link.paired) {
-    app.appendChild(terminalScreen(link))
+  if (got.paired) {
+    app.appendChild(terminalScreen(got))
     return
   }
   // Sin vault externo: ¿este navegador es su PROPIA bóveda (self)? Si su identidad
@@ -358,19 +424,20 @@ function choiceScreen () {
       </div>
       <p class="status"><button id="backFromVault" hidden class="link">${t('self_back_vault')}</button></p>
     </section>`)
-  const steps = node.querySelector('#vaultSteps')
-  const backBtn = node.querySelector('#backFromVault')
-  node.querySelector('#goVault').addEventListener('click', () => { steps.hidden = false; backBtn.hidden = false })
-  node.querySelector('#backFromVault').addEventListener('click', () => { steps.hidden = true; backBtn.hidden = true })
-  node.querySelector('#recheck').addEventListener('click', async (e) => {
-    e.target.disabled = true
-    node.querySelector('#chkmsg').textContent = t('checking')
+  const steps = $(node, '#vaultSteps')
+  const backBtn = $(node, '#backFromVault')
+  $(node, '#goVault').addEventListener('click', () => { steps.hidden = false; backBtn.hidden = false })
+  backBtn.addEventListener('click', () => { steps.hidden = true; backBtn.hidden = true })
+  const btn = /** @type {HTMLButtonElement} */ ($(node, '#recheck'))
+  btn.addEventListener('click', async () => {
+    btn.disabled = true
+    $(node, '#chkmsg').textContent = t('checking')
     const l = await getLink().catch(() => ({ paired: false }))
     if (l.paired) return render()
-    node.querySelector('#chkmsg').textContent = t('still_not')
-    e.target.disabled = false
+    $(node, '#chkmsg').textContent = t('still_not')
+    btn.disabled = false
   })
-  node.querySelector('#goSelf').addEventListener('click', () => {
+  $(node, '#goSelf').addEventListener('click', () => {
     const back = encodeURIComponent(location.origin + location.pathname)
     location.href = `https://profile.dotrino.com/myvault?back=${back}`
   })
@@ -386,6 +453,9 @@ const SS_TABS = 'dotrino-terminal:tabs'
 /**
  * El diálogo de la clave de una máquina (`dotrino-terminal lock`). Devuelve lo tecleado, o null
  * si la persona lo deja. `wrong`: el fallo del intento anterior (`bad-code` / `wait`).
+ * @param {string} alias
+ * @param {AgentError | null} wrong
+ * @returns {Promise<string | null>}
  */
 function askMachineCode (alias, wrong) {
   return new Promise((resolve) => {
@@ -402,20 +472,26 @@ function askMachineCode (alias, wrong) {
         </div>
       </form>
     </div>`)
-    const input = back.querySelector('input')
+    const input = /** @type {HTMLInputElement} */ ($(back, 'input'))
+    /** @param {string | null} v */
     const done = (v) => { back.remove(); resolve(v) }
-    back.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); if (input.value) done(input.value) })
-    back.querySelector('[data-testid=code-cancel]').addEventListener('click', () => done(null))
+    $(back, 'form').addEventListener('submit', (e) => { e.preventDefault(); if (input.value) done(input.value) })
+    $(back, '[data-testid=code-cancel]').addEventListener('click', () => done(null))
     back.addEventListener('keydown', (e) => { if (e.key === 'Escape') done(null) })
     document.body.appendChild(back)
     input.focus()
   })
 }
 
+/** @returns {import('./types').SavedTab[]} */
 function loadTabs () { try { return JSON.parse(sessionStorage.getItem(SS_TABS) || '[]') } catch { return [] } }
+/** @param {import('./types').SavedTab[]} list */
 function saveTabs (list) { try { sessionStorage.setItem(SS_TABS, JSON.stringify(list)) } catch {} }
 
 
+/**
+ * @param {{ tabsEl: HTMLElement, termsEl: HTMLElement, hint: HTMLElement, link: TerminalLink }} o
+ */
 function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   // Una pestaña es una MÁQUINA con uno o varios PANELES (split, dueño 2026-10-07): cada panel es
   // su propia conexión al agente con su xterm. `s.agent`/`s.term`/`s.fit`/`s.view` son los del
@@ -423,37 +499,52 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   // consola de esta pestaña». El reparto es un árbol: { pane } | { dir: 'row'|'col', a, b, ratio }.
   /** Adjuntar una imagen: un marco con montaña y sol, dibujado (no depende de fuentes). */
   const ICON_IMAGE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M2.5 11.5l3.5-3 2.5 2 2-1.7 3 2.7"/></svg>'
+  /** @type {Session[]} */
   const sessions = [] // { id, alias, pub, panes: [pane], focus: pane, layout, box, side, panesEl, tab, status, list, collapsed, poll }
+  /** @type {Session | null} */
   let active = null
   let counter = 0
   let paneCounter = 0
 
+  /** El xterm de un panel ya montado (`mountTerm`). @param {Pane} p */
+  const termOf = (p) => { if (!p.term) throw new Error('the pane has no terminal yet'); return p.term }
+  /** El ajuste de tamaño de un panel ya montado. @param {Pane} p */
+  const fitOf = (p) => { if (!p.fit) throw new Error('the pane has no terminal yet'); return p.fit }
+  /** La conexión de un panel ya conectado (`connectPane`). @param {Pane} p */
+  const agentOf = (p) => { if (!p.agent) throw new Error('the pane is not connected yet'); return p.agent }
+
   /** El árbol, con los `consoleId` en las hojas (para recordarlo al recargar). */
+  /** @param {Pane} p */
   const consoleOf = (p) => p.agent?.consoleId
-  const persist = () => saveTabs(sessions.filter((s) => s.agent?.consoleId).map((s) => ({ sub: s.pub, alias: s.alias, consoleId: s.agent.consoleId, layout: layoutIds(s.layout, consoleOf) })))
+  const persist = () => saveTabs(sessions.flatMap((s) => {
+    const consoleId = s.agent?.consoleId
+    return consoleId ? [{ sub: s.pub, alias: s.alias, consoleId, layout: layoutIds(s.layout, consoleOf) }] : []
+  }))
 
   /** Las consolas abiertas en cualquier panel de cualquier pestaña. */
-  const openEverywhere = () => new Set(sessions.flatMap((x) => x.panes.map((p) => p.agent?.consoleId)).filter(Boolean))
+  const openEverywhere = () => new Set(sessions.flatMap((x) => x.panes.flatMap((p) => p.agent?.consoleId || [])))
 
+  /**
+   * @param {Session} s
+   * @param {boolean} [collapsed]
+   * @returns {Pane}
+   */
   function newPane (s, collapsed = true) {
     // Cada panel lleva SU panel de consolas (dueño, 2026-10-08): elige, abre y cierra para ese panel.
-    const p = { id: ++paneCounter, s, collapsed }
-    p.el = el(`<div class="pane" data-testid="pane"><div class="side" data-testid="pane-side" hidden></div><span class="cur-arrow" data-testid="current-arrow" aria-hidden="true" hidden></span><div class="pane-tools">
+    const paneEl = el(`<div class="pane" data-testid="pane"><div class="side" data-testid="pane-side" hidden></div><span class="cur-arrow" data-testid="current-arrow" aria-hidden="true" hidden></span><div class="pane-tools">
       <button data-p="image" data-testid="pane-image" title="${esc(t('image_add'))}" aria-label="${esc(t('image_add'))}">${ICON_IMAGE}</button>
       <button data-p="right" title="${esc(t('split_right'))}" aria-label="${esc(t('split_right'))}">◫</button>
       <button data-p="down" title="${esc(t('split_down'))}" aria-label="${esc(t('split_down'))}">⊟</button>
       <button data-p="close" title="${esc(t('close_pane'))}" aria-label="${esc(t('close_pane'))}">×</button>
     </div><input class="pane-file" data-testid="pane-file" type="file" accept="image/*" hidden><aside class="about" data-testid="about" hidden></aside><div class="term"></div></div>`)
-    p.view = p.el.querySelector('.term')
-    p.about = p.el.querySelector('.about')
+    /** @type {Pane} */
+    const p = { id: ++paneCounter, s, collapsed, el: paneEl, view: $(paneEl, '.term'), about: $(paneEl, '.about'), side: $(paneEl, '.side'), arrow: $(paneEl, '.cur-arrow') }
     wireAbout(s, p)
-    p.side = p.el.querySelector('.side')
-    p.arrow = p.el.querySelector('.cur-arrow')
     p.side.addEventListener('scroll', () => placeArrow(p), { passive: true })
     wireSide(s, p)
     p.el.addEventListener('pointerdown', () => focusPane(s, p), true)
-    p.el.querySelector('.pane-tools').addEventListener('click', (e) => {
-      const a = e.target.closest('button')?.dataset.p; if (!a) return
+    $(p.el, '.pane-tools').addEventListener('click', (e) => {
+      const a = targetOf(e).closest('button')?.dataset.p; if (!a) return
       e.stopPropagation()
       if (a === 'image') picker.click()
       else if (a === 'close') closePane(s, p)
@@ -461,7 +552,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     })
     // ADJUNTAR UNA IMAGEN: con el botón (en el teléfono abre la galería o la cámara), pegándola
     // o soltándola encima. Va a la máquina y su ruta se escribe en la consola.
-    const picker = p.el.querySelector('.pane-file')
+    const picker = /** @type {HTMLInputElement} */ ($(p.el, '.pane-file'))
     picker.addEventListener('change', () => { const f = picker.files?.[0]; picker.value = ''; if (f) attachImage(s, p, f) })
     p.el.addEventListener('paste', (e) => {
       const f = imageIn(e.clipboardData); if (!f) return
@@ -478,26 +569,40 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     return p
   }
 
-  /** La ruta tal como se escribe en la consola: entre comillas si lleva algo que la shell partiría. */
+  /**
+   * La ruta tal como se escribe en la consola: entre comillas si lleva algo que la shell partiría.
+   * @param {string} file
+   */
   const typedPath = (file) => (/^[\w@%+=:,./-]+$/.test(file) ? file : `'${file.replace(/'/g, `'\\''`)}'`)
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {File} file
+   */
   async function attachImage (s, p, file) {
-    if (!p.agent?.consoleId || !p.term) { hint.textContent = t('image_no_console'); return }
+    const agent = p.agent
+    const term = p.term
+    if (!agent?.consoleId || !term) { hint.textContent = t('image_no_console'); return }
     if (p.sending) { hint.textContent = t('image_busy'); return }
     p.sending = true
+    /** @param {string} text */
     const said = (text) => { if (active === s) { hint.textContent = text; hint.title = '' } }
     said(t('image_sending', 0))
     try {
       const bytes = await prepareImage(file)
-      const where = await p.agent.sendImage(bytes, { onProgress: (sent, total) => said(t('image_sending', Math.round(sent * 100 / total))) })
+      const where = await agent.sendImage(bytes, { onProgress: (sent, total) => said(t('image_sending', Math.round(sent * 100 / total))) })
       // `paste` y no `input`: un programa que pidió pegado entre corchetes (Claude Code) recibe
       // la ruta como algo pegado, que es como reconoce un archivo.
-      p.term.paste(typedPath(where) + ' ')
+      term.paste(typedPath(where) + ' ')
       said(t('image_sent'))
-      try { p.term.focus() } catch {}
+      try { term.focus() } catch {}
     } catch (e) {
-      const known = { timeout: 'image_old', 'too-big': 'image_big', 'not-image': 'image_not' }[e.code]
-      said(known ? t(known) : t('image_fail') + e.message)
+      /** @type {Record<string, string>} */
+      const texts = { timeout: 'image_old', 'too-big': 'image_big', 'not-image': 'image_not' }
+      const code = codeOf(e)
+      const known = code ? texts[code] : undefined
+      said(known ? t(known) : t('image_fail') + messageOf(e))
     } finally { p.sending = false }
   }
 
@@ -505,9 +610,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * ENLACES Y RUTAS de la consola (src/links.js): se subrayan al pasar por encima, Ctrl+clic (⌘ en
    * macOS) los abre, y el clic derecho (o un toque, en una pantalla táctil) da a elegir. Una ruta
    * es de la MÁQUINA, no de este aparato: se trae por la sesión (`fetchFile`) y se abre aquí.
+   * @param {Session} s
+   * @param {Pane} p
    */
   function wireLinks (s, p) {
-    const term = p.term
+    const term = termOf(p)
     term.registerLinkProvider({
       provideLinks (y, done) {
         const line = term.buffer.active.getLine(y - 1)
@@ -523,7 +630,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
           activate: (e) => {
             if (e.ctrlKey || e.metaKey) return openLink(s, p, l)
             // Un toque en una pantalla táctil no tiene Ctrl: da a elegir.
-            if (e.sourceCapabilities?.firesTouchEvents) linkMenu(s, p, l, e.clientX, e.clientY)
+            if (/** @type {MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } }} */ (e).sourceCapabilities?.firesTouchEvents) linkMenu(s, p, l, e.clientX, e.clientY)
           }
         })))
       }
@@ -536,15 +643,31 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     })
   }
 
-  /** `file://` es una ruta de la máquina, no un enlace que el navegador pueda abrir. */
+  /**
+   * `file://` es una ruta de la máquina, no un enlace que el navegador pueda abrir.
+   * @param {FoundLink} l
+   */
   const asPath = (l) => l.kind === 'path' ? l.target : /^file:\/\//i.test(l.target) ? decodeURIComponent(l.target.replace(/^file:\/\/[^/]*/i, '')) : null
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {FoundLink} l
+   * @param {{ download?: boolean }} [opts]
+   */
   function openLink (s, p, l, { download = false } = {}) {
     const file = asPath(l)
     if (file == null) { window.open(l.target, '_blank', 'noopener'); return }
     openFile(s, p, file, { download })
   }
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {FoundLink | null | undefined} l
+   * @param {number} x
+   * @param {number} y
+   */
   function linkMenu (s, p, l, x, y) {
     document.querySelector('.cmenu')?.remove()
     const file = l && asPath(l)
@@ -557,12 +680,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       ${selected ? `<button data-a="copy-sel" data-testid="menu-copy">${t('copy')}</button>
       <button data-a="copy-unwrapped" data-testid="menu-copy-unwrapped">${t('copy_unwrapped')}</button>` : ''}
     </div>`)
+    /** @param {string} text */
     const write = (text) => navigator.clipboard.writeText(text).then(() => { hint.textContent = t('link_copied') }, (err) => { hint.textContent = err.message })
     m.addEventListener('click', (e) => {
-      const a = e.target.dataset.a
+      const a = targetOf(e).dataset.a
       m.remove()
-      if (a === 'open' || a === 'download') openLink(s, p, l, { download: a === 'download' })
-      if (a === 'copy') write(file ?? l.target)
+      // Abrir, descargar y copiar el enlace solo salen en el menú si hay enlace (`l`).
+      if (l && (a === 'open' || a === 'download')) openLink(s, p, l, { download: a === 'download' })
+      if (l && a === 'copy') write(file ?? l.target)
       if (a === 'copy-sel') write(selected)
       if (a === 'copy-unwrapped') write(unwrap(selected))
     })
@@ -573,14 +698,22 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** Lo que el navegador enseña en una pestaña; lo demás se descarga. */
   const VIEWABLE = /^(?:application\/pdf|image\/|text\/plain|application\/json|text\/csv|audio\/|video\/)/
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {string} file
+   * @param {{ download?: boolean }} [opts]
+   */
   async function openFile (s, p, file, { download = false } = {}) {
-    if (!p.agent?.consoleId) { hint.textContent = t('file_no_console'); return }
+    const agent = p.agent
+    if (!agent?.consoleId) { hint.textContent = t('file_no_console'); return }
+    /** @param {string} text */
     const said = (text) => { if (active === s) { hint.textContent = text; hint.title = '' } }
     // La pestaña se abre YA, con el clic: abierta después de esperar, el navegador la bloquea.
     const tab = download ? null : window.open('', '_blank')
     said(t('file_fetching', 0))
     try {
-      const got = await p.agent.fetchFile(file, { onProgress: (n, total) => said(t('file_fetching', total ? Math.round(n * 100 / total) : 100)) })
+      const got = await agent.fetchFile(file, { onProgress: (n, total) => said(t('file_fetching', total ? Math.round(n * 100 / total) : 100)) })
       const type = mimeOf(got.name)
       const url = URL.createObjectURL(new Blob([got.bytes], { type }))
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
@@ -594,11 +727,18 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       said(t('file_ready', got.name))
     } catch (e) {
       tab?.close()
-      const known = { timeout: 'file_old', 'no-file': 'file_none', 'is-dir': 'file_dir', 'not-file': 'file_none', 'too-big': 'file_big', 'no-read': 'file_noread', 'no-cwd': 'file_nocwd', changed: 'file_changed' }[e.code]
-      said(known ? t(known) : t('file_fail') + e.message)
+      /** @type {Record<string, string>} */
+      const texts = { timeout: 'file_old', 'no-file': 'file_none', 'is-dir': 'file_dir', 'not-file': 'file_none', 'too-big': 'file_big', 'no-read': 'file_noread', 'no-cwd': 'file_nocwd', changed: 'file_changed' }
+      const code = codeOf(e)
+      const known = code ? texts[code] : undefined
+      said(known ? t(known) : t('file_fail') + messageOf(e))
     }
   }
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   */
   function focusPane (s, p) {
     if (s.focus === p) return
     s.focus = p
@@ -606,8 +746,12 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     try { p.term?.focus() } catch {}
   }
 
-  /** Pinta el árbol en `.panes`: los elementos de los paneles se REUBICAN (el xterm no se vuelve a montar). */
+  /**
+   * Pinta el árbol en `.panes`: los elementos de los paneles se REUBICAN (el xterm no se vuelve a montar).
+   * @param {Session} s
+   */
   function renderLayout (s) {
+    /** @type {(n: import('./types').Layout<Pane>) => HTMLElement} */
     const build = (n) => {
       if ('pane' in n) return n.pane.el
       const box = el(`<div class="split dir-${n.dir}"></div>`)
@@ -620,6 +764,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       bar.addEventListener('pointerdown', (e) => {
         e.preventDefault(); bar.setPointerCapture(e.pointerId)
         const r = box.getBoundingClientRect()
+        /** @param {PointerEvent} ev */
         const move = (ev) => {
           const f = n.dir === 'row' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height
           n.ratio = clampRatio(f); apply()
@@ -641,6 +786,10 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /**
    * Divide el panel `p`: a la derecha (`row`) o abajo (`col`), con la consola `consoleId` o —sin
    * ella— con una libre que no esté abierta en ningún panel, o una nueva.
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {'row' | 'col'} dir
+   * @param {string | null} consoleId
    */
   async function splitPane (s, p, dir, consoleId) {
     const q = newPane(s, p.collapsed)
@@ -651,7 +800,11 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     persist(); refresh(s)
   }
 
-  /** Cierra el panel `p` (la consola sigue viva en la máquina). El último no se cierra: para eso está la pestaña. */
+  /**
+   * Cierra el panel `p` (la consola sigue viva en la máquina). El último no se cierra: para eso está la pestaña.
+   * @param {Session} s
+   * @param {Pane} p
+   */
   function closePane (s, p) {
     if (s.panes.length === 1) { hint.textContent = t('pane_last'); return }
     if (!removeLeaf(s.layout, p)) return
@@ -666,6 +819,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   // Al cambiar de pestaña no se toca el tamaño de nadie (§ tamaño: la pantalla lo toma al abrir o
   // cambiar de consola, o con «Ajustar a esta pantalla»).
+  /** @param {Session | null} s */
   function setActive (s) {
     active = s
     for (const x of sessions) {
@@ -675,6 +829,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     if (s?.term) { try { s.term.focus() } catch {} }
   }
 
+  /** @param {Session} s */
   function removeSession (s) {
     clearInterval(s.poll)
     for (const p of s.panes) { p.resizeObs?.disconnect(); try { p.term?.dispose() } catch {} }
@@ -685,29 +840,41 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
   // La × de la pestaña SUELTA las consolas (siguen vivas en la máquina; dueño, 2026-10-07: cerrar la
   // pestaña nunca cierra la consola) y quita la pestaña. Una consola se cierra desde el panel.
+  /** @param {Session} s */
   function closeSession (s) { for (const p of s.panes) { try { p.agent?.disconnect() } catch {} } removeSession(s) }
 
+  /** @param {Session} s */
   function renderTab (s) {
     s.tab = el(`<button class="tab" data-testid="term-tab"><span class="dot"></span><span class="tlabel" title="${esc(s.alias)}">${esc(s.alias.split(' · ')[0])}</span><span class="x" title="${t('close_tab')}">×</span></button>`)
-    s.tab.addEventListener('click', (e) => { if (!e.target.classList.contains('x')) setActive(s) })
-    s.tab.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); closeSession(s) })
+    s.tab.addEventListener('click', (e) => { if (!targetOf(e).classList.contains('x')) setActive(s) })
+    $(s.tab, '.x').addEventListener('click', (e) => { e.stopPropagation(); closeSession(s) })
     tabsEl.appendChild(s.tab)
   }
+  /**
+   * @param {Session} s
+   * @param {'conn' | 'ok' | 'err'} state
+   */
   function setTabState (s, state) { // 'conn' | 'ok' | 'err'
-    s.tab.querySelector('.dot').className = 'dot ' + state
+    $(s.tab, '.dot').className = 'dot ' + state
     s.tab.title = state === 'err' ? (s.status || 'error') : ''
   }
 
-  /** El tamaño que cabe en el panel `p` de esta pantalla. */
-  const fitted = (p) => p.fit.proposeDimensions() || { cols: p.term.cols, rows: p.term.rows }
+  /**
+   * El tamaño que cabe en el panel `p` de esta pantalla.
+   * @param {Pane} p @returns {{ cols: number, rows: number }}
+   */
+  const fitted = (p) => { const term = termOf(p); return fitOf(p).proposeDimensions() || { cols: term.cols, rows: term.rows } }
 
   /**
    * La vista sigue el tamaño de la consola: si otra pantalla lo tiene, se muestra a ese tamaño (con
    * desplazamiento), sin encogerla.
+   * @param {Pane} p
+   * @param {ConsoleInfo | null | undefined} info
    */
   function follow (p, info) {
     if (!info?.cols || !info?.rows) return
-    if (info.cols !== p.term.cols || info.rows !== p.term.rows) { try { p.term.resize(info.cols, info.rows) } catch {} }
+    const term = termOf(p)
+    if (info.cols !== term.cols || info.rows !== term.rows) { try { term.resize(info.cols, info.rows) } catch {} }
     markOverflow(p)
   }
 
@@ -716,6 +883,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * pantalla), el panel se desplaza para llegar a lo que queda fuera, y la barra del historial de
    * xterm se esconde: con las dos a la vez no se sabía cuál mover. El historial sigue con la rueda
    * o el dedo. Al dejar de caber se va al final, que es donde está el cursor.
+   * @param {Pane} p
    */
   function markOverflow (p) {
     requestAnimationFrame(() => {
@@ -728,19 +896,24 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     })
   }
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   */
   function mountTerm (s, p) {
-    p.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0f1416', foreground: '#dfe3e6', cursor: '#81cfff', selectionBackground: '#004c6b' } })
-    p.fit = new FitAddon(); p.term.loadAddon(p.fit)
+    const agent = agentOf(p)
+    const term = p.term = new Terminal({ fontSize: 14, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', cursorBlink: true, theme: { background: '#0f1416', foreground: '#dfe3e6', cursor: '#81cfff', selectionBackground: '#004c6b' } })
+    const fit = p.fit = new FitAddon(); term.loadAddon(fit)
     p.view.replaceChildren()
-    p.term.open(p.view); p.fit.fit()
+    term.open(p.view); fit.fit()
     wireLinks(s, p)
-    p.agent.onData = (d) => p.term.write(d)
-    p.agent.onExit = (code, why) => {
+    agent.onData = (d) => term.write(d)
+    agent.onExit = (code, why) => {
       if (why?.closedBy === 'other') return closedByOther(s, p, why.id)
-      p.term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s)
+      term.write(`\r\n${t('exited', code)}\r\n`); persist(); refresh(s)
     }
-    p.agent.onMeta = (info) => { p.meta = info; follow(p, info); renderAbout(s, p); done.one(s.pub, info) }
-    p.term.onData((d) => p.agent.input(d))
+    agent.onMeta = (info) => { p.meta = info; follow(p, info); renderAbout(s, p); done.one(s.pub, info) }
+    term.onData((d) => agent.input(d))
     // Cambió el espacio del panel (girar el teléfono, redimensionar, aparecer o colapsar el panel
     // de consolas, mover un divisor): se le dice al agente, que lo aplica solo si el tamaño es de
     // este panel; si no, la vista sigue al tamaño de la consola.
@@ -763,13 +936,21 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /** ⤢ «Usar el tamaño de esta pantalla»: una flecha diagonal doble, dibujada (no depende de fuentes). */
   const ICON_SIZE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5l-11 11"/></svg>'
 
-  /** Las líneas de una consola en el panel: máquina, carpeta y título del programa. Ni la tarea ni las notas: esas van solo en la tarjeta. */
+  /**
+   * Las líneas de una consola en el panel: máquina, carpeta y título del programa. Ni la tarea ni las notas: esas van solo en la tarjeta.
+   * @param {ConsoleInfo} c
+   */
   function linesOf (c) {
     const l = panelLines(c.title, c.cwd, c.host)
     return [l.host, l.dir && shortTitle(l.dir), l.name].filter(Boolean)
   }
 
-  /** Esas líneas como filas del panel abierto; el número va con la primera. */
+  /**
+   * Esas líneas como filas del panel abierto; el número va con la primera.
+   * @param {ConsoleInfo} c
+   * @param {number} i
+   * @param {string | null | undefined} mine
+   */
   function rows (c, i, mine) {
     const [first, ...more] = linesOf(c)
     const head = `${c.id === mine ? '● ' : ''}${numOf(c, i)}${first ? ' · ' + esc(first) : ''}`
@@ -780,21 +961,32 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /**
    * Una ruta para el panel: lo que importa es la carpeta final, así que se recorta POR LA
    * IZQUIERDA, por carpetas enteras, hasta `max` caracteres.
+   * @param {string} text
+   * @param {number} [max]
    */
   function shortTitle (text, max = 24) {
     if (text.length <= max) return text
     const parts = text.split('/')
-    let out = parts.pop()
-    while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 1) out = parts.pop() + '/' + out
+    // `split` siempre da al menos un trozo, y el bucle solo saca mientras quedan.
+    let out = /** @type {string} */ (parts.pop())
+    while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 1) out = /** @type {string} */ (parts.pop()) + '/' + out
     return '…/' + (out.length > max - 2 ? '…' + out.slice(-(max - 3)) : out)
   }
 
-  /** Número fijo (lo da el agente ≥ 0.12); con uno anterior, la posición. */
+  /**
+   * Número fijo (lo da el agente ≥ 0.12); con uno anterior, la posición.
+   * @type {(c: ConsoleInfo, i: number) => number}
+   */
   const numOf = (c, i) => c.n ?? i + 1
 
   /** La llave de este aparato: con ella se reconoce, en `sizeBy`, si el tamaño es nuestro. */
   const myDevice = () => link?.id?.me?.publickey || null
 
+  /**
+   * @param {Session} s
+   * @param {ConsoleInfo} c
+   * @param {Pane} p
+   */
   function where (s, c, p) {
     const inPane = s.panes.some((p) => p.agent?.consoleId === c.id)
     const others = (c.watchers || []).length - (inPane ? 1 : 0)
@@ -812,13 +1004,19 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   }
 
 
-  /** La consola del panel `p` (con su número), tal como la cuenta el agente. */
+  /**
+   * La consola del panel `p` (con su número), tal como la cuenta el agente.
+   * @param {Session} s
+   * @param {Pane} p
+   * @returns {{ c: ConsoleInfo, n: number } | null}
+   */
   function current (s, p) {
     const list = s.list || []
     const i = list.findIndex((x) => x.id === p.agent?.consoleId)
     return i < 0 ? null : { c: list[i], n: numOf(list[i], i) }
   }
 
+  /** @param {ConsoleInfo['sizeBy']} b */
   function sizeWho (b) {
     return b?.device && b.device === myDevice() ? t('size_here') : b?.origin === 'local' ? t('size_window') : t('size_device')
   }
@@ -827,17 +1025,23 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * El estado de una consola, que da el agente (≥ 0.17): `busy` = está trabajando (un agente de
    * IA lo dice en su título; para lo demás, salida sostenida); `doneAt` = terminó, o pidió
    * atención, y nadie ha entrado ni tecleado desde entonces.
+   * @param {ConsoleInfo} c
    */
   const actClass = (c) => c.activity === 'busy' ? ' busy' : c.doneAt ? ' done' : ''
+  /** @param {ConsoleInfo} c */
   const actText = (c) => c.activity === 'busy' ? ` · ${t('act_busy')}` : c.doneAt ? ` · ${t('act_done')}` : ''
 
-  /** El panel de consolas de CADA panel de la pestaña: la lista es de la máquina, la marcada es la suya. */
+  /**
+   * El panel de consolas de CADA panel de la pestaña: la lista es de la máquina, la marcada es la suya.
+   * @param {Session} s
+   */
   function renderSide (s) { for (const p of s.panes) renderPaneSide(s, p) }
 
   /**
    * La flecha de la consola activa: un triángulo que sale del borde del panel, a la altura de su
    * consola, y apunta a la terminal. Va fuera del panel (que recorta lo que se sale) y lo sigue
    * cuando se desplaza; si la activa queda fuera de la vista, no se enseña.
+   * @param {Pane} p
    */
   function placeArrow (p) {
     const on = p.side.hidden ? null : p.side.querySelector('.sbtn.num.on, .srow.item.on')
@@ -852,12 +1056,17 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     p.arrow.hidden = false
   }
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   */
   function renderPaneSide (s, p) {
     if (p.drag?.on) return             // a media arrastrada no se repinta: se llevaría lo que se arrastra
     const list = s.list || []
     const cur = current(s, p)
     const pinTitle = cur ? t('pin_title', cur.n) : t('pin_here')
     const mine = p.agent?.consoleId
+    /** @param {ConsoleInfo} c */
     const inPane = (c) => c.id !== mine && s.panes.some((x) => x.agent?.consoleId === c.id) ? ' here' : ''
     const side = p.side
     side.classList.toggle('collapsed', p.collapsed)
@@ -887,13 +1096,22 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   const SS_ABOUT = 'dotrino-terminal:about-folded'
   let aboutFolded = (() => { try { return localStorage.getItem(SS_ABOUT) === '1' } catch { return false } })()
 
-  /** La consola del panel, con lo último que dijo el agente de ella (`meta` llega antes que la lista). */
+  /**
+   * La consola del panel, con lo último que dijo el agente de ella (`meta` llega antes que la lista).
+   * @param {Session} s
+   * @param {Pane} p
+   * @returns {ConsoleInfo | null}
+   */
   function aboutOf (s, p) {
     const id = p.agent?.consoleId
     if (!id) return null
     return p.meta?.id === id ? p.meta : current(s, p)?.c || null
   }
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   */
   function renderAbout (s, p) {
     const box = p.about
     if (!box) return
@@ -924,24 +1142,31 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       <div class="about-row"><span class="about-msg" data-testid="about-msg"></span><button class="about-act" data-a="edit" data-testid="about-edit">${esc(t(note ? 'about_edit' : 'about_add'))}</button></div>`
   }
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   */
   function wireAbout (s, p) {
     const box = p.about
     const done = () => { p.editing = null; renderAbout(s, p); try { p.term?.focus() } catch {} }
     const save = async () => {
       const id = p.editing
-      const text = box.querySelector('textarea').value.replace(/\s+$/, '')
-      const msg = box.querySelector('.about-msg')
+      // Guardar solo se ofrece editando (el botón y Ctrl+Enter).
+      if (!id) throw new Error('no note is being edited')
+      const agent = agentOf(p)
+      const text = /** @type {HTMLTextAreaElement} */ ($(box, 'textarea')).value.replace(/\s+$/, '')
+      const msg = $(box, '.about-msg')
       try {
-        const c = await p.agent.note(id, { text })
-        if (p.agent.consoleId === c.id) p.meta = c
+        const c = await agent.note(id, { text })
+        if (agent.consoleId === c.id) p.meta = c
         done(); refresh(s)
       } catch (e) {
         // Lo escrito se queda en la caja: un fallo no se lleva la nota.
-        msg.textContent = t(e.code === 'timeout' ? 'about_old' : 'about_fail')
+        msg.textContent = t(codeOf(e) === 'timeout' ? 'about_old' : 'about_fail')
       }
     }
     box.addEventListener('click', (e) => {
-      const a = e.target.closest('button')?.dataset.a; if (!a) return
+      const a = targetOf(e).closest('button')?.dataset.a; if (!a) return
       if (a === 'hide' || a === 'show') {
         aboutFolded = a === 'hide'
         try { localStorage.setItem(SS_ABOUT, aboutFolded ? '1' : '0') } catch {}
@@ -950,8 +1175,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       }
       if (a === 'task-del') {
         const c = aboutOf(s, p); if (!c) return
-        p.agent.note(c.id, { task: '' }).then((r) => { if (p.agent.consoleId === r.id) p.meta = r; renderAbout(s, p); refresh(s) })
-          .catch((e) => { const m = box.querySelector('.about-msg'); if (m) m.textContent = t(e.code === 'timeout' ? 'about_old' : 'about_fail') })
+        const agent = agentOf(p)
+        agent.note(c.id, { task: '' }).then((r) => { if (agent.consoleId === r.id) p.meta = r; renderAbout(s, p); refresh(s) })
+          .catch((e) => { const m = box.querySelector('.about-msg'); if (m) m.textContent = t(codeOf(e) === 'timeout' ? 'about_old' : 'about_fail') })
         return
       }
       if (a === 'cancel') return done()
@@ -959,9 +1185,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       if (a === 'edit') {
         const c = aboutOf(s, p); if (!c) return
         p.editing = c.id
-        box.querySelector('.about-note').outerHTML = `<textarea class="about-text" data-testid="about-text" maxlength="4000" aria-label="${esc(t('about_title'))}" placeholder="${esc(t('about_ph'))}"></textarea>`
-        box.querySelector('.about-row').innerHTML = `<span class="about-msg" data-testid="about-msg"></span><button class="about-act" data-a="cancel" data-testid="about-cancel">${esc(t('about_cancel'))}</button><button class="about-act primary" data-a="save" data-testid="about-save">${esc(t('about_save'))}</button>`
-        const ta = box.querySelector('textarea')
+        $(box, '.about-note').outerHTML = `<textarea class="about-text" data-testid="about-text" maxlength="4000" aria-label="${esc(t('about_title'))}" placeholder="${esc(t('about_ph'))}"></textarea>`
+        $(box, '.about-row').innerHTML = `<span class="about-msg" data-testid="about-msg"></span><button class="about-act" data-a="cancel" data-testid="about-cancel">${esc(t('about_cancel'))}</button><button class="about-act primary" data-a="save" data-testid="about-save">${esc(t('about_save'))}</button>`
+        const ta = /** @type {HTMLTextAreaElement} */ ($(box, 'textarea'))
         ta.value = c.note || ''
         ta.focus()
       }
@@ -979,31 +1205,41 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   // empuja de la consola que miras y la lista de las demás pasan por el mismo sitio.
   // El trino de TERMINADO, no el de aviso: de oído se distingue «terminó» de «te avisan». En su
   // versión `low`, como el escritorio y las apps del teléfono: la original sonaba muy fuerte.
-  const ring = () => playDone({ level: 'low' }).catch((e) => console.warn('ring: could not play', e.name))
+  const ring = () => playDone({ level: 'low' }).catch((e) => console.warn('ring: could not play', /** @type {Error} */ (e).name))
   const done = doneWatcher({ onRing: ring })
 
+  /** @param {Session} s */
   async function refresh (s) {
-    if (!s.agent?.rc?.key) return
-    try { s.list = await s.agent.list(); renderSide(s) } catch (_) { return }
+    const agent = s.agent
+    if (!agent?.rc?.key) return
+    try { s.list = await agent.list(); renderSide(s) } catch (_) { return }
     done.list(s.pub, s.list)
   }
 
-  /** Pasar a otra consola (o a una nueva) en la misma conexión: toma el tamaño de esta pantalla. */
+  /**
+   * Pasar a otra consola (o a una nueva) en la misma conexión: toma el tamaño de esta pantalla.
+   * @param {Session} s
+   * @param {string | null} id  null: una nueva
+   * @param {Pane | null} [p]
+   */
   async function switchTo (s, id, p = s.focus) {
-    if (id && id === p.agent.consoleId) return
+    if (!p) throw new Error('switchTo: the tab has no pane')
+    const agent = agentOf(p)
+    const term = termOf(p)
+    if (id && id === agent.consoleId) return
     // Cada panel elige por su cuenta (dueño, 2026-10-08): la misma consola puede verse en dos
     // paneles a la vez, como en dos pantallas.
     const { cols, rows } = fitted(p)
     try {
-      p.term.reset()
-      try { p.term.resize(cols, rows) } catch {}
-      const r = id ? await p.agent.attach(id, cols, rows) : await p.agent.open(cols, rows)
+      term.reset()
+      try { term.resize(cols, rows) } catch {}
+      const r = id ? await agent.attach(id, cols, rows) : await agent.open(cols, rows)
       follow(p, r.console)
       persist()
     } catch (e) {
-      p.term.write(`\r\n\x1b[31m${e.code === 'no-console' ? t('console_gone') : errorText(e)}\x1b[0m\r\n`)
+      term.write(`\r\n\x1b[31m${codeOf(e) === 'no-console' ? t('console_gone') : errorText(e)}\x1b[0m\r\n`)
     }
-    refresh(s); p.term.focus()
+    refresh(s); term.focus()
   }
 
   /**
@@ -1011,23 +1247,34 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * se miran, la primera igual. Una NUEVA solo si la máquina se queda sin ninguna (dueño,
    * 2026-10-07: vale para todo cliente remoto). Si la elegida ya no existía (el panel iba un
    * instante por detrás), se vuelve a elegir con la lista fresca, una vez. Devuelve si abrió una nueva.
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {string | null} id
+   * @param {boolean} [fresh]
+   * @returns {Promise<boolean>}
    */
   async function moveAway (s, p, id, fresh = false) {
-    const list = fresh ? await p.agent.list().catch(() => []) : (s.list || [])
+    const agent = agentOf(p)
+    /** @type {ConsoleInfo[]} */
+    const list = fresh ? await agent.list().catch(() => []) : (s.list || [])
     const open = openEverywhere()
     const rest = list.filter((c) => c.id !== id && !open.has(c.id))
     const other = rest.find((c) => !(c.watchers || []).length) || rest[0]
     await switchTo(s, other?.id || null, p)
-    const now = p.agent.consoleId
+    const now = agent.consoleId
     if (now && now !== id) return !other
     if (fresh) return false
     return moveAway(s, p, id, true)
   }
 
-  /** Cerrar una consola. Si está en un panel de esta pestaña, ese panel pasa antes a otra (o a una nueva). */
+  /**
+   * Cerrar una consola. Si está en un panel de esta pestaña, ese panel pasa antes a otra (o a una nueva).
+   * @param {Session} s
+   * @param {string} id
+   */
   async function killConsole (s, id) {
     for (const p of s.panes.filter((x) => x.agent?.consoleId === id)) await moveAway(s, p, id)
-    s.agent.kill(id)
+    s.agent?.kill(id)
     setTimeout(() => refresh(s), 200)
   }
 
@@ -1035,6 +1282,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * OTRA pantalla cerró la consola de esta pestaña (el teléfono, una ventana de la máquina). La
    * pestaña no se queda muerta: pasa a una consola que ya existe, o a una nueva, y lo dice —
    * la misma regla que la ventana de la máquina (agente 0.24.1).
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {string | null} id
    */
   async function closedByOther (s, p, id) {
     const n = (s.list || []).find((c) => c.id === id)?.n ?? '?'
@@ -1046,21 +1296,32 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /**
    * ⤢ «Usar el tamaño de esta pantalla»: la consola lo toma ahora. No queda fijado: lo cambia la
    * siguiente pantalla que la abra, se cambie a ella, pulse ⤢ o teclee.
+   * @param {Session} s
+   * @param {Pane} p
    */
   function takeSize (s, p) {
     const cur = current(s, p)
     if (!cur) return
+    const term = termOf(p)
+    const agent = agentOf(p)
     const { cols, rows } = fitted(p)
-    try { p.term.resize(cols, rows) } catch {}
-    p.agent.resize(cols, rows)
-    p.agent.take()
+    try { term.resize(cols, rows) } catch {}
+    agent.resize(cols, rows)
+    agent.take()
     // Dicho en la línea de estado: si esta pantalla ya tenía el tamaño, no se ve otro cambio.
     hint.textContent = t('pinned_now', cur.n, cols, rows)
     setTimeout(() => refresh(s), 200)
-    p.term.focus()
+    term.focus()
   }
 
-  /** Clic derecho (o mantener pulsado) sobre una consola: lo que se puede hacer con ella. */
+  /**
+   * Clic derecho (o mantener pulsado) sobre una consola: lo que se puede hacer con ella.
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {string} id
+   * @param {number} x
+   * @param {number} y
+   */
   function consoleMenu (s, p, id, x, y) {
     document.querySelector('.cmenu')?.remove()
     // «Abrir aquí» solo sobra si este panel ya la tiene; a la derecha o abajo vale siempre.
@@ -1072,7 +1333,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       <button data-a="kill">${t('kill_console')}</button>
     </div>`)
     m.addEventListener('click', (e) => {
-      const a = e.target.dataset.a
+      const a = targetOf(e).dataset.a
       m.remove()
       if (a === 'here') switchTo(s, id, p)
       if (a === 'right' || a === 'down') splitPane(s, p, a === 'right' ? 'row' : 'col', id)
@@ -1082,21 +1343,27 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     setTimeout(() => document.addEventListener('click', () => m.remove(), { once: true }), 0)
   }
 
+  /**
+   * @param {Session} s
+   * @param {Pane} p
+   */
   function wireSide (s, p) {
     p.side.addEventListener('click', (e) => {
       if (p.dragged) { p.dragged = false; return }   // soltar tras arrastrar no es un clic
-      const b = e.target.closest('button'); if (!b) return
+      const b = targetOf(e).closest('button'); if (!b) return
       if (b.dataset.act === 'expand' || b.dataset.act === 'collapse') { p.collapsed = !p.collapsed; renderPaneSide(s, p); return }
       if (b.dataset.act === 'new') return switchTo(s, null, p)
       if (b.dataset.act === 'pin') return takeSize(s, p)
       if (b.dataset.kill) return killConsole(s, b.dataset.kill)
       if (b.dataset.id) return switchTo(s, b.dataset.id, p)
     })
-    const menuAt = (target, x, y) => { const id = target.closest('[data-id]')?.dataset.id; if (id) consoleMenu(s, p, id, x, y) }
-    p.side.addEventListener('contextmenu', (e) => { if (e.target.closest('[data-id]')) { e.preventDefault(); menuAt(e.target, e.clientX, e.clientY) } })
+    /** @type {(target: HTMLElement, x: number, y: number) => void} */
+    const menuAt = (target, x, y) => { const id = target.closest(/** @type {'div'} */ ('[data-id]'))?.dataset.id; if (id) consoleMenu(s, p, id, x, y) }
+    p.side.addEventListener('contextmenu', (e) => { if (targetOf(e).closest('[data-id]')) { e.preventDefault(); menuAt(targetOf(e), e.clientX, e.clientY) } })
     // Mantener pulsado en el teléfono: lo mismo que el clic derecho.
-    let hold = null
-    p.side.addEventListener('touchstart', (e) => { const tt = e.touches[0]; hold = setTimeout(() => menuAt(e.target, tt.clientX, tt.clientY), 550) }, { passive: true })
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let hold
+    p.side.addEventListener('touchstart', (e) => { const tt = e.touches[0]; hold = setTimeout(() => menuAt(targetOf(e), tt.clientX, tt.clientY), 550) }, { passive: true })
     for (const ev of ['touchend', 'touchmove', 'touchcancel']) p.side.addEventListener(ev, () => clearTimeout(hold), { passive: true })
 
     // ORDENAR ARRASTRANDO, solo en el panel ABIERTO: una consola se suelta sobre otra y toma su sitio.
@@ -1106,11 +1373,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
     const ITEMS = '.srow.item'
     const unmark = () => { for (const el of p.side.querySelectorAll('.drop-before, .drop-after, .dragged')) el.classList.remove('drop-before', 'drop-after', 'dragged') }
     const endDrag = () => { p.drag = null; p.side.classList.remove('dragging'); unmark() }
+    /** El `data-id` de una fila del panel (la plantilla se lo pone a todas). @param {HTMLElement} row */
+    const idOf = (row) => /** @type {string} */ (row.dataset.id)
     p.side.addEventListener('pointerdown', (e) => {
-      const item = e.target.closest(ITEMS)
-      if (!item || e.button !== 0 || e.target.closest('[data-kill]')) return
-      if (e.pointerType !== 'mouse' && !e.target.closest('.grip')) return
-      p.drag = { id: item.dataset.id, y: e.clientY, pointer: e.pointerId, on: false, over: null }
+      const target = targetOf(e)
+      const item = target.closest(/** @type {'div'} */ (ITEMS))
+      if (!item || e.button !== 0 || target.closest('[data-kill]')) return
+      if (e.pointerType !== 'mouse' && !target.closest('.grip')) return
+      p.drag = { id: idOf(item), y: e.clientY, pointer: e.pointerId, on: false, over: null }
     })
     p.side.addEventListener('pointermove', (e) => {
       const d = p.drag
@@ -1122,14 +1392,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         try { p.side.setPointerCapture(e.pointerId) } catch {}
         p.side.classList.add('dragging')
       }
-      const items = [...p.side.querySelectorAll(ITEMS)]
+      const items = [...p.side.querySelectorAll(/** @type {'div'} */ (ITEMS))]
       if (!items.length) return
       // La fila bajo el puntero; por encima de la primera o por debajo de la última, esa.
       const over = items.find((el) => e.clientY < el.getBoundingClientRect().bottom) || items[items.length - 1]
-      const ids = items.map((el) => el.dataset.id)
+      const ids = items.map(idOf)
       unmark()
       items[ids.indexOf(d.id)]?.classList.add('dragged')
-      d.over = over.dataset.id
+      d.over = idOf(over)
       const to = dropTarget(ids, d.id, d.over)
       if (to) over.classList.add(ids.indexOf(d.over) < ids.indexOf(d.id) ? 'drop-before' : 'drop-after')
     })
@@ -1142,7 +1412,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       p.dragged = true; setTimeout(() => { p.dragged = false }, 0)
       const to = d.over && dropTarget(ids, d.id, d.over)
       if (!to) return renderPaneSide(s, p)
-      try { s.list = await p.agent.move(d.id, to.before) } catch (err) { p.term.write(`\r\n\x1b[33m${err.code === 'timeout' ? t('move_old_agent') : err.message}\x1b[0m\r\n`) }
+      try { s.list = await agentOf(p).move(d.id, to.before) } catch (err) { termOf(p).write(`\r\n\x1b[33m${codeOf(err) === 'timeout' ? t('move_old_agent') : messageOf(err)}\x1b[0m\r\n`) }
       renderPaneSide(s, p)
     })
     p.side.addEventListener('pointercancel', () => { if (p.drag) { endDrag(); renderPaneSide(s, p) } })
@@ -1154,19 +1424,26 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * exista —una que no mire nadie y no esté en otra pestaña, o la primera—; una nueva solo si la
    * máquina se quedó sin ninguna (dueño, 2026-10-07: vale para todo cliente remoto; antes aquí se
    * abría siempre una nueva y la máquina acababa con consolas de más).
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {string | null | undefined} target
+   * @param {{ keep?: boolean }} [opts]
    */
   async function attachOrOpen (s, p, target, { keep = false } = {}) {
+    const agent = agentOf(p)
     const { cols, rows } = fitted(p)
     try {
-      const r = target ? await p.agent.attach(target, cols, rows, { keep }) : await p.agent.open(cols, rows)
+      const r = target ? await agent.attach(target, cols, rows, { keep }) : await agent.open(cols, rows)
       follow(p, r.console)
     } catch (e) {
-      if (e.code !== 'no-console') throw e
-      p.term.write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
+      if (codeOf(e) !== 'no-console') throw e
+      termOf(p).write(`\x1b[33m${t('console_gone')}\x1b[0m\r\n`)
       const open = openEverywhere()
-      const list = (await p.agent.list().catch(() => [])).filter((c) => c.id !== target && !open.has(c.id))
+      /** @type {ConsoleInfo[]} */
+      const all = await agent.list().catch(() => [])
+      const list = all.filter((c) => c.id !== target && !open.has(c.id))
       const other = list.find((c) => !(c.watchers || []).length) || list[0]
-      const r = other ? await p.agent.attach(other.id, cols, rows) : await p.agent.open(cols, rows)
+      const r = other ? await agent.attach(other.id, cols, rows) : await agent.open(cols, rows)
       follow(p, r.console)
     }
   }
@@ -1174,26 +1451,30 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
   /**
    * Conecta el panel `p` a la máquina de `s` y lo engancha a `consoleId`; sin él, a una consola
    * que no mire nadie y no esté en ningún panel, o a una nueva.
+   * @param {Session} s
+   * @param {Pane} p
+   * @param {string | null | undefined} consoleId
    */
   async function connectPane (s, p, consoleId) {
-    p.agent = link.mode === 'demo' ? new DemoAgentClient() : new AgentClient(link, { agentPubkey: s.pub })
-    p.agent.askCode = ({ wrong }) => askMachineCode(s.alias, wrong)
-    p.agent.onError = (e) => { s.status = errorText(e); setTabState(s, 'err'); if (active === s) hint.textContent = errorText(e) }
+    /** @type {import('./types').Agent} */
+    const agent = p.agent = link.mode === 'demo' ? new DemoAgentClient() : new AgentClient(link, { agentPubkey: s.pub })
+    agent.askCode = ({ wrong }) => askMachineCode(s.alias, wrong)
+    agent.onError = (e) => { s.status = errorText(e); setTabState(s, 'err'); if (active === s) hint.textContent = errorText(e) }
     // La máquina se reinició (sus sesiones viven en memoria) y el pilar ya volvió a saludar:
     // a la misma consola si sigue viva, o a otra diciéndolo.
-    p.agent.onResumed = () => {
-      attachOrOpen(s, p, p.agent.consoleId, { keep: true }).then(() => {
+    agent.onResumed = () => {
+      attachOrOpen(s, p, agent.consoleId, { keep: true }).then(() => {
         persist()
         s.status = 'conectado'; setTabState(s, 'ok')
         if (active === s) hint.textContent = t('connected', s.alias)
-      }).catch((e) => p.agent.onError(e))
+      }).catch((e) => agent.onError(e))
     }
-    await p.agent.connect()
+    await agent.connect()
     mountTerm(s, p)
     let target = consoleId
     if (!target) {
       const open = openEverywhere()
-      target = (await p.agent.list()).find((c) => !(c.watchers || []).length && !open.has(c.id))?.id
+      target = (await agent.list()).find((c) => !(c.watchers || []).length && !open.has(c.id))?.id
     }
     await attachOrOpen(s, p, target)
     p.side.hidden = false               // el panel de consolas, solo con la máquina conectada
@@ -1205,11 +1486,14 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * recargar); sin él, a una consola libre de la máquina, o a una nueva si no hay.
    * @param {string} pub
    * @param {string} [alias]
-   * @param {{ consoleId?: string }} [opts]
+   * @param {{ consoleId?: string, layout?: import('./types').SavedLayout }} [opts]
    */
   async function openConsole (pub, alias, { consoleId, layout } = {}) {
     const id = ++counter
-    const s = { id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando', list: [], panes: [], focus: null }
+    const box = el('<div class="term-wrap"><div class="panes"></div></div>'); box.style.display = 'none'
+    // La pestaña y su primer panel se necesitan el uno al otro: `layout` y `tab` se ponen justo
+    // después, al crear el panel (`newPane`) y la pestaña (`renderTab`), antes de usarlos.
+    const s = /** @type {Session} */ (/** @type {unknown} */ ({ id, pub, alias: alias || `#${id} ${pub.slice(0, 8)}…`, status: 'conectando', list: [], panes: [], focus: null, box, panesEl: $(box, '.panes') }))
     // Lo del panel con el foco, con los nombres de siempre.
     Object.defineProperties(s, {
       agent: { get: () => s.focus?.agent },
@@ -1217,8 +1501,6 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       fit: { get: () => s.focus?.fit },
       view: { get: () => s.focus?.view },
     })
-    s.box = el('<div class="term-wrap"><div class="panes"></div></div>'); s.box.style.display = 'none'
-    s.panesEl = s.box.querySelector('.panes')
     termsEl.appendChild(s.box)
     sessions.push(s)
     const first = newPane(s)
@@ -1244,7 +1526,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
       // dice, con el enlace a la guía.
       for (const p of s.panes) { try { p.agent?.disconnect() } catch {} }
       removeSession(s)
-      if (e.code === 'locked') { hint.textContent = t('code_needed', s.alias); hint.title = ''; return }
+      if (codeOf(e) === 'locked') { hint.textContent = t('code_needed', s.alias); hint.title = ''; return }
       hint.innerHTML = `${esc(t('conn_machine', s.alias))} <a href="${WIKI('terminal')}" target="_blank" rel="noopener">${t('how_link')}</a>`
       hint.title = errorText(e)
     }
@@ -1254,6 +1536,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
    * Reconstruye un reparto guardado a partir de su PRIMER panel (`first`, ya conectado a la primera
    * hoja): cada división se vuelve a hacer con la consola que tenía la otra rama; si ya no existe,
    * `attachOrOpen` elige otra y lo dice.
+   * @param {Session} s
+   * @param {Pane} first
+   * @param {import('./types').SavedLayout} saved
    */
   async function restoreLayout (s, first, saved) {
     await restoreSaved(saved, first, async (pane, dir, ratio, consoleId) => {
@@ -1276,6 +1561,7 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 }
 
 // --- Pantalla: gestor multi-consola (modo vault externo) ---
+/** @param {TerminalLink} link */
 function terminalScreen (link) {
   const node = el(`
     <section class="card term-card">
@@ -1286,9 +1572,10 @@ function terminalScreen (link) {
         </div>
       </div>
       <div id="terms" class="terms"></div>
-      <span id="hint" class="status">${link.mode === 'self' ? t('self_hint') : t('linked_to', esc(link.deviceId || ''))}</span>
+      <span id="hint" class="status">${link.mode === 'self' ? t('self_hint') : t('linked_to', esc(('deviceId' in link && link.deviceId) || ''))}</span>
     </section>`)
-  const qs = (s) => node.querySelector(s)
+  /** @param {string} sel */
+  const qs = (sel) => $(node, sel)
   const tabsEl = qs('#tabs'); const termsEl = qs('#terms'); const hint = qs('#hint')
   const host = makeSessionHost({ tabsEl, termsEl, hint, link })
   host.restore()
@@ -1296,7 +1583,7 @@ function terminalScreen (link) {
   if (link.mode === 'demo') {
     const box = qs('#machines')
     box.innerHTML = `<span class="mlabel">${t('machines_title')}</span><div class="machine-list"><div class="machine-row" data-sub="${DEMO_MACHINE.sub}"><button class="machine" data-testid="machine-item"><span class="mdot on"></span>${DEMO_MACHINE.label} +</button></div></div>`
-    box.querySelector('.machine').addEventListener('click', () => host.openConsole(DEMO_MACHINE.sub, DEMO_MACHINE.label))
+    $(box, '.machine').addEventListener('click', () => host.openConsole(DEMO_MACHINE.sub, DEMO_MACHINE.label))
     return node
   }
 
@@ -1309,17 +1596,19 @@ function terminalScreen (link) {
     try {
       const { WebSocketProxyClient } = await import('@dotrino/proxy-client')
       members = await listAgentsByLabel(link.id)
-      _probeClient = new WebSocketProxyClient({ url: link.proxy || 'wss://proxy.dotrino.com', enableWebRTC: false, autoReconnect: true })
+      _probeClient = new WebSocketProxyClient({ url: ('proxy' in link && link.proxy) || 'wss://proxy.dotrino.com', enableWebRTC: false, autoReconnect: true })
       await _probeClient.connect()
     } catch {
       box.innerHTML = `<span class="status">${t('machines_err')}</span>`
       return
     }
+    /** @type {Map<string, HTMLElement>} */
     const seen = new Map() // sub → fila: las que alguna vez contestaron como terminal
     const holderOf = () => {
-      let holder = box.querySelector('.machine-list')
-      if (!holder) { box.innerHTML = `<span class="mlabel">${t('machines_title')}</span><div class="machine-list"></div>`; holder = box.querySelector('.machine-list') }
-      return holder
+      const holder = box.querySelector('.machine-list')
+      if (holder) return holder
+      box.innerHTML = `<span class="mlabel">${t('machines_title')}</span><div class="machine-list"></div>`
+      return $(box, '.machine-list')
     }
     // Página administrativa (§5.1): dice lo que pasa y enlaza la guía; cómo se instala y se
     // pone en marcha vive en el wiki (§9.2), no aquí.
@@ -1336,13 +1625,13 @@ function terminalScreen (link) {
         const row = el(`<div class="machine-row" data-sub="${esc(m.sub)}">
           <button class="machine" data-testid="machine-item" title="${esc(t('machine_open', name))}"><span class="mdot"></span>${esc(m.label || deviceId)} +</button>
         </div>`)
-        row.querySelector('.machine').addEventListener('click', () => host.openConsole(m.sub, name))
+        $(row, '.machine').addEventListener('click', () => host.openConsole(m.sub, name))
         holderOf().appendChild(row)
         seen.set(m.sub, row)
       }
       for (const [sub, row] of seen) {
         const on = found.has(sub)
-        const dot = row.querySelector('.mdot')
+        const dot = $(row, '.mdot')
         dot.className = 'mdot ' + (on ? 'on' : 'off')
         dot.title = on ? t('machine_online') : t('machine_offline')
       }

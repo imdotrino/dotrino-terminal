@@ -8,25 +8,36 @@
  */
 import { RemoteAgentClient } from '@dotrino/remote-agent/client'
 
+/** @typedef {import('./types').ConsoleInfo} ConsoleInfo */
+/** @typedef {import('./types').AgentError} AgentError */
+
 /** Lo que pesa cada trozo de una imagen antes de pasarlo a base64 (el proxio corta a 1 MB). */
 export const FILE_CHUNK = 96 * 1024
 
-/** base64 de unos bytes, sin pasar por una cadena gigante de una vez. */
+/**
+ * base64 de unos bytes, sin pasar por una cadena gigante de una vez.
+ * @param {Uint8Array} bytes
+ */
 export function toBase64 (bytes) {
   let bin = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
   return btoa(bin)
 }
 
 /** Error con `code` del agente (`no-console`…): se comprueba por el código, no por la frase. */
+/** @type {(p: { message?: string, code?: string, retryMs?: number }) => AgentError} */
 const agentError = (p) => Object.assign(new Error(p.message || p.code), { code: p.code, ...(p.retryMs ? { retryMs: p.retryMs } : {}) })
 
 /**
  * La clave de cada máquina que la pide (agente ≥ 0.19, `dotrino-terminal lock`), por la llave
  * de la máquina. SOLO en memoria: vale para las pestañas de esta página y se va al recargar.
  */
+/** @type {Map<string, string>} */
 const CODES = new Map()
 
+/** @typedef {import('./types').Agent} Agent */
+
+/** @implements {Agent} */
 export class AgentClient {
   /**
    * @param {object} link  el enlace de este aparato (vault.js: getLink / getSelfLink).
@@ -34,24 +45,32 @@ export class AgentClient {
    */
   constructor (link, { agentPubkey, proxyUrl }) {
     this.rc = new RemoteAgentClient(link, { agentPubkey, proxyUrl })
+    /** @type {string | null} */
     this.consoleId = null
     /** @type {(data:string)=>void} */ this.onData = () => {}
     /** @type {(code:number, why:{ closedBy:string|null, id:string|null })=>void} */ this.onExit = () => {}
-    /** @type {(e:Error)=>void} */ this.onError = () => {}
+    /** @type {(e:AgentError)=>void} */ this.onError = () => {}
     /** La máquina se reinició y la sesión se volvió a abrir sola: hay que volver a engancharse. */
     /** @type {()=>void} */ this.onResumed = () => {}
     /** La consola enganchada cambió (quién mira, título, TAMAÑO): `info` como en `list`. */
-    /** @type {(info:object)=>void} */ this.onMeta = () => {}
+    /** @type {(info:ConsoleInfo)=>void} */ this.onMeta = () => {}
     /**
      * La máquina pide su clave. Devuelve lo tecleado, o null si la persona lo deja. `wrong` trae
      * el fallo del intento anterior (`bad-code`, o `wait` con `retryMs`).
-     * @type {(info:{ wrong: (Error & { code?:string, retryMs?:number })|null }) => Promise<string|null>}
+     * @type {(info:{ wrong: AgentError|null }) => Promise<string|null>}
      */
     this.askCode = async () => null
     this._pub = agentPubkey
+    /** @type {Promise<void> | null} */
     this._unlocking = null
+    /** @type {{ type: string, resolve: (p: any) => void, reject: (e: unknown) => void } | null} */
     this._waiting = null   // { type, resolve, reject }: la respuesta que se espera
+    /** @type {Promise<unknown>} */
     this._queue = Promise.resolve()   // las preguntas van de una en una (ver `_ask`)
+    /** @type {string | null} La consola que se pidió y la que se acaba de dejar (ver `_wanted`). */
+    this._want = null
+    /** @type {string | null} */
+    this._left = null
   }
 
   async connect () {
@@ -91,11 +110,15 @@ export class AgentClient {
   /**
    * Manda `msg` y espera la respuesta de tipo `type`. EN COLA: el panel pregunta la lista cada
    * poco, y si eso pisara un `attach` en curso, el `attach` no recibiría nunca su respuesta.
+   * @param {{ type: string, [k: string]: unknown }} msg
+   * @param {string} type
+   * @param {number} [timeoutMs]
+   * @returns {Promise<any>} la respuesta del agente, con la forma de su `type`
    */
   _ask (msg, type, timeoutMs = 20000) {
     const run = async () => {
       try { return await this._askNow(msg, type, timeoutMs) } catch (e) {
-        if (e.code !== 'locked') throw e
+        if (/** @type {AgentError} */ (e).code !== 'locked') throw e
         await this._unlock()                       // la máquina pide su clave: se escribe y se repite
         return this._askNow(msg, type, timeoutMs)
       }
@@ -105,6 +128,12 @@ export class AgentClient {
     return p
   }
 
+  /**
+   * @param {{ type: string, [k: string]: unknown }} msg
+   * @param {string} type
+   * @param {number} timeoutMs
+   * @returns {Promise<any>}
+   */
   _askNow (msg, type, timeoutMs) {
     return new Promise((resolve, reject) => {
       this._waiting = { type, resolve, reject }
@@ -125,6 +154,7 @@ export class AgentClient {
   _unlock () {
     if (this._unlocking) return this._unlocking
     this._unlocking = (async () => {
+      /** @type {AgentError | null} */
       let wrong = null
       for (;;) {
         let code = wrong ? null : CODES.get(this._pub)
@@ -134,7 +164,8 @@ export class AgentClient {
           await this._askNow({ type: 'unlock', code }, 'unlocked', 20000)
           CODES.set(this._pub, code)
           return
-        } catch (e) {
+        } catch (caught) {
+          const e = /** @type {AgentError} */ (caught)
           CODES.delete(this._pub)
           if (e.code !== 'bad-code' && e.code !== 'wait') throw e
           wrong = e
@@ -144,10 +175,18 @@ export class AgentClient {
     return this._unlocking
   }
 
-  /** Las consolas vivas en la máquina: `[{ id, n, title, origin, cols, rows, viewers, watchers… }]`. */
+  /**
+   * Las consolas vivas en la máquina: `[{ id, n, title, origin, cols, rows, viewers, watchers… }]`.
+   * @returns {Promise<ConsoleInfo[]>}
+   */
   async list () { return (await this._ask({ type: 'list' }, 'consoles')).list }
 
-  /** Abre una consola nueva y se engancha: toma el tamaño de esta pantalla. Devuelve `{ id, console }`. */
+  /**
+   * Abre una consola nueva y se engancha: toma el tamaño de esta pantalla. Devuelve `{ id, console }`.
+   * @param {number} cols
+   * @param {number} rows
+   * @returns {Promise<import('./types').Attached>}
+   */
   async open (cols, rows) {
     this._left = this.consoleId; this._want = null
     const p = await this._ask({ type: 'open', cols, rows }, 'attached')
@@ -159,6 +198,7 @@ export class AgentClient {
    * ¿Es de la consola que se mira (o se pidió) lo que llega? Lo de la que se acaba de dejar
    * llega tarde a veces (su historial va en trozos) y, pintado, tapa la pantalla de la nueva.
    * Un agente viejo no pone `id`: eso pasa.
+   * @param {string | null | undefined} id
    */
   _wanted (id) {
     if (id == null) return true
@@ -171,6 +211,11 @@ export class AgentClient {
    * el agente suelta la anterior). Su pantalla llega por `onData`. Lanza `no-console`.
    * La consola toma el tamaño de esta pantalla, salvo con `keep`: volver a engancharse tras una
    * reconexión no es abrirla ni cambiarse a ella, y no toca el tamaño.
+   * @param {string} id
+   * @param {number} cols
+   * @param {number} rows
+   * @param {{ keep?: boolean }} [opts]
+   * @returns {Promise<import('./types').Attached>}
    */
   async attach (id, cols, rows, { keep = false } = {}) {
     this._left = this.consoleId !== id ? this.consoleId : null; this._want = id
@@ -179,14 +224,23 @@ export class AgentClient {
     return p
   }
 
+  /** @param {string} data */
   input (data) { return this.rc.send({ type: 'input', data }) }
+  /**
+   * @param {number} cols
+   * @param {number} rows
+   */
   resize (cols, rows) { return this.rc.send({ type: 'resize', cols, rows }) }
   /** ⤢ La consola toma AHORA el tamaño de esta pantalla. No queda fijado (agente ≥ 0.35). */
   take () { return this.rc.send({ type: 'take' }) }
+  /** @param {string} id */
   kill (id) { return this.rc.send({ type: 'kill', id }) }
   /**
    * El orden del panel: `id` pasa justo antes de `before` (o al final, sin él). Es de la máquina:
    * lo ven igual las demás pantallas. Devuelve la lista ya ordenada (agente ≥ 0.26).
+   * @param {string} id
+   * @param {string | null} [before]
+   * @returns {Promise<ConsoleInfo[]>}
    */
   async move (id, before = null) { return (await this._ask({ type: 'move', id, before }, 'consoles', 5000)).list }
 
@@ -196,6 +250,7 @@ export class AgentClient {
    * `list` (agente ≥ 0.37; uno anterior a la 0.36 no contesta y esto lanza `timeout`).
    * @param {string} id
    * @param {{ text?: string, task?: string }} [patch]
+   * @returns {Promise<ConsoleInfo>}
    */
   async note (id, { text, task } = {}) {
     return (await this._ask({ type: 'note', id, ...(typeof text === 'string' ? { text } : {}), ...(typeof task === 'string' ? { task } : {}) }, 'noted', 5000)).console
@@ -234,14 +289,17 @@ export class AgentClient {
    * `changed` (el archivo cambió mientras llegaba).
    * @param {string} path
    * @param {{ onProgress?: (got:number, total:number)=>void }} [opts]
-   * @returns {Promise<{ name: string, path: string, bytes: Uint8Array }>}
+   * @returns {Promise<{ name: string, path: string, bytes: Uint8Array<ArrayBuffer> }>}
    */
   async fetchFile (path, { onProgress } = {}) {
     const id = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
+    /** @type {Uint8Array[]} */
     const parts = []
+    /** @type {{ name: string, path: string, size: number, mtime: number } | null} */
     let first = null
     let got = 0
     for (let seq = 0; ; seq++) {
+      /** @type {{ id: string, seq: number, name: string, path: string, size: number, mtime: number, data?: string, last?: boolean }} */
       const p = await this._ask({ type: 'fetch', id, path, seq }, 'fetched', 20000)
       if (p.id !== id || p.seq !== seq) throw Object.assign(new Error('the machine answered about another file'), { code: 'bad-fetch' })
       if (!first) first = p
@@ -257,6 +315,7 @@ export class AgentClient {
     const bytes = new Uint8Array(got)
     let at = 0
     for (const part of parts) { bytes.set(part, at); at += part.length }
+    if (!first) throw Object.assign(new Error('the machine sent no part of the file'), { code: 'bad-fetch' })
     return { name: first.name, path: first.path, bytes }
   }
 

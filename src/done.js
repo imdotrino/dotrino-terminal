@@ -13,7 +13,9 @@ export const RING_AFTER_MS = 60_000
  * @param {{ onRing: () => void, afterMs?: number, now?: () => number, setTimer?: typeof setTimeout }} opts
  */
 export function doneWatcher ({ onRing, afterMs = RING_AFTER_MS, now = Date.now, setTimer = setTimeout }) {
+  /** @type {Map<string, number>} */
   const known = new Map()   // `${machine}\n${console id}` → its doneAt
+  /** @type {(machine: string, c: { id: string, doneAt?: number | null }) => void} */
   const note = (machine, c) => {
     const key = `${machine}\n${c.id}`
     if (c.doneAt == null) { known.delete(key); return }
@@ -26,13 +28,21 @@ export function doneWatcher ({ onRing, afterMs = RING_AFTER_MS, now = Date.now, 
     setTimer(() => { if (known.get(key) === at) onRing() }, Math.max(0, afterMs - age))
   }
   return {
-    /** The whole list of a machine. */
+    /**
+     * The whole list of a machine.
+     * @param {string} machine
+     * @param {{ id: string, doneAt?: number | null }[]} list
+     */
     list (machine, list) {
       const alive = new Set(list.map((c) => `${machine}\n${c.id}`))
       for (const key of known.keys()) if (key.startsWith(`${machine}\n`) && !alive.has(key)) known.delete(key)
       for (const c of list) note(machine, c)
     },
-    /** One console, as the machine pushes it to whoever is watching it. */
+    /**
+     * One console, as the machine pushes it to whoever is watching it.
+     * @param {string} machine
+     * @param {{ id: string, doneAt?: number | null }} c
+     */
     one (machine, c) { note(machine, c) },
   }
 }

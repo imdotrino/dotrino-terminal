@@ -31,6 +31,8 @@ jobs:
           cache: 'npm'
       - name: Install dependencies
         run: npm install
+      - name: Type check (strict)
+        run: npm run type-check
       - name: Build
         run: npm run build
       - name: Setup Pages

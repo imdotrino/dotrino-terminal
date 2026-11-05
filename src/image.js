@@ -13,13 +13,18 @@ export const IMAGE_AS_IS_BYTES = 1024 * 1024
 /** Los tipos que la máquina guarda (agent/uploads.js). */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 
-/** Lo que mide una imagen de `w`×`h` para que su lado más largo no pase de `max`. */
+/**
+ * Lo que mide una imagen de `w`×`h` para que su lado más largo no pase de `max`.
+ * @param {number} w
+ * @param {number} h
+ * @param {number} [max]
+ */
 export function fitSide (w, h, max = IMAGE_MAX_SIDE) {
   const k = Math.min(1, max / Math.max(w, h))
   return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) }
 }
 
-/** ¿Sale tal cual? Un tipo admitido y pequeña. */
+/** ¿Sale tal cual? Un tipo admitido y pequeña. @type {(type: string, size: number) => boolean} */
 export const goesAsIs = (type, size) => IMAGE_TYPES.includes(type) && size <= IMAGE_AS_IS_BYTES
 
 /**
@@ -37,6 +42,7 @@ export async function prepareImage (file) {
   const canvas = document.createElement('canvas')
   canvas.width = w; canvas.height = h
   const ctx = canvas.getContext('2d')
+  if (!ctx) throw Object.assign(new Error('this browser has no 2d canvas to shrink the image'), { code: 'not-image' })
   // Fondo blanco: el JPEG no tiene transparencia y sin esto lo transparente sale negro.
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h)
   ctx.drawImage(bmp, 0, 0, w, h)
@@ -46,7 +52,11 @@ export async function prepareImage (file) {
   return new Uint8Array(await blob.arrayBuffer())
 }
 
-/** La primera imagen de un pegado o de algo soltado encima, o null. */
+/**
+ * La primera imagen de un pegado o de algo soltado encima, o null.
+ * @param {DataTransfer | null | undefined} transfer
+ * @returns {File | null}
+ */
 export function imageIn (transfer) {
   for (const f of transfer?.files || []) if (f.type.startsWith('image/')) return f
   for (const it of transfer?.items || []) if (it.kind === 'file' && it.type.startsWith('image/')) { const f = it.getAsFile(); if (f) return f }
