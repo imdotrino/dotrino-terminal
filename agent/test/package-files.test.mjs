@@ -32,7 +32,9 @@ test('todo import relativo de un archivo publicado está dentro del paquete', ()
     for (const m of src.matchAll(/(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
       const target = path.normalize(path.join(path.dirname(f), m[1]))
       if (target === 'package.json') continue
-      if (!files.has(target)) missing.push(`${f} → ${m[1]}`)
+      // Un `import('./types/x.js')` de JSDoc es un tipo: lo que tiene que publicarse es su .d.ts.
+      const typeOnly = m[0].startsWith('import') && files.has(target.replace(/\.js$/, '.d.ts'))
+      if (!files.has(target) && !typeOnly) missing.push(`${f} → ${m[1]}`)
     }
   }
   assert.deepEqual(missing, [])

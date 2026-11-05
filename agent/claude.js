@@ -23,40 +23,63 @@ export const HOOKS = [
   { file: 'terminal-note-stop.sh', event: 'Stop' },
 ]
 
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
+/**
+ * El `settings.json` de Claude Code: un JSON del usuario, así que todo lo de dentro se comprueba.
+ * @typedef {{ type?: string, command?: string, timeout?: number }} HookEntry
+ * @typedef {{ hooks?: HookEntry[], [k: string]: unknown }} HookGroup
+ * @typedef {{ hooks?: Record<string, HookGroup[]>, [k: string]: unknown }} Settings
+ */
+
 const source = () => path.join(path.dirname(fileURLToPath(import.meta.url)), 'skills')
 
 /** ¿Es `command` el hook `file`? Por el archivo, lo llame como lo llame (con o sin comillas). */
+/** @type {(command: unknown, file: string) => boolean} */
 const runs = (command, file) => typeof command === 'string' && new RegExp(`[/\\\\]hooks[/\\\\]${file.replace(/\./g, '\\.')}(["'\\s]|$)`).test(command)
 
+/**
+ * @param {string} file
+ * @returns {Settings}
+ */
 function readSettings (file) {
   if (!fs.existsSync(file)) return {}
   let value
-  try { value = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) { throw fail('bad-settings', `${file}: ${e.message}`) }
+  try { value = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (e) { throw fail('bad-settings', `${file}: ${/** @type {Thrown} */ (e).message}`) }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('bad-settings', `${file}: not an object`)
   return value
 }
 
 /** `settings` sin las entradas de nuestros hooks (y sin los grupos o eventos que queden vacíos). */
+/**
+ * @param {Settings} settings
+ * @returns {Settings}
+ */
 function withoutHooks (settings) {
   const hooks = settings.hooks
   if (!hooks || typeof hooks !== 'object') return settings
+  /** @type {Record<string, HookGroup[]>} */
   const out = {}
   for (const [event, groups] of Object.entries(hooks)) {
     if (!Array.isArray(groups)) { out[event] = groups; continue }
     const kept = groups
-      .map((g) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((h) => !HOOKS.some((x) => runs(h?.command, x.file))) } : g))
+      .map((/** @type {HookGroup} */ g) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((h) => !HOOKS.some((x) => runs(h?.command, x.file))) } : g))
       .filter((g) => !Array.isArray(g?.hooks) || g.hooks.length)
     if (kept.length) out[event] = kept
   }
+  /** @type {Settings} */
   const next = { ...settings, hooks: out }
   if (!Object.keys(out).length) delete next.hooks
   return next
 }
 
 /** ¿Está puesto? `{ skill, hooks: [archivos presentes], wired: [archivos con entrada en settings] }`. */
+/**
+ * @param {{ home?: string }} [opts]
+ */
 export function claudeStatus ({ home = os.homedir() } = {}) {
   const dir = path.join(home, '.claude')
+  /** @type {Settings} */
   let settings = {}
   try { settings = readSettings(path.join(dir, 'settings.json')) } catch (_) {}
   const commands = Object.values(settings.hooks || {}).flat().flatMap((g) => g?.hooks || []).map((h) => h?.command)
@@ -71,6 +94,7 @@ export function claudeStatus ({ home = os.homedir() } = {}) {
  * Pone (o con `off`, quita) el skill y los hooks. Devuelve qué cambió.
  * Sin `~/.claude` no hay Claude Code en esta cuenta: se dice (`no-claude`) y no se crea nada.
  * Un `settings.json` que no se puede leer no se toca (`bad-settings`).
+ * @param {{ off?: boolean, home?: string, from?: string }} [opts]
  */
 export function configureClaude ({ off = false, home = os.homedir(), from = source() } = {}) {
   const dir = path.join(home, '.claude')
@@ -81,6 +105,7 @@ export function configureClaude ({ off = false, home = os.homedir(), from = sour
   const hooksDir = path.join(dir, 'hooks')
 
   // Lo que ya está enganchado (lo llame como lo llame) se deja como está: no se duplica ni se mueve.
+  /** @param {string} file */
   const wired = (file) => Object.values(before.hooks || {}).flat().flatMap((g) => g?.hooks || []).some((h) => runs(h?.command, file))
   let next = before
   if (off) next = withoutHooks(before)
@@ -100,6 +125,7 @@ export function configureClaude ({ off = false, home = os.homedir(), from = sour
     for (const h of HOOKS) { const f = path.join(hooksDir, h.file); if (fs.existsSync(f)) { fs.rmSync(f); filesChanged = true } }
     if (fs.existsSync(skillDir)) { fs.rmSync(skillDir, { recursive: true }); filesChanged = true }
   } else {
+    /** @type {(src: string, dest: string, mode: number) => void} */
     const put = (src, dest, mode) => {
       const want = fs.readFileSync(src)
       if (fs.existsSync(dest) && fs.readFileSync(dest).equals(want)) return

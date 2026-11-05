@@ -24,29 +24,51 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawn as childSpawn } from 'node:child_process'
 
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
+/** Correr una orden del sistema (`execFileSync`, o su doble en las pruebas). */
+/** @typedef {(cmd: string, args: string[], opts?: import('node:child_process').ExecFileSyncOptions) => unknown} RunFn */
+/** Lanzar un proceso (`spawn`, o su doble en las pruebas). */
+/** @typedef {typeof childSpawn} SpawnFn */
+/** Lo que comparten las órdenes de servicio: el perfil, y Node y el CLI con que se lanza. */
+/** @typedef {{ name: string, node: string, cli: string }} Launch */
+
+/** @param {string} name */
 export const unitName = (name) => `dotrino-terminal-agent-${name}.service`
+/** @param {string} name */
 export const plistLabel = (name) => `com.dotrino.terminal-agent.${name}`
 
+/**
+ * @param {string} name
+ * @param {string} [home]
+ */
 export function unitPath (name, home = os.homedir()) {
   return path.join(home, '.config', 'systemd', 'user', unitName(name))
 }
 
+/**
+ * @param {string} name
+ * @param {string} [home]
+ */
 export function plistPath (name, home = os.homedir()) {
   return path.join(home, 'Library', 'LaunchAgents', `${plistLabel(name)}.plist`)
 }
 
 /** Windows: la clave de lo que arranca al iniciar sesión, y el nombre del valor de cada perfil. */
 export const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+/** @param {string} name */
 export const runValue = (name) => `DotrinoTerminalAgent-${name}`
 /** Lo que se apunta en la clave: Node, el CLI y el supervisor del perfil. */
+/** @param {Launch} o */
 export const runCommand = ({ name, node, cli }) => `"${node}" "${cli}" supervise --name ${name}`
+/** @param {string} dir */
 export const supervisorPidFile = (dir) => path.join(dir, 'supervisor.pid')
 /** Cuánto espera el supervisor antes de volver a levantar el agente (como `RestartSec`). */
 export const RESTART_MS = 3000
 
 /** systemd parte `ExecStart` por espacios: lo que los lleve va entre comillas. */
+/** @param {string} s */
 const unitArg = (s) => (/[\s"'\\$%]/.test(s) ? `"${s.replace(/[\\"]/g, '\\$&').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"` : s)
 
 /**
@@ -55,6 +77,7 @@ const unitArg = (s) => (/[\s"'\\$%]/.test(s) ? `"${s.replace(/[\\"]/g, '\\$&').r
  *
  * El PATH es el de quien instala: el de un servicio de usuario es mínimo y no trae el Node
  * de nvm ni las herramientas que las consolas esperan encontrar.
+ * @param {Launch & { pathEnv: string }} o
  */
 export function unitText ({ name, node, cli, pathEnv }) {
   return `[Unit]
@@ -73,9 +96,13 @@ WantedBy=default.target
 `
 }
 
+/** @param {unknown} s */
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-/** El LaunchAgent de macOS. `DOTRINO_SUPERVISED`: launchd lo levanta si sale (§15). */
+/**
+ * El LaunchAgent de macOS. `DOTRINO_SUPERVISED`: launchd lo levanta si sale (§15).
+ * @param {Launch & { pathEnv: string, log: string }} o
+ */
 export function plistText ({ name, node, cli, pathEnv, log }) {
   const args = [node, cli, '--name', name, '--local'].map((a) => `    <string>${xml(a)}</string>`).join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -99,22 +126,38 @@ ${args}
 `
 }
 
+/**
+ * @param {RunFn} run
+ * @param {string} cmd
+ * @param {string[]} args
+ * @returns {{ ok: true } | { ok: false, reason: string | undefined }}
+ */
 function quiet (run, cmd, args) {
   try { run(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' }); return { ok: true } } catch (e) {
-    return { ok: false, reason: String(e.stderr || e.message).trim().split('\n').pop() }
+    return { ok: false, reason: String(/** @type {Thrown} */ (e).stderr || /** @type {Thrown} */ (e).message).trim().split('\n').pop() }
   }
 }
 
+/**
+ * @param {RunFn} run
+ * @param {string} cmd
+ * @param {string[]} args
+ */
 function must (run, cmd, args) {
   const r = quiet(run, cmd, args)
   if (!r.ok) throw fail('service-command-failed', `${cmd} ${args.join(' ')}: ${r.reason}`)
 }
 
 /** ¿Ya arrancan los servicios de ese usuario al encender? systemd lo apunta con un archivo. */
+/** @type {(user: string, root?: string) => boolean} */
 const lingers = (user, root = LINGER_DIR) => fs.existsSync(path.join(root, user))
 const LINGER_DIR = '/var/lib/systemd/linger'
 
-/** ¿Deja este sistema instalar el servicio? Lanza con el motivo si no. */
+/**
+ * ¿Deja este sistema instalar el servicio? Lanza con el motivo si no.
+ * @param {{ platform: string, run: RunFn }} o
+ * @returns {'launchd' | 'run-key' | 'systemd'}
+ */
 function platformOf ({ platform, run }) {
   if (platform === 'darwin') return 'launchd'
   if (platform === 'win32') return 'run-key'
@@ -124,12 +167,17 @@ function platformOf ({ platform, run }) {
   return 'systemd'
 }
 
-const readPid = (file) => { try { return Number(fs.readFileSync(file, 'utf8')) || 0 } catch (e) { if (e.code === 'ENOENT') return 0; throw e } }
-const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+/** @type {(file: string) => number} */
+const readPid = (file) => { try { return Number(fs.readFileSync(file, 'utf8')) || 0 } catch (e) { if (/** @type {Thrown} */ (e).code === 'ENOENT') return 0; throw e } }
+/** @type {(pid: number) => boolean} */
+const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return /** @type {Thrown} */ (e).code === 'EPERM' } }
+/** @param {string} name */
 const runKeyFile = (name) => `${RUN_KEY}\\${runValue(name)}`
+/** @type {(name: string, run: RunFn) => boolean} */
 const hasRunKey = (name, run) => quiet(run, 'reg', ['query', RUN_KEY, '/v', runValue(name)]).ok
 
 /** PowerShell: una cadena entre comillas simples. */
+/** @param {string} s */
 const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`
 
 /**
@@ -144,6 +192,7 @@ const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`
  * corriendo ahora (lo que se lanzara moriría al cerrar la sesión) y se devuelve el motivo: la
  * entrada de `Run` ya está puesta y lo arranca al iniciar sesión.
  *
+ * @param {Launch & { spawn: SpawnFn, run: RunFn, env: NodeJS.ProcessEnv }} o
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */
 function spawnSupervisor ({ name, node, cli, spawn, run, env }) {
@@ -161,6 +210,7 @@ function spawnSupervisor ({ name, node, cli, spawn, run, env }) {
  * El supervisor de Windows: levanta el agente del perfil y lo vuelve a levantar cada vez que
  * sale (también cuando se reinicia para estrenar una versión: §15, `DOTRINO_SUPERVISED`).
  * Uno por perfil: si ya hay otro vivo, lanza `already-supervised`.
+ * @param {{ name: string, dir: string, node?: string, cli: string, spawn?: SpawnFn }} o
  */
 export function supervise ({ name, dir, node = process.execPath, cli, spawn = childSpawn }) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -169,6 +219,7 @@ export function supervise ({ name, dir, node = process.execPath, cli, spawn = ch
   if (other && other !== process.pid && alive(other)) throw fail('already-supervised', `profile ${name} already has a supervisor (pid ${other})`)
   fs.writeFileSync(pidFile, String(process.pid))
   let stopped = false
+  /** @type {import('node:child_process').ChildProcess | null} */
   let child = null
   const start = () => {
     const fd = fs.openSync(path.join(dir, 'agent.log'), 'a', 0o600)
@@ -186,7 +237,10 @@ export function supervise ({ name, dir, node = process.execPath, cli, spawn = ch
   }
 }
 
-/** Windows: para el supervisor y después el agente (matar el supervisor no se lleva al hijo). */
+/**
+ * Windows: para el supervisor y después el agente (matar el supervisor no se lleva al hijo).
+ * @param {string} dir
+ */
 function stopSupervised (dir) {
   for (const file of [supervisorPidFile(dir), path.join(dir, 'agent.pid')]) {
     const pid = readPid(file)
@@ -202,6 +256,8 @@ function stopSupervised (dir) {
  * Dos agentes con el mismo enlace son la misma llave, y parar ese cerraría sus consolas: el
  * servicio queda puesto y toma el relevo cuando ese agente termine o al próximo arranque.
  *
+ * @param {{ name: string, node?: string, cli: string, dir: string, running?: boolean, pathEnv?: string, platform?: string, home?: string,
+ *   user?: string, uid?: number, run?: RunFn, spawn?: SpawnFn, env?: NodeJS.ProcessEnv }} o
  * @returns {{ kind:'systemd'|'launchd'|'run-key', file:string, started:boolean, boot?:boolean, lingerReason?:string, startReason?:string }}
  */
 export function installService ({ name, node = process.execPath, cli, dir, running = false, pathEnv = process.env.PATH || '', platform = process.platform, home = os.homedir(), user = os.userInfo().username, uid = process.getuid?.(), run = execFileSync, spawn = childSpawn, env = process.env }) {
@@ -240,6 +296,9 @@ export function installService ({ name, node = process.execPath, cli, dir, runni
  * este sistema no los tiene): entonces el agente lo levanta la ventana, como siempre. Lo usa
  * `dotrino-terminal` cuando no encuentra agente, para no levantar uno propio al lado de un
  * servicio que el sistema arrancaría después con la misma llave.
+ * @param {{ name: string, dir: string, node?: string, cli: string, platform?: string, home?: string, uid?: number,
+ *   run?: RunFn, spawn?: SpawnFn, env?: NodeJS.ProcessEnv }} o
+ * @returns {boolean}
  */
 export function startService ({ name, dir, node = process.execPath, cli, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync, spawn = childSpawn, env = process.env }) {
   if (platform === 'win32') {
@@ -262,7 +321,10 @@ export function startService ({ name, dir, node = process.execPath, cli, platfor
   return true
 }
 
-/** Para el servicio y lo quita. El enlace y los ajustes del perfil no se tocan. */
+/**
+ * Para el servicio y lo quita. El enlace y los ajustes del perfil no se tocan.
+ * @param {{ name: string, dir: string, platform?: string, home?: string, uid?: number, run?: RunFn }} o
+ */
 export function uninstallService ({ name, dir, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync }) {
   const kind = platformOf({ platform, run })
   if (kind === 'run-key') {
@@ -280,7 +342,10 @@ export function uninstallService ({ name, dir, platform = process.platform, home
   return { kind, file, removed: true }
 }
 
-/** ¿Está puesto, y está corriendo ahora bajo el sistema? */
+/**
+ * ¿Está puesto, y está corriendo ahora bajo el sistema?
+ * @param {{ name: string, dir: string, platform?: string, home?: string, uid?: number, run?: RunFn }} o
+ */
 export function serviceStatus ({ name, dir, platform = process.platform, home = os.homedir(), uid = process.getuid?.(), run = execFileSync }) {
   const kind = platformOf({ platform, run })
   if (kind === 'run-key') {

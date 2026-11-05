@@ -55,12 +55,17 @@ import { farMessage as farMessageFor } from '../far-messages.js'
 import { hasAccessCode, setAccessCode, clearAccessCode, MIN_LENGTH } from '../access.js'
 import { configureEditors, terminalProfile } from '../editors.js'
 
+/** @type {{ version: string }} */
 const { version: VERSION } = createRequire(import.meta.url)('../package.json')
+/** La conexión con el agente de esta máquina (`local.js`). */
+/** @typedef {Awaited<ReturnType<typeof connectLocal>>} Conn */
 const args = process.argv.slice(2)
 const cmd = args[0] && !args[0].startsWith('-') ? args[0] : 'open'
+/** @param {string} name */
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
 
 const es = /^es/i.test(process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || '')
+/** @type {(esText: string, enText: string) => string} */
 const t = (esText, enText) => (es ? esText : enText)
 
 const DETACH_PREFIX = '\x1d'   // Ctrl+]
@@ -173,6 +178,10 @@ Closing the window does not close the console: it stays open and can be picked u
  * error desaparecería con la ventana sin que nadie lo leyera.
  */
 const HOLD = Symbol('hold')
+/**
+ * @param {string} msg
+ * @returns {never}
+ */
 function die (msg) {
   // Si la TTY ya estaba en crudo (ver `captureEarly`), se devuelve a normal para que el
   // mensaje salga con sus saltos de línea.
@@ -193,7 +202,9 @@ function die (msg) {
  * consola. Ahora la TTY pasa a crudo nada más empezar, y lo tecleado se guarda y se manda
  * entero cuando la consola está lista.
  */
+/** @type {Buffer[]} */
 const early = []
+/** @param {Buffer} b */
 const earlyTap = (b) => early.push(b)
 function captureEarly () {
   if (!process.stdin.isTTY) return
@@ -202,11 +213,15 @@ function captureEarly () {
   process.stdin.on('data', earlyTap)
 }
 
-/** El agente de esta máquina; si no hay ninguno escuchando, lo levanta y espera a que conteste. */
+/**
+ * El agente de esta máquina; si no hay ninguno escuchando, lo levanta y espera a que conteste.
+ * @param {string} dir
+ * @returns {Promise<Conn>}
+ */
 async function agent (dir) {
   try { return await connectLocal(dir) } catch (e) {
-    if (e.code === 'EAGENTACCESS') throw new Error(t(`el agente de este perfil corre con otros permisos y no deja entrar a esta ventana (${e.cause?.code}). Reinícialo: dotrino-terminal restart`, `this profile's agent runs with other permissions and does not let this window in (${e.cause?.code}). Restart it: dotrino-terminal restart`))
-    if (e.code !== 'ENOAGENT') throw e
+    if (/** @type {Thrown} */ (e).code === 'EAGENTACCESS') throw new Error(t(`el agente de este perfil corre con otros permisos y no deja entrar a esta ventana (${/** @type {Thrown} */ (e).cause?.code}). Reinícialo: dotrino-terminal restart`, `this profile's agent runs with other permissions and does not let this window in (${/** @type {Thrown} */ (e).cause?.code}). Restart it: dotrino-terminal restart`))
+    if (/** @type {Thrown} */ (e).code !== 'ENOAGENT') throw e
   }
   // Un agente vivo sin socket es uno anterior a las ventanas (< 0.6.0): no se levanta otro
   // encima (tendrían la misma llave), se dice.
@@ -226,7 +241,8 @@ async function agent (dir) {
   const cli = fs.realpathSync(fileURLToPath(new URL('./cli.js', import.meta.url)))
   if (!(!opt('--dir') && !process.env.DOTRINO_TERMINAL_DIR && startService({ name: path.basename(dir), dir, cli }))) {
     const fd = fs.openSync(log, 'a', 0o600)
-    const extra = opt('--name') ? ['--name', opt('--name')] : []
+    const name = opt('--name')
+    const extra = name ? ['--name', name] : []
     // Sin TTY: si la máquina no está enlazada, el agente atiende solo a las ventanas locales.
     // `windowsHide`: en Windows un proceso aparte abre su propia ventana de consola.
     const child = spawn(process.execPath, [cli, ...extra], { detached: true, windowsHide: true, stdio: ['ignore', fd, fd], env: process.env })
@@ -236,7 +252,7 @@ async function agent (dir) {
   const t0 = Date.now()
   while (Date.now() - t0 < 10000) {
     await new Promise((r) => setTimeout(r, 100))
-    try { return await connectLocal(dir) } catch (e) { if (e.code !== 'ENOAGENT') throw e }
+    try { return await connectLocal(dir) } catch (e) { if (/** @type {Thrown} */ (e).code !== 'ENOAGENT') throw e }
   }
   throw new Error(t(`el agente no arrancó; mira ${log}`, `the agent did not start; see ${log}`))
 }
@@ -244,8 +260,9 @@ async function agent (dir) {
 /** `--tag <t>`: cómo se presenta esta ventana en la lista de quién mira (la app de escritorio). */
 const tag = () => (opt('--tag') ? { tag: opt('--tag') } : {})
 
+/** @param {number} pid */
 function alive (pid) {
-  try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
+  try { process.kill(pid, 0); return true } catch (e) { return /** @type {Thrown} */ (e).code === 'EPERM' }
 }
 
 async function profiles () {
@@ -265,9 +282,9 @@ function vscode () {
   const profile = off ? null : terminalProfile({ node: process.execPath, script: fs.realpathSync(fileURLToPath(import.meta.url)), name })
   let done
   try { done = configureEditors({ profile }) } catch (e) {
-    if (e.code === 'no-editor') die(t('no encontré VS Code, VS Code Insiders, VSCodium ni Cursor en esta cuenta.', 'could not find VS Code, VS Code Insiders, VSCodium or Cursor in this account.'))
-    if (e.code === 'bad-settings') die(t(`no se pudo leer la configuración y no se tocó nada: ${e.message}`, `could not read the settings and nothing was changed: ${e.message}`))
-    if (e.code === 'unsupported-platform') die(t('esto solo está para Linux, macOS y Windows.', 'this is only available on Linux, macOS and Windows.'))
+    if (/** @type {Thrown} */ (e).code === 'no-editor') die(t('no encontré VS Code, VS Code Insiders, VSCodium ni Cursor en esta cuenta.', 'could not find VS Code, VS Code Insiders, VSCodium or Cursor in this account.'))
+    if (/** @type {Thrown} */ (e).code === 'bad-settings') die(t(`no se pudo leer la configuración y no se tocó nada: ${/** @type {Thrown} */ (e).message}`, `could not read the settings and nothing was changed: ${/** @type {Thrown} */ (e).message}`))
+    if (/** @type {Thrown} */ (e).code === 'unsupported-platform') die(t('esto solo está para Linux, macOS y Windows.', 'this is only available on Linux, macOS and Windows.'))
     throw e
   }
   for (const d of done) {
@@ -298,8 +315,8 @@ async function claude () {
   const off = args.includes('--off')
   let done
   try { done = configureClaude({ off }) } catch (e) {
-    if (e.code === 'no-claude') die(t('no encontré Claude Code en esta cuenta (no existe ~/.claude). Ábrelo una vez y repite.', 'could not find Claude Code in this account (~/.claude does not exist). Open it once and try again.'))
-    if (e.code === 'bad-settings') die(t(`no se pudo leer la configuración de Claude Code y no se tocó nada: ${e.message}`, `could not read Claude Code's settings and nothing was changed: ${e.message}`))
+    if (/** @type {Thrown} */ (e).code === 'no-claude') die(t('no encontré Claude Code en esta cuenta (no existe ~/.claude). Ábrelo una vez y repite.', 'could not find Claude Code in this account (~/.claude does not exist). Open it once and try again.'))
+    if (/** @type {Thrown} */ (e).code === 'bad-settings') die(t(`no se pudo leer la configuración de Claude Code y no se tocó nada: ${/** @type {Thrown} */ (e).message}`, `could not read Claude Code's settings and nothing was changed: ${/** @type {Thrown} */ (e).message}`))
     throw e
   }
   const what = off
@@ -321,10 +338,15 @@ async function claude () {
  */
 async function updates () {
   const { latestVersion, isNewer } = await import('@dotrino/update')
+  /**
+   * @param {string} current
+   * @param {() => Promise<{ ok: true, version: string } | { ok: false, reason: string }>} ask
+   */
   const one = async (current, ask) => {
     const r = await ask()
     return r.ok ? { current, latest: r.version, newer: isNewer(r.version, current) } : { current, error: r.reason }
   }
+  /** @type {Record<string, { current: string, latest?: string, newer?: boolean, error?: string }>} */
   const out = { agent: await one(VERSION, () => latestVersion({ source: 'npm', pkg: '@dotrino/terminal-agent', product: 'dotrino-terminal', version: VERSION })) }
   const app = opt('--desktop')
   if (app) {
@@ -332,6 +354,7 @@ async function updates () {
     out.desktop = await one(app, () => latestDesktop({ version: app }))
   }
   if (args.includes('--json')) { console.log(JSON.stringify(out)); return }
+  /** @type {(name: string, x: { current: string, latest?: string, newer?: boolean, error?: string }) => void} */
   const say = (name, x) => console.log(x.error
     ? t(`${name}: no se pudo mirar (${x.error}).`, `${name}: could not check (${x.error}).`)
     : x.newer ? t(`${name}: hay ${x.latest} y tienes ${x.current}.`, `${name}: ${x.latest} is out and you have ${x.current}.`)
@@ -340,7 +363,10 @@ async function updates () {
   if (out.desktop) say(t('La app', 'The app'), out.desktop)
 }
 
-/** Dónde está la app de escritorio, si no lo dijo quien llama: la del PATH. */
+/**
+ * Dónde está la app de escritorio, si no lo dijo quien llama: la del PATH.
+ * @param {string} name
+ */
 function findDesktop (name) {
   for (const d of (process.env.PATH || '').split(path.delimiter)) {
     if (!d) continue
@@ -361,6 +387,7 @@ async function desktop () {
   const exe = opt('--exe') || findDesktop(process.platform === 'win32' ? `${BINARY}.exe` : BINARY)
   const check = args.includes('--check')
   if (!exe && !check) die(t(`no encontré ${BINARY} en esta máquina. Bájala de https://terminal.dotrino.com/`, `could not find ${BINARY} on this machine. Get it from https://terminal.dotrino.com/`))
+  /** @type {(step: string, d: { version?: string, current?: string, name?: string, repo?: string, kind?: string }) => void} */
   const say = (step, d) => {
     if (step === 'latest') console.log(d.current ? t(`Publicada: ${d.version} · esta: ${d.current}`, `Published: ${d.version} · this one: ${d.current}`) : t(`Publicada: ${d.version}`, `Published: ${d.version}`))
     if (step === 'download') console.log(t(`Bajando ${d.name} y comprobando su firma…`, `Downloading ${d.name} and checking its signature…`))
@@ -368,14 +395,16 @@ async function desktop () {
     if (step === 'install' && (d.kind === 'deb' || d.kind === 'rpm') && process.getuid?.() !== 0) console.log(t('Instalar un paquete del sistema pide tu contraseña:', 'Installing a system package asks for your password:'))
   }
   console.log(t('Mirando qué hay publicado…', 'Checking what is published…'))
-  const r = await updateDesktop({ exe, current, check, say })
+  const r = await updateDesktop({ exe: exe ?? undefined, current, check, say })
   if (!r.ok) {
-    const why = {
+    /** @type {Record<string, string>} */
+    const texts = {
       'could-not-check': t(`No se pudo mirar (${r.reason}). No es que estés al día: es que no se sabe.`, `Could not check (${r.reason}). That does not mean you are up to date: it is unknown.`),
       'node-too-old': t(`NO se instala nada: con este Node (${process.version}) no se puede comprobar la firma. Hace falta Node 22.12 o más reciente (o 20.19): https://nodejs.org`, `Nothing is installed: this Node (${process.version}) cannot check the signature. It needs Node 22.12 or newer (or 20.19): https://nodejs.org`),
       NO_VERIFIER: t('NO se instala nada: a este programa le falta la pieza que comprueba la firma. Reinstálalo con: npm install -g @dotrino/terminal-agent', 'Nothing is installed: this program is missing the piece that checks the signature. Reinstall it with: npm install -g @dotrino/terminal-agent'),
       'not-writable': t(`NO se instala nada: no puedo escribir donde está la app (${r.reason}). Bájala de https://terminal.dotrino.com/`, `Nothing is installed: I cannot write where the app is (${r.reason}). Get it from https://terminal.dotrino.com/`)
-    }[r.code] || t(`NO se instala nada: ${r.reason}`, `Nothing is installed: ${r.reason}`)
+    }
+    const why = texts[r.code] || t(`NO se instala nada: ${r.reason}`, `Nothing is installed: ${r.reason}`)
     die(r.file ? `${why}\n${t('El archivo, ya comprobado, quedó en', 'The file, already checked, is at')} ${r.file}` : why)
   }
   if (r.updated) console.log(t(`\nInstalada la ${r.version}. Las ventanas abiertas siguen con la anterior: cierra Dotrino Terminal y vuelve a abrirla. Tus consolas no se cierran.`, `\nInstalled ${r.version}. Open windows keep the old one: quit Dotrino Terminal and open it again. Your consoles stay open.`))
@@ -383,10 +412,14 @@ async function desktop () {
   else console.log(t(`La app está al día (${current}).`, `The app is up to date (${current}).`))
 }
 
-/** Cuántas consolas tiene abiertas el agente de esa carpeta (0 si no hay agente). */
+/**
+ * Cuántas consolas tiene abiertas el agente de esa carpeta (0 si no hay agente).
+ * @param {string} dir
+ * @returns {Promise<number>}
+ */
 async function openConsoles (dir) {
   let conn
-  try { conn = await connectLocal(dir) } catch (e) { if (e.code === 'ENOAGENT') return 0; throw e }
+  try { conn = await connectLocal(dir) } catch (e) { if (/** @type {Thrown} */ (e).code === 'ENOAGENT') return 0; throw e }
   const r = await request(conn, { type: 'list' }, 'consoles')
   conn.close()
   if (r.type === 'fail') throw new Error(`${r.message} (${r.code})`)
@@ -406,7 +439,7 @@ async function agentStates () {
   for (const p of await listProfiles()) {
     let conn
     try { conn = await connectLocal(p.dir) } catch (e) {
-      if (e.code !== 'ENOAGENT') throw e
+      if (/** @type {Thrown} */ (e).code !== 'ENOAGENT') throw e
       out.push({ name: p.name, running: false, version: null, consoles: 0, stale: false })
       continue
     }
@@ -443,6 +476,7 @@ async function restart () {
   const only = stale && asked === undefined ? null : path.basename(resolveInstance(LABEL, asked).dir)
   const targets = (await agentStates()).filter((a) => a.running && (only === null || a.name === only) && (!stale || a.stale))
   if (!targets.length) { console.log(stale ? t('Ningún agente va por detrás de lo instalado.', 'No agent is behind what is installed.') : t('Ese perfil no tiene un agente corriendo.', 'That profile has no agent running.')); return }
+  /** @param {string} name */
   const dirOf = (name) => resolveInstance(LABEL, name).dir
   // ¿Corre esta orden DENTRO de una consola de uno de esos agentes? Pararlo la cerraría a mitad
   // de camino: el trabajo lo hace un proceso aparte.
@@ -469,7 +503,7 @@ async function restart () {
       await new Promise((r) => setTimeout(r, 100))
     }
     let service = false
-    try { service = serviceStatus({ name: a.name, dir }).installed } catch (e) { if (e.code !== 'no-user-systemd' && e.code !== 'unsupported-platform') throw e }
+    try { service = serviceStatus({ name: a.name, dir }).installed } catch (e) { if (/** @type {Thrown} */ (e).code !== 'no-user-systemd' && /** @type {Thrown} */ (e).code !== 'unsupported-platform') throw e }
     console.log(service
       ? t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Su servicio lo vuelve a levantar con la ${VERSION}.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). Its service starts it again with ${VERSION}.`)
       : t(`«${a.name}»: agente detenido (${a.consoles} consola(s) cerradas). Arranca con la ${VERSION} al abrir una ventana.`, `"${a.name}": agent stopped (${a.consoles} console(s) closed). It starts with ${VERSION} when you open a window.`))
@@ -486,7 +520,7 @@ async function network () {
   const { dir } = resolveInstance(LABEL, asked)
   let conn
   try { conn = await connectLocal(dir) } catch (e) {
-    if (e.code !== 'ENOAGENT') throw e
+    if (/** @type {Thrown} */ (e).code !== 'ENOAGENT') throw e
     console.log(t('Este perfil no tiene un agente corriendo: no hay conexiones.', 'This profile has no agent running: there are no connections.'))
     return
   }
@@ -510,7 +544,12 @@ async function service () {
   const { dir } = resolveInstance(LABEL, asked)
   const name = path.basename(dir)
   const { installService, uninstallService, serviceStatus } = await import('../service.js')
-  const explain = (e) => {
+  /**
+   * @param {unknown} caught
+   * @returns {never}
+   */
+  const explain = (caught) => {
+    const e = /** @type {Thrown} */ (caught)
     if (e.code === 'no-user-systemd') die(t('esta sesión no tiene systemd de usuario, que es donde se pone el servicio. No se instaló nada.', 'this session has no systemd user manager, which is where the service goes. Nothing was installed.'))
     if (e.code === 'unsupported-platform') die(t('esto solo está para Linux, macOS y Windows.', 'this is only available on Linux, macOS and Windows.'))
     throw e
@@ -572,7 +611,7 @@ async function link () {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
     const taken = (await listProfiles()).filter((p) => p.linked).map((p) => p.name)
     const suggestion = taken.includes('default') ? '' : 'default'
-    name = await new Promise((resolve) => rl.question(t(`Nombre del perfil (a-z, 0-9, -)${suggestion ? ` [${suggestion}]` : ''}: `, `Profile name (a-z, 0-9, -)${suggestion ? ` [${suggestion}]` : ''}: `), (a) => { rl.close(); resolve(a.trim() || suggestion) }))
+    name = await /** @type {Promise<string>} */ (new Promise((resolve) => rl.question(t(`Nombre del perfil (a-z, 0-9, -)${suggestion ? ` [${suggestion}]` : ''}: `, `Profile name (a-z, 0-9, -)${suggestion ? ` [${suggestion}]` : ''}: `), (a) => { rl.close(); resolve(a.trim() || suggestion) })))
   }
   if (!isValidName(name)) die(t(`nombre no válido: «${name}» (usa a-z, 0-9 y -, hasta 32)`, `invalid name: "${name}" (use a-z, 0-9 and -, up to 32)`))
   const { dir } = resolveInstance(LABEL, name)
@@ -582,12 +621,20 @@ async function link () {
   console.log(t(`Perfil «${name}» enlazado.`, `Profile "${name}" linked.`))
 }
 
+/**
+ * @param {string} q
+ * @returns {Promise<string>}
+ */
 function ask (q) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   return new Promise((resolve) => rl.question(q, (a) => { rl.close(); resolve(a.trim()) }))
 }
 
-/** Pregunta algo que no debe verse al teclearlo. Solo en una TTY: una clave no se pasa por una tubería. */
+/**
+ * Pregunta algo que no debe verse al teclearlo. Solo en una TTY: una clave no se pasa por una tubería.
+ * @param {string} q
+ * @returns {Promise<string>}
+ */
 function askHidden (q) {
   if (!process.stdin.isTTY) die(t('la clave se teclea: hace falta una terminal', 'the code is typed: a terminal is needed'))
   process.stdout.write(q)
@@ -595,7 +642,7 @@ function askHidden (q) {
   process.stdin.resume()
   return new Promise((resolve) => {
     let typed = ''
-    const onData = (b) => {
+    const onData = (/** @type {Buffer} */ b) => {
       // Una tecla que no es texto (flechas, Fin, el teclado numérico SIN Bloq Num) llega como una
       // secuencia de escape: se descarta entera. Antes solo se saltaba el ESC y el resto («[F»)
       // entraba en la clave sin que se viera, así que la clave guardada no era la tecleada.
@@ -711,6 +758,10 @@ async function rename () {
   console.log(t(`Perfil «${from}» → «${to}». Es el mismo aparato: no hace falta volver a enrolar.`, `Profile "${from}" → "${to}". Same device: no need to enroll again.`))
 }
 
+/**
+ * @param {string} a
+ * @param {string} b
+ */
 function samePath (a, b) {
   try { return fs.realpathSync(a) === fs.realpathSync(b) } catch (_) { return path.resolve(a) === path.resolve(b) }
 }
@@ -721,7 +772,13 @@ function lastProfileFile () {
   return path.join(base, 'dotrino-terminal', 'last-profile')
 }
 
-/** Una pregunta y su respuesta, para `ls` y `kill`. */
+/**
+ * Una pregunta y su respuesta, para `ls` y `kill`.
+ * @param {Conn} conn
+ * @param {object} msg
+ * @param {string} type
+ * @returns {Promise<any>} lo que contestó el agente (`type` o `fail`), sin comprobar
+ */
 function request (conn, msg, type) {
   return new Promise((resolve) => {
     conn.on('message', (m) => { if (m.type === type || m.type === 'fail') resolve(m) })
@@ -732,14 +789,22 @@ function request (conn, msg, type) {
 /** Lo que se espera a que el agente conteste por otra máquina (descubrirla y saludarla). */
 const FAR_WAIT_MS = 40_000
 /** Una pregunta sobre las otras máquinas. Un agente anterior a la 0.38 no la entiende y calla: se dice. */
+/**
+ * @param {Conn} conn
+ * @param {object} msg
+ * @param {string} type
+ * @returns {Promise<any>}
+ */
 async function farRequest (conn, msg, type) {
   const r = await Promise.race([request(conn, msg, type), new Promise((resolve) => setTimeout(() => resolve(null), FAR_WAIT_MS))])
   if (!r) die(t('el agente de esta máquina no contestó. Si es anterior a la 0.38 no sabe de otras máquinas: actualízalo y reinícialo.', 'this machine\'s agent did not answer. If it predates 0.38 it knows nothing about other machines: update and restart it.'))
   return r
 }
+/** @param {{ code?: string, message?: string }} r */
 const farMessage = (r) => farMessageFor(r, t)
 
 /** `dotrino-terminal machines`: las otras máquinas de la cuenta que están encendidas, y sus consolas. */
+/** @param {Conn} conn */
 async function machines (conn) {
   const r = await farRequest(conn, { type: 'machines' }, 'machines')
   if (r.type === 'fail') die(`dotrino-terminal: ${farMessage(r)}`)
@@ -748,7 +813,7 @@ async function machines (conn) {
   for (const m of r.list) {
     const state = m.locked ? t('pide su clave', 'asks for its code') : m.error ? t('no contesta', 'not answering') : `${m.consoles.length} ${t('consolas', 'consoles')}`
     console.log(`${m.id}  ${m.name || ''}  ·  ${state}`)
-    for (const c of m.consoles || []) console.log(`  ${c.id}  ${age(Date.now() - c.createdAt).padStart(4)}  ${c.viewers} ${t('mirando', 'watching')}  ${c.title || ''}`)
+    for (const c of /** @type {import('../types/agent.js').ConsoleInfo[]} */ (m.consoles || [])) console.log(`  ${c.id}  ${age(Date.now() - c.createdAt).padStart(4)}  ${c.viewers} ${t('mirando', 'watching')}  ${c.title || ''}`)
   }
 }
 
@@ -756,6 +821,8 @@ async function machines (conn) {
  * `--machine <id|nombre>`: esta conexión pasa a hablar con OTRA máquina de la cuenta (el agente
  * de aquí hace de puente, `far.js`). A partir de ahí todo es igual que en local. Si la otra
  * máquina tiene clave, se pide aquí, antes de seguir.
+ * @param {Conn} conn
+ * @param {string} ref
  */
 async function goVia (conn, ref) {
   const r = await farRequest(conn, { type: 'via', machine: ref }, 'via')
@@ -776,17 +843,19 @@ async function goVia (conn, ref) {
   if (probe.type === 'fail') die(`dotrino-terminal: ${probe.message} (${probe.code})`)
 }
 
+/** @param {number} ms */
 const age = (ms) => {
   const s = Math.round(ms / 1000)
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`
 }
 
+/** @param {Conn} conn */
 async function list (conn) {
   const { list } = await request(conn, { type: 'list' }, 'consoles')
   if (args.includes('--json')) { console.log(JSON.stringify(list, null, 2)); return }
   if (!list.length) { console.log(t('No hay consolas abiertas.', 'No open consoles.')); return }
   for (const c of list) {
-    const remote = c.watchers.filter((w) => w.origin === 'remote').length
+    const remote = /** @type {import('../types/agent.js').ConsoleInfo} */ (c).watchers.filter((w) => w.origin === 'remote').length
     const who = `${c.viewers} ${t('mirando', 'watching')}${remote ? ` (${remote} ${t('desde otro aparato', 'from another device')})` : ''}`
     console.log(`  ${c.id}  ${c.origin.padEnd(6)}  ${age(Date.now() - c.createdAt).padStart(4)}  ${who}  ${c.title || ''}`)
   }
@@ -807,6 +876,7 @@ async function note () {
   const dir = opt('--dir') || (opt('--name') ? dataDir(opt('--name')) : process.env.DOTRINO_TERMINAL_PROFILE_DIR || dataDir())
   const valued = new Set(['--id', '--dir', '--name', '--add', '--task', '--title'])
   const flags = new Set([...valued, '--clear', '--json'])
+  /** @type {string[]} */
   const words = []
   for (let i = 1; i < args.length; i++) {
     if (valued.has(args[i])) { i++; continue }
@@ -820,11 +890,16 @@ async function note () {
   const add = opt('--add') === '-' ? stdin() : opt('--add')
   const task = opt('--task') === '-' ? stdin() : opt('--task')
   const title = opt('--title')
+  /** @type {Conn} */
   let conn
   try { conn = await connectLocal(dir) } catch (e) {
-    if (e.code !== 'ENOAGENT') throw e
+    if (/** @type {Thrown} */ (e).code !== 'ENOAGENT') throw e
     die(t('el agente de este perfil no está corriendo.', 'this profile\'s agent is not running.'))
   }
+  /**
+   * @param {object} msg
+   * @returns {Promise<import('../types/agent.js').ConsoleInfo>}
+   */
   const ask = async (msg) => {
     const r = await Promise.race([request(conn, msg, 'noted'), new Promise((resolve) => setTimeout(() => resolve(null), 5000))])
     // Un agente anterior a la 0.36 no conoce la orden y no contesta: se dice, no se da por hecho.
@@ -865,7 +940,12 @@ const PASTE_KEY = '\x16'
 /** Los fallos que contesta la máquina a una subida: son de la subida, no cierran la ventana. */
 const UPLOAD_FAILS = new Set(['not-image', 'too-big', 'bad-file', 'no-uploads', 'file-failed'])
 
-/** La ventana: la TTY enganchada a una consola del agente. */
+/**
+ * La ventana: la TTY enganchada a una consola del agente.
+ * @param {Conn} conn
+ * @param {{ type: 'open' | 'attach', id?: string, cwd?: string, tag?: string }} first  lo que se pide al empezar
+ * @param {string} dir
+ */
 function interactive (conn, first, dir) {
   // Hasta que el agente diga `attached` no hay consola a la que escribir: se guarda.
   let ready = false
@@ -874,29 +954,35 @@ function interactive (conn, first, dir) {
   // hasta que se abra una (Ctrl+] n, el «+» de la app) o se pase a una (Ctrl+] a<id>). Lo que se
   // teclee ahí no va a ningún sitio: se descarta, no se guarda para una consola que aún no existe.
   let empty = false
+  /** @param {string} data */
   const input = (data) => { if (ready) conn.send({ type: 'input', data }); else if (!empty) queued += data }
   if (!process.stdin.isTTY || !process.stdout.isTTY) die(t('dotrino-terminal necesita una terminal (TTY).', 'dotrino-terminal needs a terminal (TTY).'))
   const out = process.stdout
+  /** @type {string | null} */
   let consoleId = null
   let shellTitle = ''
   let subject = ''
+  /** @type {Set<string>} */
   let remote = new Set()
   let ending = false
 
   // Lo que se dice un momento en el título (mandar una imagen): la pantalla es del programa.
   let status = ''
-  let statusTimer = null
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let statusTimer
   const showTitle = () => {
     const base = subject || shellTitle || 'Dotrino Terminal'
     const mark = remote.size ? `  ● ${t('abierta desde otro aparato', 'open on another device')}${remote.size > 1 ? ` ×${remote.size}` : ''}` : ''
     out.write(`\x1b]2;${base}${mark}${status ? `  · ${status}` : ''}\x07`)
   }
+  /** @type {(text: string, ms?: number) => void} */
   const say = (text, ms = 0) => {
     clearTimeout(statusTimer)
     status = text
     showTitle()
     if (ms) statusTimer = setTimeout(() => { status = ''; showTitle() }, ms)
   }
+  /** @param {import('../types/agent.js').ConsoleInfo | null | undefined} info */
   const onInfo = (info) => {
     if (!info) return
     // El título que puso el programa (`note --title`) manda sobre el de la shell.
@@ -918,6 +1004,7 @@ function interactive (conn, first, dir) {
   const filter = titleFilter((title) => { shellTitle = title; showTitle() })
   const size = () => ({ cols: out.columns || 80, rows: out.rows || 24 })
 
+  /** @type {(code: number, note?: string) => void} */
   const finish = (code, note) => {
     if (ending) return
     ending = true
@@ -954,7 +1041,9 @@ function interactive (conn, first, dir) {
     switching = false; recovering = false
     request(conn, { type: 'list' }, 'consoles').then((r) => {
       if (r.type !== 'consoles') return                // un `fail`: ya lo atendió el manejador
-      const rest = r.list.filter((c) => c.id !== closed)
+      /** @type {import('../types/agent.js').ConsoleInfo[]} */
+      const all = r.list
+      const rest = all.filter((c) => c.id !== closed)
       // Desatendida EN ESTA MÁQUINA: que la mire otro aparato no la hace atendida aquí.
       const other = rest.find((c) => !c.watchers.length) || rest.find((c) => !c.watchers.some((w) => w.origin === 'local')) || rest[0]
       if (other) return switchTo({ type: 'attach', id: other.id })
@@ -968,11 +1057,13 @@ function interactive (conn, first, dir) {
   // ¿El programa pidió pegado entre corchetes? Así recibe la ruta de una imagen como algo
   // pegado, que es como Claude Code reconoce un archivo.
   let bracketed = false
+  /** @param {string} data */
   const watchModes = (data) => {
     const all = [...String(data).matchAll(/\x1b\[\?2004([hl])/g)]
     if (all.length) bracketed = all[all.length - 1][1] === 'h'
   }
   // La subida en curso: sus respuestas (`filed`, o un `fail` suyo) son de ella y de nadie más.
+  /** @type {((m: any) => void) | null} */
   let uploadReply = null
   conn.on('message', (m) => {
     if (m.type === 'replay' && !clean) { clean = true; out.write('\x1b[H\x1b[2J') }
@@ -1037,9 +1128,11 @@ function interactive (conn, first, dir) {
   process.stdin.off('data', earlyTap)
   const decoder = new StringDecoder('utf8')
   let prefixed = false
+  /** @type {string | null} */
   let collecting = null                // tras Ctrl+] a: el id de la consola, hasta Enter
   // Cambiar de consola SIN salir: por la misma conexión, y con la pantalla en limpio para que la
   // repetición de la otra consola no se pinte encima. Lo tecleado mientras tanto se guarda.
+  /** @param {{ type: 'open' | 'attach', id?: string, cwd?: string }} msg */
   const switchTo = (msg) => {
     wasEmpty = empty
     empty = false
@@ -1048,6 +1141,7 @@ function interactive (conn, first, dir) {
     out.write('\x1bc')                 // RIS: pantalla, historial y modos, de cero
     conn.send({ ...msg, ...size(), ...tag() })
   }
+  /** @param {Buffer} buf */
   const onKeys = (buf) => {
     // Ctrl+] abre el atajo: «d» suelta la consola, «n» abre otra nueva, «a<id>⏎» pasa a esa
     // consola (lo usa el panel de la app de escritorio), otro Ctrl+] manda uno literal, y
@@ -1101,6 +1195,7 @@ function interactive (conn, first, dir) {
   // salía nada. Si aquí hay una imagen, se sube (la misma subida que usa el teléfono) y se pega
   // la ruta donde quedó. Sin imagen, Ctrl+V sigue su camino, como siempre.
   let pasting = false
+  /** @type {(msg: object) => Promise<any>} */
   const ask = (msg) => new Promise((resolve) => {
     const timer = setTimeout(() => { uploadReply = null; resolve({ type: 'fail', code: 'timeout', message: 'the machine did not answer (its agent may predate 0.43)' }) }, 20000)
     uploadReply = (m) => { clearTimeout(timer); resolve(m) }
@@ -1112,7 +1207,7 @@ function interactive (conn, first, dir) {
     try {
       let bytes
       try { bytes = await clipboardImage() } catch (e) {
-        say(t(`no pude leer el portapapeles (${e.code})`, `could not read the clipboard (${e.code})`), 8000)
+        say(t(`no pude leer el portapapeles (${/** @type {Thrown} */ (e).code})`, `could not read the clipboard (${/** @type {Thrown} */ (e).code})`), 8000)
         input(PASTE_KEY)
         return
       }
@@ -1123,7 +1218,7 @@ function interactive (conn, first, dir) {
       input(bracketed ? `\x1b[200~${text}\x1b[201~` : text)
       say(t('imagen enviada', 'image sent'), 3000)
     } catch (e) {
-      say(t(`no se pudo mandar la imagen: ${e.message} (${e.code || '?'})`, `could not send the image: ${e.message} (${e.code || '?'})`), 10000)
+      say(t(`no se pudo mandar la imagen: ${/** @type {Thrown} */ (e).message} (${/** @type {Thrown} */ (e).code || '?'})`, `could not send the image: ${/** @type {Thrown} */ (e).message} (${/** @type {Thrown} */ (e).code || '?'})`), 10000)
     } finally { pasting = false }
   }
   process.stdin.on('data', onKeys)
@@ -1184,5 +1279,5 @@ try {
     interactive(conn, { type: 'open', ...cwd, ...tag() }, dir)
   } else die(t(`orden desconocida: ${cmd} (mira --help)`, `unknown command: ${cmd} (see --help)`))
 } catch (e) {
-  if (e !== HOLD) { try { die(`dotrino-terminal: ${e.message}`) } catch (_) {} }
+  if (e !== HOLD) { try { die(`dotrino-terminal: ${/** @type {Thrown} */ (e).message}`) } catch (_) {} }
 }

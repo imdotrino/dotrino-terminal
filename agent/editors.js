@@ -28,6 +28,7 @@ export const EDITORS = [
 ]
 
 /** Un error con `code`: quien lo recibe decide por el código, no por la frase. */
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
 /** `linux`, `osx` o `windows`: el sufijo de las claves de terminal de VS Code. Otro sistema no se atiende. */
@@ -52,12 +53,23 @@ export function findEditors (base = configBase()) {
     .filter((e) => fs.existsSync(path.dirname(e.settings)))
 }
 
-/** El perfil de terminal: Node, el script del cliente y, si se pidió, el perfil de Dotrino. */
+/**
+ * El perfil de terminal: Node, el script del cliente y, si se pidió, el perfil de Dotrino.
+ * @param {{ node: string, script: string, name?: string | null }} o
+ * @returns {{ path: string, args: string[] }}
+ */
 export function terminalProfile ({ node, script, name }) {
   return { path: node, args: name ? [script, '--name', name] : [script] }
 }
 
+/**
+ * El `settings.json` leído (JSON con comentarios): un objeto, o lanza `bad-settings`.
+ * @param {string} text
+ * @param {string} file
+ * @returns {Record<string, unknown>}
+ */
 function check (text, file) {
+  /** @type {import('jsonc-parser').ParseError[]} */
   const errors = []
   const value = parse(text, errors, { allowTrailingComma: true })
   if (errors.length || (text.trim() && (typeof value !== 'object' || value === null || Array.isArray(value)))) {
@@ -67,8 +79,14 @@ function check (text, file) {
   return value || {}
 }
 
+/** @param {string} text */
 const formatting = (text) => ({ formattingOptions: /\n\t/.test(text) ? { insertSpaces: false, tabSize: 1 } : { insertSpaces: true, tabSize: 2 } })
 
+/**
+ * @param {string} text
+ * @param {import('jsonc-parser').JSONPath} keyPath
+ * @param {unknown} value
+ */
 function set (text, keyPath, value) {
   return applyEdits(text, modify(text, keyPath, value, formatting(text)))
 }
@@ -76,6 +94,8 @@ function set (text, keyPath, value) {
 /**
  * El texto de `settings.json` con el perfil puesto (`profile`) o quitado (`profile: null`).
  * Al quitar, el perfil por defecto solo se toca si era el nuestro.
+ * @param {string} text
+ * @param {{ profile: { path: string, args: string[] } | null, platform?: string, file?: string }} o
  */
 export function applyToSettings (text, { profile, platform = platformKey(), file = 'settings.json' }) {
   const src = text.trim() ? text : '{}\n'
@@ -98,6 +118,7 @@ export function applyToSettings (text, { profile, platform = platformKey(), file
 /**
  * Lo aplica a cada editor instalado. Devuelve `[{ name, settings, changed }]`. Sin ninguno,
  * lanza `no-editor`; un `settings.json` que no se puede leer lanza `bad-settings` y no se toca.
+ * @param {{ profile: { path: string, args: string[] } | null, base?: string, platform?: string }} o
  */
 export function configureEditors ({ profile, base = configBase(), platform = platformKey() }) {
   const editors = findEditors(base)

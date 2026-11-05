@@ -39,12 +39,28 @@ export const IDLE_MS = 60_000
 /** Lo que se espera la respuesta de una máquina antes de darla por apagada. */
 export const ANSWER_MS = 8000
 
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
+
+/** @typedef {import('./types/agent.js').SessionLike} SessionLike */
+/** @typedef {import('./types/agent.js').ConsoleInfo} ConsoleInfo */
+/** Una máquina de la cuenta con agente de terminal encendido. */
+/** @typedef {{ sub: string, id: string, name: string }} Found */
+/**
+ * Lo que se sabe de una máquina: su conexión de control (si está abierta), sus consolas, si
+ * pide clave y el último fallo.
+ * @typedef {Found & { rc: RemoteAgentClient | null, consoles: ConsoleInfo[] | null, locked: boolean, error: { code: string, message: string } | null }} Machine
+ */
+/** @typedef {{ probe: import('@dotrino/proxy-client').WebSocketProxyClient | null, askedVaultAt?: number }} DiscoverState */
 
 /** `AB12-CD34`, como sale en `dotrino-vault members`. */
 export const shortId = keyLabel
 
-/** Las máquinas con agente de terminal encendido, con el transporte de verdad. */
+/**
+ * Las máquinas con agente de terminal encendido, con el transporte de verdad.
+ * @param {{ link: DotrinoDeviceLink, dir: string, kind: string, state: DiscoverState }} o
+ * @returns {Promise<Found[]>}
+ */
 async function discoverReal ({ link, dir, kind, state }) {
   const cl = clientLink(link, { dir })
   const fresh = !state.askedVaultAt || Date.now() - state.askedVaultAt >= MEMBERS_MS
@@ -57,6 +73,7 @@ async function discoverReal ({ link, dir, kind, state }) {
     await state.probe.connect()
   }
   const found = await probeAgents(state.probe, members.map((m) => m.sub))
+  /** @type {Found[]} */
   const out = []
   for (const m of members) {
     if (found.get(m.sub)?.kind !== kind) continue
@@ -65,7 +82,11 @@ async function discoverReal ({ link, dir, kind, state }) {
   return out
 }
 
-/** Una sesión con el agente de otra máquina. */
+/**
+ * Una sesión con el agente de otra máquina.
+ * @param {{ link: DotrinoDeviceLink, dir: string, sub: string, loadLink?: () => DotrinoDeviceLink | null }} o
+ * @returns {Promise<RemoteAgentClient>}
+ */
 async function connectReal ({ link, dir, sub, loadLink }) {
   // EL ACTA DE CONFIANZA DE ESTE AGENTE, leída del disco en cada saludo: la mantiene al día su
   // lado de agente (cada 5 min y con los avisos de la bóveda). Sin ella el cliente le pedía el
@@ -73,7 +94,7 @@ async function connectReal ({ link, dir, sub, loadLink }) {
   // máquina (2026-11-04). Si con ella no pasa, el cliente sí pregunta a la bóveda.
   const trustedActa = () => {
     const l = loadLink?.() || link
-    return l?.actaTrusted === true && l.acta ? l.acta : null
+    return l?.actaTrusted === true && l.acta ? /** @type {object} */ (l.acta) : null
   }
   const rc = new RemoteAgentClient(clientLink(link, { dir }), { agentPubkey: sub, trustedActa })
   await rc.connect()
@@ -83,25 +104,31 @@ async function connectReal ({ link, dir, sub, loadLink }) {
 /**
  * @param {object} opts
  * @param {string} opts.dir                 la carpeta del enlace de este agente.
- * @param {() => object|null} opts.loadLink el enlace, leído cada vez (puede aparecer después).
+ * @param {() => DotrinoDeviceLink|null} opts.loadLink el enlace, leído cada vez (puede aparecer después).
  * @param {string} opts.kind                el tipo de agente que se busca (`terminal-agent`).
- * @param {Function} [opts.discover]        para las pruebas.
- * @param {Function} [opts.connect]         para las pruebas.
+ * @param {typeof discoverReal} [opts.discover]  para las pruebas.
+ * @param {typeof connectReal} [opts.connect]    para las pruebas.
  * @param {number} [opts.refreshMs]
  * @param {number} [opts.discoverMs]
  * @param {number} [opts.idleMs]
  * @param {number} [opts.answerMs]
+ * @param {(line: string) => void} [opts.log]
  */
 export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect = connectReal, refreshMs = REFRESH_MS, discoverMs = DISCOVER_MS, idleMs = IDLE_MS, answerMs = ANSWER_MS, log = (line) => console.error(line) }) {
   /** sub → { sub, id, name, rc, consoles, locked, error } */
+  /** @type {Map<string, Machine>} */
   const machines = new Map()
   /** sub → la clave que una ventana escribió bien (solo en memoria). */
+  /** @type {Map<string, string>} */
   const codes = new Map()
+  /** @type {DiscoverState} */
   const state = { probe: null }
   let discoveredAt = 0
   let refreshedAt = 0
+  /** @type {Promise<void> | null} */
   let refreshing = null
-  let idle = null
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let idle
   let closed = false
 
   /**
@@ -111,12 +138,19 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
    * solo al CAMBIAR (falla, cambia de motivo o se recupera): el refresco va cada pocos segundos
    * y una línea por vuelta ahogaría el log.
    */
+  /** @type {Map<string, string>} */
   const lastError = new Map()
-  function report (what, err, ms) {
+  /**
+   * @param {string} what
+   * @param {{ code?: string, message?: string } | null | unknown} failure
+   * @param {number} [ms]
+   */
+  function report (what, failure, ms) {
+    const err = /** @type {{ code?: string, message?: string } | null} */ (failure)
     const code = err ? (err.code || 'error') : null
     if ((lastError.get(what) ?? null) === code) return
     const took = typeof ms === 'number' ? ` after ${ms} ms` : ''
-    if (code) log(`[far] ${new Date().toISOString()} ${what}: ${code}${took} · ${err.message || ''}`)
+    if (code) log(`[far] ${new Date().toISOString()} ${what}: ${code}${took} · ${err?.message || ''}`)
     else log(`[far] ${new Date().toISOString()} ${what}: ok again${took}`)
     if (code) lastError.set(what, code); else lastError.delete(what)
   }
@@ -127,7 +161,13 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     return l
   }
 
-  /** Una pregunta por la conexión de control de una máquina, y su respuesta (o `fail`). */
+  /**
+   * Una pregunta por la conexión de control de una máquina, y su respuesta (o `fail`).
+   * @param {RemoteAgentClient} rc
+   * @param {object} msg
+   * @param {string} type
+   * @returns {Promise<any>} la respuesta de la máquina (`type` o `fail`)
+   */
   function ask (rc, msg, type) {
     return new Promise((resolve, reject) => {
       const off = rc.on('message', (m) => { if (m?.type === type || m?.type === 'fail') { done(); resolve(m) } })
@@ -138,12 +178,16 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     })
   }
 
+  /** @param {Machine} m */
   function drop (m) {
     try { m.rc?.close() } catch (_) {}
     m.rc = null
   }
 
-  /** Las consolas de una máquina, abriendo su conexión de control si hace falta. */
+  /**
+   * Las consolas de una máquina, abriendo su conexión de control si hace falta.
+   * @param {Machine} m
+   */
   async function readOne (m) {
     const t0 = Date.now()
     try {
@@ -168,7 +212,7 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
       // No contestó o la sesión cayó: la conexión se suelta y la próxima pasada abre otra.
       drop(m)
       m.consoles = null; m.locked = false
-      m.error = { code: e.code || 'unreachable', message: e.message }
+      m.error = { code: /** @type {Thrown} */ (e).code || 'unreachable', message: /** @type {Thrown} */ (e).message }
       report(`machine ${m.id}`, m.error, Date.now() - t0)
     }
   }
@@ -236,7 +280,11 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     return snapshot()
   }
 
-  /** La máquina que se nombró: por su llave, por su id (`AB12-CD34`) o por su nombre. */
+  /**
+   * La máquina que se nombró: por su llave, por su id (`AB12-CD34`) o por su nombre.
+   * @param {unknown} ref
+   * @returns {Promise<Machine>}
+   */
   async function resolve (ref) {
     const want = String(ref || '').trim()
     if (!want) throw fail('no-machine', 'which machine?')
@@ -256,44 +304,57 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
   /**
    * La ventana pasa a hablar con otra máquina: todo lo que mande va allí y todo lo que venga
    * de allí vuelve, tal cual. Contesta `{ type:'via', machine }` cuando el tubo está puesto.
+   * @param {SessionLike} session
+   * @param {unknown} ref
    */
   async function via (session, ref) {
+    /** @type {object[]} */
     const queue = []
+    /** @type {RemoteAgentClient | null} */
     let rc = null
     let gone = false
+    /** @type {string | null} */
     let typed = null                   // la clave que se acaba de mandar, hasta saber si valió
     // La ventana se cerró. Antes de cortar se SUELTA la consola: la otra máquina no ve caer
     // esta conexión hasta que se le agota la espera, y mientras tanto la consola seguía
     // saliendo «abierta desde otro aparato» sin nadie mirándola.
     const bye = () => {
       gone = true
-      if (!rc) return
-      const end = () => { try { rc.close() } catch (_) {} }
-      rc.send({ type: 'detach' }).then(end, end)
+      const conn = rc
+      if (!conn) return
+      const end = () => { try { conn.close() } catch (_) {} }
+      conn.send({ type: 'detach' }).then(end, end)
     }
     session.on('close', bye)
+    /** @param {any} msg  lo que manda la ventana, tal cual */
     const forward = (msg) => {
       if (msg?.type === 'unlock') typed = String(msg.code ?? '')
-      rc.send(msg).catch((e) => session.send({ type: 'fail', code: e.code || 'far-send', message: e.message }))
+      // Solo se reenvía con la conexión abierta: antes, los mensajes esperan en `queue`.
+      if (!rc) throw new Error('far: forwarding before the connection is up')
+      rc.send(msg).catch((/** @type {Thrown} */ e) => session.send({ type: 'fail', code: e.code || 'far-send', message: e.message }))
     }
     session.on('message', (msg) => { if (rc) forward(msg); else queue.push(msg) })
+    /** @type {Machine} */
     let m
+    /** @type {RemoteAgentClient} */
+    let conn
     try {
       m = await resolve(ref)
-      rc = await connect({ link: link(), dir, sub: m.sub, loadLink })
+      rc = conn = await connect({ link: link(), dir, sub: m.sub, loadLink })
     } catch (e) {
-      session.send({ type: 'fail', code: e.code || 'unreachable', message: e.message })
+      session.send({ type: 'fail', code: /** @type {Thrown} */ (e).code || 'unreachable', message: /** @type {Thrown} */ (e).message })
       return
     }
-    if (gone) { try { rc.close() } catch (_) {} return }
+    if (gone) { try { conn.close() } catch (_) {} return }
+    /** @type {string | null} */
     let attached = null                // la consola que mira la ventana allí
-    rc.on('message', (p) => {
+    conn.on('message', (p) => {
       if (p?.type === 'attached') attached = p.id
       if (p?.type === 'unlocked' && typed != null) { codes.set(m.sub, typed); typed = null }
       if (p?.type === 'fail' && (p.code === 'bad-code' || p.code === 'wait')) typed = null
       session.send(p)
     })
-    rc.on('error', (e) => session.send({ type: 'fail', code: e.code || 'far-error', message: e.message }))
+    conn.on('error', (e) => session.send({ type: 'fail', code: e.code || 'far-error', message: e.message }))
     // LA SESIÓN CON LA OTRA MÁQUINA SE PERDIÓ y se abrió otra: o la máquina se reinició, o la
     // sesión venció (una hora sin mensajes, SESSION_IDLE_MS: una consola quieta; la otra máquina
     // lo avisa en el momento, remote-agent ≥ 0.27). Se pregunta a la sesión nueva:
@@ -302,25 +363,29 @@ export function makeFar ({ dir, loadLink, kind, discover = discoverReal, connect
     //   2026-10-27). Antes el panel la reenviaba solo y las consolas seguían a la vista.
     // - la consola de la ventana sigue allí: solo venció la sesión, la ventana se vuelve a enganchar.
     // - no está: la máquina se reinició y sus consolas ya no existen. Se dice; no se inventa otra.
-    rc.on('resumed', () => {
-      ask(rc, { type: 'list' }, 'consoles').then((r) => {
+    conn.on('resumed', () => {
+      ask(conn, { type: 'list' }, 'consoles').then((r) => {
         if (r.type === 'fail' && r.code === 'locked') {
           codes.delete(m.sub)
           const panel = machines.get(m.sub)
           if (panel) { drop(panel); panel.consoles = null; panel.locked = true; panel.error = null }
           session.send({ type: 'fail', code: 'locked-again', message: 'that machine asks for its code again' })
-        } else if (r.type === 'consoles' && attached && r.list.some((c) => c.id === attached)) {
+        } else if (r.type === 'consoles' && attached && r.list.some((/** @type {ConsoleInfo} */ c) => c.id === attached)) {
           session.send({ type: 'fail', code: 'session-resumed', message: 'the session with that machine was renewed' })
         } else {
           session.send({ type: 'fail', code: 'machine-restarted', message: 'that machine restarted: its consoles are gone' })
         }
-      }, (e) => session.send({ type: 'fail', code: e.code || 'unreachable', message: e.message }))
+      }, (/** @type {Thrown} */ e) => session.send({ type: 'fail', code: e.code || 'unreachable', message: e.message }))
     })
     session.send({ type: 'via', machine: { sub: m.sub, id: m.id, name: m.name } })
     for (const msg of queue.splice(0)) forward(msg)
   }
 
-  /** Una orden suelta a otra máquina (cerrar una consola, moverla, su nota), sin ventana. */
+  /**
+   * Una orden suelta a otra máquina (cerrar una consola, moverla, su nota), sin ventana.
+   * @param {unknown} ref
+   * @param {object} msg
+   */
   async function send (ref, msg) {
     const m = await resolve(ref)
     if (!m.rc) await readOne(m)

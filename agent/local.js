@@ -30,25 +30,38 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 
 export const SOCKET_NAME = 'terminal.sock'
+/** @typedef {import('./types/agent.js').SessionLike} SessionLike */
+/** Quien escucha un evento de una sesión local: el mensaje, o nada al cerrar. */
+/** @typedef {Record<'message' | 'close', ((msg?: any) => void)[]>} Handlers */
+
+/** @param {string} dir */
 export const socketPath = (dir) => path.join(dir, SOCKET_NAME)
 /** Windows: el archivo que dice cómo se llama la tubería del agente y con qué llave se entra. */
 export const PIPE_FILE = 'terminal.pipe'
+/** @param {string} dir */
 export const pipeFile = (dir) => path.join(dir, PIPE_FILE)
+/** @param {string} platform */
 const isWindows = (platform) => platform === 'win32'
 /** Lo más largo que admite la ruta de un socket Unix (macOS: 104 bytes con el nulo; Linux: 108). */
 export const MAX_SOCKET_PATH = 103
 
+/** @param {string} file */
 function checkLength (file) {
   if (Buffer.byteLength(file) > MAX_SOCKET_PATH) {
     throw Object.assign(new Error(`socket path too long (${Buffer.byteLength(file)} bytes, max ${MAX_SOCKET_PATH}): ${file}. Use a shorter DOTRINO_AGENT_HOME`), { code: 'ESOCKPATH' })
   }
 }
 
-/** Mensajes JSON por líneas sobre un socket. */
+/**
+ * Mensajes JSON por líneas sobre un socket.
+ * @param {import('node:net').Socket} sock
+ * @param {(msg: any) => void} onMessage  lo que llega es JSON de fuera: quien lo recibe lo comprueba
+ * @returns {(obj: object) => void}
+ */
 function framed (sock, onMessage) {
   let buf = ''
   sock.setEncoding('utf8')
-  sock.on('data', (chunk) => {
+  sock.on('data', (/** @type {string} */ chunk) => {
     buf += chunk
     let i
     while ((i = buf.indexOf('\n')) >= 0) {
@@ -62,7 +75,11 @@ function framed (sock, onMessage) {
   return (obj) => { if (!sock.destroyed) sock.write(JSON.stringify(obj) + '\n') }
 }
 
-/** ¿Contesta alguien en ese socket? */
+/**
+ * ¿Contesta alguien en ese socket?
+ * @param {string} file
+ * @returns {Promise<boolean>}
+ */
 function answers (file) {
   return new Promise((resolve) => {
     const s = net.connect(file)
@@ -71,30 +88,41 @@ function answers (file) {
   })
 }
 
-/** Windows: lo apuntado por el agente que escucha (o escuchó) en esa carpeta. `null` si no hay. */
+/**
+ * Windows: lo apuntado por el agente que escucha (o escuchó) en esa carpeta. `null` si no hay.
+ * @param {string} dir
+ * @returns {{ pipe: string, key: string } | null}
+ */
 function readPipe (dir) {
   let text
-  try { text = fs.readFileSync(pipeFile(dir), 'utf8') } catch (e) { if (e.code === 'ENOENT') return null; throw e }
+  try { text = fs.readFileSync(pipeFile(dir), 'utf8') } catch (e) { if (/** @type {Thrown} */ (e).code === 'ENOENT') return null; throw e }
   const rec = JSON.parse(text)
   if (typeof rec?.pipe !== 'string' || typeof rec?.key !== 'string') throw Object.assign(new Error(`${pipeFile(dir)} is malformed`), { code: 'EBADPIPE' })
   return rec
 }
 
-/** La sesión de una conexión: misma forma que las de `@dotrino/remote-agent`. */
+/**
+ * La sesión de una conexión: misma forma que las de `@dotrino/remote-agent`.
+ * @param {import('node:net').Socket} sock
+ * @param {(session: SessionLike) => void} serve
+ * @param {string | null} key  Windows: la llave que la ventana manda en su primera línea
+ */
 function sessionOf (sock, serve, key) {
+  /** @type {Handlers} */
   const h = { message: [], close: [] }
   let closed = false
   let allowed = !key
+  /** @type {SessionLike} */
   const session = {
     device: null,
-    send: async (payload) => { if (allowed) write(payload) },
-    on (ev, cb) { h[ev]?.push(cb); return this }
+    send: async (/** @type {object} */ payload) => { if (allowed) write(payload) },
+    on (/** @type {'message' | 'close'} */ ev, /** @type {(msg?: any) => void} */ cb) { h[ev]?.push(cb); return this }
   }
   const write = framed(sock, (msg) => {
     // Windows: la primera línea es la llave. Cualquier otra cosa corta, sin contestar.
     if (!allowed) {
       const got = Buffer.from(String(msg?.type === 'local-auth' ? msg.key : ''))
-      const want = Buffer.from(key)
+      const want = Buffer.from(/** @type {string} */ (key))
       if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) { sock.destroy(); return }
       allowed = true
       serve(session)
@@ -113,13 +141,16 @@ function sessionOf (sock, serve, key) {
  * `@dotrino/remote-agent` (`send`, `on('message'|'close')`), así que `serve` es
  * `serveSession` tal cual.
  *
- * @param {{ dir: string, serve: (session: object) => void, platform?: string }} opts
+ * @param {{ dir: string, serve: (session: SessionLike) => void, platform?: string }} opts
  * @returns {Promise<{ path: string, close: () => void }>}
  */
 export async function listenLocal ({ dir, serve, platform = process.platform }) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   fs.chmodSync(dir, 0o700)
-  let file, key = null
+  /** @type {string} */
+  let file
+  /** @type {string | null} */
+  let key = null
   if (isWindows(platform)) {
     const old = readPipe(dir)
     if (old && await answers(old.pipe)) throw Object.assign(new Error(`another agent is already listening on ${old.pipe}`), { code: 'EALREADY' })
@@ -133,16 +164,17 @@ export async function listenLocal ({ dir, serve, platform = process.platform }) 
       fs.rmSync(file)                                   // lo dejó un agente que murió sin limpiar
     }
   }
+  /** @type {Set<import('node:net').Socket>} */
   const socks = new Set()
   const server = net.createServer((sock) => {
     socks.add(sock)
     sock.on('close', () => socks.delete(sock))
     sessionOf(sock, serve, key)
   })
-  await new Promise((resolve, reject) => {
+  await /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen({ path: file, ...(key ? { readableAll: true, writableAll: true } : {}) }, () => { server.off('error', reject); resolve() })
-  })
+  }))
   if (key) {
     // Se apunta DESPUÉS de escuchar: quien lo lea encuentra la tubería ya abierta.
     const tmp = pipeFile(dir) + '.tmp'
@@ -169,10 +201,13 @@ export async function listenLocal ({ dir, serve, platform = process.platform }) 
  *
  * @param {string} dir  la carpeta del enlace del agente.
  * @param {{ platform?: string }} [opts]
- * @returns {Promise<{ send:(obj:object)=>void, on:(ev:'message'|'close', cb:Function)=>void, close:()=>void }>}
+ * @returns {Promise<{ send:(obj:object)=>void, on:(ev:'message'|'close', cb:(msg?: any) => void)=>void, close:()=>void }>}
  */
 export function connectLocal (dir, { platform = process.platform } = {}) {
-  let file, key = null
+  /** @type {string} */
+  let file
+  /** @type {string | null} */
+  let key = null
   if (isWindows(platform)) {
     const rec = readPipe(dir)
     if (!rec) return Promise.reject(Object.assign(new Error(`no terminal agent is listening in ${dir}`), { code: 'ENOAGENT' }))
@@ -183,6 +218,7 @@ export function connectLocal (dir, { platform = process.platform } = {}) {
   }
   return new Promise((resolve, reject) => {
     const sock = net.connect(file)
+    /** @type {Handlers} */
     const h = { message: [], close: [] }
     const send = framed(sock, (msg) => { for (const cb of h.message) cb(msg) })
     let connected = false
@@ -190,10 +226,10 @@ export function connectLocal (dir, { platform = process.platform } = {}) {
       connected = true
       if (key) send({ type: 'local-auth', key })
       sock.on('close', () => { for (const cb of h.close) cb() })
-      resolve({ send, on: (ev, cb) => { h[ev]?.push(cb) }, close: () => sock.end() })
+      resolve({ send, on: (/** @type {'message' | 'close'} */ ev, /** @type {(msg?: any) => void} */ cb) => { h[ev]?.push(cb) }, close: () => sock.end() })
     })
     // Tras conectar, un error acaba en 'close', que ya se avisa arriba.
-    sock.on('error', (e) => {
+    sock.on('error', (/** @type {Thrown} */ e) => {
       if (connected) return
       // Hay agente pero no deja entrar: no es lo mismo que no haber ninguno.
       if (e.code === 'EPERM' || e.code === 'EACCES') reject(Object.assign(new Error(`the terminal agent on ${file} refused this window (${e.code})`), { code: 'EAGENTACCESS', cause: e }))

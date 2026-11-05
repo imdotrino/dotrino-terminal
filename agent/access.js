@@ -31,20 +31,28 @@ const BASE_WAIT_MS = 30_000
 const MAX_WAIT_MS = 60 * 60_000
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }
 
+/** @type {(code: string, message: string, extra?: object) => Error & { code: string }} */
 const fail = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra })
+/** @param {string} dir */
 const file = (dir) => path.join(dir, ACCESS_FILE)
+/** @type {(secret: unknown, salt: Buffer, params: import('node:crypto').ScryptOptions) => Buffer} */
 const digest = (secret, salt, params) => crypto.scryptSync(String(secret).normalize('NFKC'), salt, 32, params)
 
 /** Si esta máquina tiene clave. Un archivo que existe y no se puede leer NO es «sin clave»: se lanza. */
+/** @param {string} dir */
 export function hasAccessCode (dir) {
   return readRecord(dir) !== null
 }
 
+/**
+ * @param {string} dir
+ * @returns {{ v: 1, salt: string, hash: string, params: import('node:crypto').ScryptOptions } | null}
+ */
 function readRecord (dir) {
   let raw
   try { raw = fs.readFileSync(file(dir), 'utf8') } catch (e) {
-    if (e.code === 'ENOENT') return null
-    throw fail('access-unreadable', `cannot read ${ACCESS_FILE}: ${e.message}`)
+    if (/** @type {Thrown} */ (e).code === 'ENOENT') return null
+    throw fail('access-unreadable', `cannot read ${ACCESS_FILE}: ${/** @type {Thrown} */ (e).message}`)
   }
   let r
   try { r = JSON.parse(raw) } catch (_) { throw fail('access-unreadable', `${ACCESS_FILE} is not valid JSON`) }
@@ -54,7 +62,11 @@ function readRecord (dir) {
   return r
 }
 
-/** Pone o cambia la clave. */
+/**
+ * Pone o cambia la clave.
+ * @param {string} dir
+ * @param {unknown} secret
+ */
 export function setAccessCode (dir, secret) {
   if (typeof secret !== 'string' || secret.length < MIN_LENGTH) throw fail('too-short', `the code needs at least ${MIN_LENGTH} characters`)
   const salt = crypto.randomBytes(16)
@@ -64,12 +76,19 @@ export function setAccessCode (dir, secret) {
   fs.renameSync(tmp, file(dir))
 }
 
-/** Quita la clave. */
+/**
+ * Quita la clave.
+ * @param {string} dir
+ */
 export function clearAccessCode (dir) {
   fs.rmSync(file(dir), { force: true })
 }
 
-/** Si `secret` es la clave de esta máquina. Sin frenos: para la orden local que la cambia. */
+/**
+ * Si `secret` es la clave de esta máquina. Sin frenos: para la orden local que la cambia.
+ * @param {string} dir
+ * @param {unknown} secret
+ */
 export function checkAccessCode (dir, secret) {
   const r = readRecord(dir)
   if (!r) throw fail('no-access-code', 'this machine has no code')
@@ -82,7 +101,7 @@ export function checkAccessCode (dir, secret) {
  * La puerta de un agente: comprueba la clave y frena los fallos seguidos. Una por agente,
  * compartida por todas sus sesiones.
  * @param {string} dir
- * @param {{ now?: () => number, onIncident?: (i: { device: string, tries: number }) => void }} [opts]
+ * @param {{ now?: () => number, onIncident?: ((i: { device: string, tries: number }) => void) | null }} [opts]
  *   `onIncident`: un mismo aparato (`device`, su pubkey) falló `INCIDENT_AFTER` veces seguidas.
  *   Se llama UNA vez por racha; la racha se corta al acertar.
  */
@@ -97,6 +116,10 @@ export function makeGate (dir, { now = Date.now, onIncident = null } = {}) {
     /**
      * Lanza `wait` (con `retryMs`) o `bad-code`; si no lanza, la clave era la buena.
      * `device` es quién la escribió (pubkey), para contar sus fallos y avisar.
+     */
+    /**
+     * @param {unknown} secret
+     * @param {string | null} [device]
      */
     check (secret, device = null) {
       const left = until - now()

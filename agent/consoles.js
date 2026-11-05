@@ -18,8 +18,14 @@ import os from 'node:os'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
+/** @type {typeof import('@xterm/headless').Terminal} */
 const { Terminal } = require('@xterm/headless')
+/** @type {typeof import('@xterm/addon-serialize').SerializeAddon} */
 const { SerializeAddon } = require('@xterm/addon-serialize')
+
+/** @typedef {import('./types/agent.js').Viewer} Viewer */
+/** @typedef {import('./types/agent.js').ConsoleInfo} ConsoleInfo */
+/** @typedef {import('./types/agent.js').Pty} Pty */
 
 /** Líneas de historial que se guardan y se devuelven al volver. */
 export const SCROLLBACK = 1000
@@ -44,6 +50,7 @@ export const PIECE_JSON_MAX = 40 * 1024
  * @returns {string[]}
  */
 export function pieces (data, max = PIECE_JSON_MAX) {
+  /** @type {string[]} */
   const out = []
   let start = 0; let cost = 0
   for (let i = 0; i < data.length; i++) {
@@ -92,6 +99,8 @@ export const NOTE_MAX = 4000
  * personal. El título no sirve para esto: lo pone el programa que corre dentro, y uno como Claude
  * Code pone el nombre de su sesión, sin carpeta. En Linux se lee de /proc; donde no hay /proc
  * (macOS) no se sabe, y se dice con `null` en vez de dar la carpeta de arranque por buena.
+ * @param {number | null | undefined} pid
+ * @returns {string | null}
  */
 export function cwdOf (pid) {
   if (!pid) return null
@@ -113,7 +122,11 @@ const HOST = userAtHost()
 
 const randomId = () => [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
 
-class Console {
+/** Una consola: su shell, su pantalla sin pantalla y quién la mira. */
+export class Console {
+  /**
+   * @param {{ id: string, n: number, pty: Pty, cols: number, rows: number, origin: 'local' | 'remote', quietMs?: number }} o
+   */
   constructor ({ id, n, pty, cols, rows, origin, quietMs = QUIET_MS }) {
     this.quietMs = quietMs
     this.id = id
@@ -136,27 +149,38 @@ class Console {
     this.rows = rows
     this.createdAt = Date.now()
     this.lastActive = Date.now()
+    /** @type {Set<Viewer>} */
     this.viewers = new Set()          // sesiones mirando: { onOut(data), onExit(code), onMeta?(info), origin, device?, tag?, size? }
     // QUIÉN PUSO EL TAMAÑO. Lo gana una pantalla en cuatro momentos y solo en esos: al abrir la
     // consola, al cambiarse a ella, al pulsar ⤢ y al teclear. Se ajusta en ese instante y nada
     // queda fijado: la siguiente pantalla que haga una de las cuatro cosas lo cambia. `holder` es la última que lo
     // hizo; solo a ella se le sigue la pantalla (redimensionar la ventana, girar el teléfono).
     // Volver a conectarse o que otra pantalla se vaya no cambia el tamaño.
+    /** @type {Viewer | null} */
     this.holder = null
     // Quién lo tenía cuando se fue (su aparato o su ventana): si ESA pantalla vuelve por una
     // conexión nueva sin que otra lo haya tomado, sigue siendo la suya (`resume`).
+    /** @type {string | null} */
     this.lastHolder = null
     this.exited = false
+    // Cerrada con `kill` (y por qué pantalla), y los avisos para insistir si la shell no se va.
+    this.killed = false
+    /** @type {Viewer | null} */
+    this.killedBy = null
+    /** @type {ReturnType<typeof setTimeout>[]} */
+    this._killTimers = []
     this.screen = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true })
     this.serializer = new SerializeAddon()
     this.screen.loadAddon(this.serializer)
     this.busy = false                 // ¿trabajando ahora?
     this.busySince = 0
+    /** @type {number | null} */
     this.doneAt = null                // terminó (o pidió atención) y nadie lo ha atendido
     this.lastInput = 0
     this._changing = 0                // desde cuándo hay cambios seguidos
     this._lastChange = 0
-    this._quiet = null
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this._quiet = undefined
     this.screen.onTitleChange((t) => {
       this.title = String(t).slice(0, 200)
       if (!this._changed(Date.now())) this._meta()
@@ -168,6 +192,7 @@ class Console {
    * Algo cambió (el título o el contenido). Cambios seguidos encienden «trabajando»; un rato sin
    * ninguno lo apaga. Dos cambios sueltos (el prompt que se redibuja, un comando instantáneo) no
    * son un programa trabajando. Devuelve si avisó a quien mira.
+   * @param {number} now
    */
   _changed (now) {
     if (now - this.lastInput <= ECHO_MS) return false
@@ -179,7 +204,10 @@ class Console {
     return now - this._changing >= SUSTAIN_MS ? this._setBusy(true) : false
   }
 
-  /** Cambia «trabajando». Al dejar de trabajar tras una tarea de verdad, queda como terminada. */
+  /**
+   * Cambia «trabajando». Al dejar de trabajar tras una tarea de verdad, queda como terminada.
+   * @param {boolean} v
+   */
   _setBusy (v) {
     if (v === this.busy) return false
     this.busy = v
@@ -196,7 +224,10 @@ class Console {
     this._meta()
   }
 
-  /** Cambia la nota. Lo ve al momento quien mira la consola; los demás, en la lista. */
+  /**
+   * Cambia la nota. Lo ve al momento quien mira la consola; los demás, en la lista.
+   * @param {unknown} text
+   */
   setNote (text) {
     const note = String(text ?? '').slice(0, NOTE_MAX)
     if (note === this.note) return
@@ -204,7 +235,10 @@ class Console {
     this._meta()
   }
 
-  /** Cambia la tarea en curso (la del programa). No toca la nota de la persona. */
+  /**
+   * Cambia la tarea en curso (la del programa). No toca la nota de la persona.
+   * @param {unknown} text
+   */
   setTask (text) {
     const task = String(text ?? '').slice(0, NOTE_MAX)
     if (task === this.task) return
@@ -213,7 +247,10 @@ class Console {
     this._meta()
   }
 
-  /** Cambia el título que pone el programa. Vacío, vuelve a mandar el de la shell. */
+  /**
+   * Cambia el título que pone el programa. Vacío, vuelve a mandar el de la shell.
+   * @param {unknown} text
+   */
   setSubject (text) {
     const subject = String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)
     if (subject === this.subject) return
@@ -227,7 +264,10 @@ class Console {
     for (const v of this.viewers) v.onMeta?.(info)
   }
 
-  /** Lo que sale de la shell: a la pantalla sin pantalla y a quien esté mirando. */
+  /**
+   * Lo que sale de la shell: a la pantalla sin pantalla y a quien esté mirando.
+   * @param {string} data
+   */
   _out (data) {
     const now = Date.now()
     this.lastActive = now
@@ -236,8 +276,13 @@ class Console {
     for (const v of this.viewers) v.onOut(data)
   }
 
+  /** @param {string} data */
   write (data) { this.lastActive = this.lastInput = Date.now(); this._attended(); this.pty.write(data) }
 
+  /**
+   * @param {number} cols
+   * @param {number} rows
+   */
   resize (cols, rows) {
     if (!cols || !rows) return
     const changed = cols !== this.cols || rows !== this.rows
@@ -255,10 +300,14 @@ class Console {
    * aparte y se le da después. El `write('', cb)` hace de marca: xterm procesa en orden y
    * llama al callback justo tras esa marca, así que la foto tiene todo lo anterior y nada
    * de lo posterior.
+   * @param {Viewer} viewer
+   * @param {{ scrollback?: number }} [opts]
    * @returns {Promise<string>} la pantalla serializada
    */
   attach (viewer, { scrollback } = {}) {
+    /** @type {string[]} */
     const pending = []
+    /** @type {Viewer} */
     const buffering = { onOut: (d) => pending.push(d), onExit: viewer.onExit }
     this.viewers.add(buffering)
     return new Promise((resolve) => {
@@ -283,11 +332,14 @@ class Console {
    * se hace la foto se guarda y sale detrás, igual que en `attach`, así que no se pierde ni se
    * repite nada. Empieza por un reinicio del terminal (`ESC c`): el cliente la pinta encima de
    * lo que tenía sin saber que es una segunda foto.
+   * @param {Viewer} viewer
    * @returns {Promise<string|null>} `null` si ese mirón ya no está
    */
   history (viewer) {
     if (!this.viewers.has(viewer)) return Promise.resolve(null)
+    /** @type {string[]} */
     const pending = []
+    /** @type {Viewer} */
     const buffering = { onOut: (d) => pending.push(d), onExit: viewer.onExit }
     this.viewers.delete(viewer)
     this.viewers.add(buffering)
@@ -301,6 +353,7 @@ class Console {
     })
   }
 
+  /** @param {Viewer} viewer */
   detach (viewer) {
     if (!this.viewers.has(viewer)) return
     this.viewers.delete(viewer)
@@ -317,6 +370,7 @@ class Console {
    * con las filas de antes, las últimas por detrás del teclado, hasta que tecleaba.
    * Vale tanto si su conexión vieja ya se soltó (`lastHolder`) como si sigue enganchada sin
    * saberse muerta (`holder` es otra sesión de la misma pantalla).
+   * @param {Viewer} viewer
    */
   resume (viewer) {
     if (!this.viewers.has(viewer)) return
@@ -329,7 +383,10 @@ class Console {
     else this._meta()
   }
 
-  /** `viewer` toma el tamaño AHORA: abrió la consola, se cambió a ella, pulsó ⤢ o tecleó. */
+  /**
+   * `viewer` toma el tamaño AHORA: abrió la consola, se cambió a ella, pulsó ⤢ o tecleó.
+   * @param {Viewer} viewer
+   */
   take (viewer) {
     if (!this.viewers.has(viewer)) return
     this.holder = viewer
@@ -338,7 +395,10 @@ class Console {
     else this._meta()
   }
 
-  /** Cambió la pantalla de `viewer` (ventana, giro). Solo se sigue a quien puso el tamaño. */
+  /**
+   * Cambió la pantalla de `viewer` (ventana, giro). Solo se sigue a quien puso el tamaño.
+   * @param {Viewer} viewer
+   */
   sizeFrom (viewer) {
     if (this.holder === viewer && viewer.size) this.resize(viewer.size.cols, viewer.size.rows)
   }
@@ -347,9 +407,10 @@ class Console {
    * `watchers` dice QUIÉN mira: una ventana de esta máquina o un aparato de la cuenta (con
    * su pubkey), y la etiqueta con la que se presentó (`tag`): así una ventana de la app de
    * escritorio reconoce, en la lista, cuál es la consola que está mostrando ella. Es lo que deja a la ventana local avisar de que alguien entró desde fuera.
+   * @returns {ConsoleInfo}
    */
   info () {
-    const watchers = [...this.viewers].filter((v) => v.origin).map((v) => ({ origin: v.origin, device: v.device || null, tag: v.tag || null }))
+    const watchers = [...this.viewers].flatMap((v) => v.origin ? [{ origin: v.origin, device: v.device || null, tag: v.tag || null }] : [])
     const d = this.holder
     const sizeBy = d ? { origin: d.origin || null, device: d.device || null, tag: d.tag || null } : null
     return { id: this.id, n: this.n, activity: this.busy ? 'busy' : 'idle', doneAt: this.doneAt, sizeBy, origin: this.origin, title: this.subject || this.title, shellTitle: this.title, subject: this.subject, note: this.note, task: this.task, host: HOST, cwd: cwdOf(this.pty?.pid), cols: this.cols, rows: this.rows, createdAt: this.createdAt, lastActive: this.lastActive, viewers: this.viewers.size, watchers }
@@ -371,12 +432,16 @@ const REPORTS = new RegExp([
   '\\x1bP[\\s\\S]*?\\x1b\\\\',               // DCS
 ].join('|'), 'g')
 
-/** ¿Hay algo TECLEADO en `data`, o es solo lo que la terminal contesta por su cuenta? */
+/**
+ * ¿Hay algo TECLEADO en `data`, o es solo lo que la terminal contesta por su cuenta?
+ * @param {unknown} data
+ */
 export function isTyped (data) { return String(data).replace(REPORTS, '') !== '' }
 
 
 /** Las consolas de este agente. */
 /** Qué PANTALLA es un mirón, más allá de su conexión: el aparato, o la ventana con su etiqueta. Null si no se sabe. */
+/** @param {Viewer} v */
 function screenOf (v) {
   if (v.origin === 'remote') return v.device ? `remote:${v.device}` : null
   return v.tag ? `local:${v.tag}` : null
@@ -384,16 +449,21 @@ function screenOf (v) {
 
 export class ConsoleHub {
   /**
-   * @param {{ spawn:(opts:{cols:number,rows:number,cwd:string|null,id:string})=>any }} opts
+   * @param {{ spawn:(opts:{cols:number,rows:number,cwd:string|null,id:string})=>Pty, quietMs?: number }} opts
    *   `spawn` lanza la shell (un PTY con `onData`, `onExit`, `write`, `resize`, `kill`). `id` es el de
    *   la consola: va en el entorno de la shell para que lo que corre dentro sepa cuál es la suya.
    */
   constructor ({ spawn, quietMs = QUIET_MS }) {
     this._spawn = spawn
     this._quietMs = quietMs
+    /** @type {Map<string, Console>} */
     this.consoles = new Map()
   }
 
+  /**
+   * Abre una consola nueva.
+   * @param {{ cols?: number, rows?: number, origin?: 'local' | 'remote', cwd?: string | null }} [opts]
+   */
   create ({ cols = 80, rows = 24, origin = 'remote', cwd = null } = {}) {
     const id = randomId()
     // Su NÚMERO: el libre más bajo, y no cambia mientras viva. Si se cierra la 1, la 2 sigue
@@ -410,7 +480,7 @@ export class ConsoleHub {
     pty.onExit(({ exitCode }) => {
       c.exited = true
       clearTimeout(c._quiet)
-      for (const t of c._killTimers || []) clearTimeout(t)
+      for (const t of c._killTimers) clearTimeout(t)
       this.consoles.delete(id)
       // A cada pantalla se le dice si la consola la cerró OTRA (`byOther`): la shell que termina
       // sola, o la que cierra la propia pantalla, no lo es. Quien mira decide con eso si se va
@@ -429,12 +499,15 @@ export class ConsoleHub {
     return c
   }
 
+  /** @param {Console[]} all */
   _order (all) { this.consoles = new Map(all.map((c) => [c.id, c])) }
 
   /**
    * El ORDEN del panel, el mismo en todas las ventanas y aparatos: la consola `id` pasa a estar
    * justo antes de `before` (o al final, con `null` o con una que ya no existe). No cambia su
    * número, que es fijo. `false` si esa consola ya no existe.
+   * @param {string} id
+   * @param {string | null} [before]
    */
   move (id, before = null) {
     const c = this.consoles.get(id)
@@ -447,6 +520,7 @@ export class ConsoleHub {
     return true
   }
 
+  /** @param {string} id */
   get (id) { return this.consoles.get(id) || null }
 
   /** Las consolas, en el orden del panel (por número hasta que alguien las mueve: `move`). */
@@ -460,6 +534,8 @@ export class ConsoleHub {
    * la devolvía y el panel enseñaba una consola muerta. Y si la shell no se va con el SIGHUP de
    * siempre (un `trap '' HUP`, un programa colgado), se insiste: SIGTERM, y después SIGKILL. Antes
    * la × no hacía nada y la consola se quedaba en la lista para siempre.
+   * @param {string} id
+   * @param {Viewer | null} [by]
    */
   kill (id, by = null) {
     const c = this.consoles.get(id)
@@ -468,7 +544,9 @@ export class ConsoleHub {
     c.killedBy = by
     this.consoles.delete(id)
     try { c.pty.kill() } catch (_) {}
-    c._killTimers = [['SIGTERM', KILL_TERM_MS], ['SIGKILL', KILL_KILL_MS]].map(([sig, ms]) => {
+    /** @type {[string, number][]} */
+    const escalate = [['SIGTERM', KILL_TERM_MS], ['SIGKILL', KILL_KILL_MS]]
+    c._killTimers = escalate.map(([sig, ms]) => {
       const t = setTimeout(() => { if (!c.exited) try { c.pty.kill(sig) } catch (_) {} }, ms)
       t.unref?.()
       return t

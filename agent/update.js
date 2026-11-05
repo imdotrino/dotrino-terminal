@@ -20,11 +20,13 @@ import { loadLink } from './link.js'
 export const PKG = '@dotrino/terminal-agent'
 export const REPO = 'imdotrino/dotrino-terminal'
 /** Este repo también lleva la PWA y el escritorio: las releases del agente van con prefijo. */
+/** @param {string} version */
 export const releaseTag = (version) => `agent-v${version}`
 
 /** Cada cuánto se mira si ya no quedan consolas para reiniciar con la versión instalada. */
 export const IDLE_CHECK_MS = 60_000
 
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
 /**
@@ -33,8 +35,8 @@ const fail = (code, message) => Object.assign(new Error(message), { code })
  * del disco. El papel se renueva mientras el agente corre, y el agente puede arrancar sin
  * enlace y enlazarse después: una conexión fijada al arrancar se quedaría vieja.
  *
- * @param {{ dir: string, product?: string, log?: (m: string) => void, load?: (dir: string) => any, make?: (o: any) => any }} o
- * @returns {{ mayUpdate: Function, onUpdated: Function, onNeedsRoot: Function }}
+ * @param {{ dir: string, product?: string, log?: (m: string) => void, load?: (dir: string) => DotrinoDeviceLink | null, make?: typeof vaultUpdateHooks }} o
+ * @returns {import('@dotrino/vault/service').UpdateHooks}
  */
 export function vaultHooks ({ dir, product = PKG, log = console.log, load = loadLink, make = vaultUpdateHooks }) {
   const now = () => {
@@ -62,12 +64,14 @@ export function vaultHooks ({ dir, product = PKG, log = console.log, load = load
  * `dir` es la carpeta de datos de ESTA instancia (su enlace y sus ajustes) y `version` la
  * que está en marcha. Lo demás es para las pruebas.
  *
- * @param {{ dir: string, version: string, agent: { consoles: { consoles: Map<string, unknown> }, close: () => void }, exit?: (code: number) => void, log?: (m: string) => void, watch?: (o: any) => (() => void), hooks?: object, idleCheckMs?: number }} o
+ * @param {{ dir: string, version: string, agent: { consoles: { consoles: Map<string, unknown> }, close: () => void }, exit?: (code: number) => void, log?: (m: string) => void, watch?: typeof watchSelfUpdateNpm, hooks?: import('@dotrino/vault/service').UpdateHooks, idleCheckMs?: number }} o
  * @returns {() => void} para dejar de mirar
  */
 export function startSelfUpdate ({ dir, version, agent, exit = (code) => process.exit(code), log = console.log, watch = watchSelfUpdateNpm, hooks = vaultHooks({ dir, log }), idleCheckMs = IDLE_CHECK_MS }) {
+  /** @type {ReturnType<typeof setInterval> | null} */
   let waiting = null
   const open = () => agent.consoles.consoles.size
+  /** @param {string} v */
   const restart = (v) => {
     log(`[terminal-agent] restarting to run ${v}`)
     agent.close()
@@ -86,8 +90,8 @@ export function startSelfUpdate ({ dir, version, agent, exit = (code) => process
       if (!open()) return restart(v)
       if (waiting) return
       log(`[terminal-agent] ${v} is installed · ${open()} console(s) open, so it restarts when none is left`)
-      waiting = setInterval(() => { if (!open()) { clearInterval(waiting); waiting = null; restart(v) } }, idleCheckMs)
-      waiting.unref?.()
+      const timer = waiting = setInterval(() => { if (!open()) { clearInterval(timer); waiting = null; restart(v) } }, idleCheckMs)
+      timer.unref?.()
     },
     log
   })

@@ -52,7 +52,12 @@ import { makeUploads } from './uploads.js'
 import { readPiece } from './downloads.js'
 
 const require = createRequire(import.meta.url)
+/** @type {{ version: string }} */
 const { version: VERSION } = require('./package.json')
+
+/** @typedef {import('./types/agent.js').Viewer} Viewer */
+/** @typedef {import('./types/agent.js').SessionLike} SessionLike */
+/** @typedef {ReturnType<typeof makeFar>} Far */
 
 /** Cuánto se espera al canal directo antes de mandar el historial por el proxio. */
 export const HISTORY_WAIT_MS = 8000
@@ -71,21 +76,27 @@ export const LINK_POLL_MS = 2000
 /** Cada cuánto se reintenta la parte remota cuando no pudo arrancar (sin red, proxio caído). */
 const REMOTE_RETRY_MS = 15_000
 
+/** @returns {typeof import('node-pty')} */
 export function loadPty () {
   // node-pty (Microsoft, el de VS Code) ≥ 1.2 trae los binarios DENTRO del paquete para Linux,
   // macOS y Windows: no compila ni descarga nada al instalarse (funciona con ignore-scripts).
   // Antes: @homebridge/node-pty-prebuilt-multiarch, que los bajaba al instalar con
   // prebuild-install, abandonado (npm avisaba «deprecated»).
   try { return require('node-pty') } catch (e) {
-    throw new Error('PTY module missing. Reinstall the agent: `npx @dotrino/terminal-agent` (' + e.message + ')')
+    throw new Error('PTY module missing. Reinstall the agent: `npx @dotrino/terminal-agent` (' + /** @type {Thrown} */ (e).message + ')')
   }
 }
 
+/** @param {unknown} p */
 const isDir = (p) => {
   try { return typeof p === 'string' && path.isAbsolute(p) && fs.statSync(p).isDirectory() } catch (_) { return false }
 }
 
-/** Las consolas de este agente, sobre el PTY. Exportada para las pruebas. */
+/**
+ * Las consolas de este agente, sobre el PTY. Exportada para las pruebas.
+ * @param {typeof import('node-pty')} pty
+ * @param {{ shell?: string, quietMs?: number, dir?: string }} [opts]
+ */
 export function makeHub (pty, opts = {}) {
   const shell = opts.shell || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
   return new ConsoleHub({
@@ -114,17 +125,19 @@ export function makeHub (pty, opts = {}) {
  * teléfono, redimensionar la ventana). Escribir o dar foco no cambia nada.
  * Exportada para las pruebas.
  *
- * @param {object} session
+ * @param {SessionLike} session
  * @param {ConsoleHub} hub
- * @param {{ origin?: 'local'|'remote', gate?: ReturnType<typeof makeGate>, uploadsDir?: string }} [opts]
+ * @param {{ origin?: 'local'|'remote', gate?: ReturnType<typeof makeGate> | null, uploadsDir?: string | null }} [opts]
  *   `gate`: la clave de la máquina (access.js). Solo se le pide a las sesiones remotas.
  *   `uploadsDir`: dónde se guardan las imágenes que manda esta sesión (uploads.js). Sin ella,
  *   mandar una imagen falla con `no-uploads`.
  */
 export function serveSession (session, hub, { origin = 'remote', gate = null, uploadsDir = null } = {}) {
+  /** @type {import('./consoles.js').Console | null} */
   let current = null
   const uploads = uploadsDir ? makeUploads(uploadsDir) : null
   let size = { cols: 80, rows: 24 }
+  /** @type {Viewer} */
   const viewer = {
     origin,
     device: session.device || null,
@@ -136,6 +149,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     onMeta: (info) => { session.send({ type: 'meta', console: info }) }
   }
   const release = () => { if (current) { current.detach(viewer); current = null } }
+  /** @type {(code: string, message: string, extra?: object) => unknown} */
   const fail = (code, message, extra = {}) => session.send({ type: 'fail', code, message, ...extra })
   // La clave de la máquina: una vez escrita vale para ESTA conexión.
   let unlocked = false
@@ -144,14 +158,20 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     if (origin !== 'remote' || !gate || unlocked) return true
     try {
       if (!gate.required()) return true
-    } catch (e) { fail(e.code || 'access-unreadable', e.message); return false }
+    } catch (e) { fail(/** @type {Thrown} */ (e).code || 'access-unreadable', /** @type {Thrown} */ (e).message); return false }
     fail('locked', 'this machine asks for its code')
     return false
   }
+  /** @param {any} msg  lo que llegó de la sesión */
   const takeSize = (msg) => { if (msg.cols && msg.rows) { size = { cols: msg.cols, rows: msg.rows }; viewer.size = size } }
   // La etiqueta con la que se presenta quien mira (una ventana de la app de escritorio).
+  /** @param {any} msg  lo que llegó de la sesión */
   const takeTag = (msg) => { if (typeof msg.tag === 'string') viewer.tag = msg.tag.slice(0, 64) }
 
+  /**
+   * @param {import('./consoles.js').Console} c
+   * @param {{ fresh: boolean, keep?: boolean }} o
+   */
   async function attachTo (c, { fresh, keep = false }) {
     release()
     current = c
@@ -159,7 +179,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     // son cientos de KB y, mandada ya, da toda la vuelta por el proxio (medido: 381 KB por el
     // proxio en cada enganche). La pantalla sola son unos pocos KB y se ve igual de rápido; el
     // historial sale en cuanto abre el directo (`sendHistory`). No se espera a nada para pintar.
-    const later = origin === 'remote' && typeof session.whenDirect === 'function' && !session.direct() && c.hasHistory()
+    const later = origin === 'remote' && typeof session.whenDirect === 'function' && !session.direct?.() && c.hasHistory()
     const snapshot = await c.attach(viewer, later ? { scrollback: 0 } : {})
     // Mientras se hacía la foto la sesión se fue, soltó la consola o pidió otra: esta ya no es la
     // suya. Quedarse enganchado dejaba un mirón FANTASMA (la consola salía «abierta en otro
@@ -179,15 +199,16 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     if (current !== c) return
     await session.send({ type: 'attached', id: c.id, fresh, console: c.info() })
     // Sin esperarlo (pintar no espera a nada), y un fallo aquí no puede tumbar el agente: se dice.
-    if (later) sendHistory(c).catch((e) => console.error('[terminal-agent] could not send the history of console', c.id, '-', e?.message || e))
+    if (later) sendHistory(c).catch((/** @type {Thrown} */ e) => console.error('[terminal-agent] could not send the history of console', c.id, '-', e?.message || e))
   }
 
   /**
    * El historial que `attachTo` dejó para después. Sale cuando abre el canal directo; si en
    * `HISTORY_WAIT_MS` no abrió, sale igual por el proxio: llegar tarde es mejor que no llegar.
+   * @param {import('./consoles.js').Console} c
    */
   async function sendHistory (c) {
-    await session.whenDirect(HISTORY_WAIT_MS)
+    await session.whenDirect?.(HISTORY_WAIT_MS)
     if (current !== c) return                    // ya mira otra, o se fue
     const full = await c.history(viewer)
     if (full == null || current !== c) return
@@ -208,7 +229,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
         if (gate.required()) gate.check(msg.code, viewer.device)
         unlocked = true
         session.send({ type: 'unlocked' })
-      } catch (e) { fail(e.code || 'access-unreadable', e.message, e.retryMs ? { retryMs: e.retryMs } : {}) }
+      } catch (e) { fail(/** @type {Thrown} */ (e).code || 'access-unreadable', /** @type {Thrown} */ (e).message, /** @type {Thrown} */ (e).retryMs ? { retryMs: /** @type {Thrown} */ (e).retryMs } : {}) }
       return
     }
     if (!mayPass()) return
@@ -261,16 +282,16 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     if (msg.type === 'file') {
       if (!uploads) return fail('no-uploads', 'this agent has nowhere to keep images')
       try { session.send({ type: 'filed', ...uploads.take(msg) }) } catch (e) {
-        if (!e.code) console.error('[terminal-agent] could not keep an image:', e.message)
-        fail(e.code || 'file-failed', e.message)
+        if (!/** @type {Thrown} */ (e).code) console.error('[terminal-agent] could not keep an image:', /** @type {Thrown} */ (e).message)
+        fail(/** @type {Thrown} */ (e).code || 'file-failed', /** @type {Thrown} */ (e).message)
       }
       return
     }
     // Un archivo de esta máquina, para abrirlo en el aparato (una ruta que salió en la consola).
     if (msg.type === 'fetch') {
       try { session.send({ type: 'fetched', ...readPiece(msg, current ? cwdOf(current.pty?.pid) : null) }) } catch (e) {
-        if (!e.code || !['bad-fetch', 'no-cwd', 'no-file', 'no-read', 'is-dir', 'not-file', 'too-big', 'changed'].includes(e.code)) console.error('[terminal-agent] could not send a file:', e.message)
-        fail(e.code || 'fetch-failed', e.message)
+        if (!/** @type {Thrown} */ (e).code || !['bad-fetch', 'no-cwd', 'no-file', 'no-read', 'is-dir', 'not-file', 'too-big', 'changed'].includes(/** @type {Thrown} */ (e).code)) console.error('[terminal-agent] could not send a file:', /** @type {Thrown} */ (e).message)
+        fail(/** @type {Thrown} */ (e).code || 'fetch-failed', /** @type {Thrown} */ (e).message)
       }
       return
     }
@@ -294,20 +315,33 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
  * El uso de red de este agente: cada conexión con otro aparato, por qué camino va (directo,
  * TURN o el proxio) y cuánto pasó por cada uno. El mismo informe que el modal de red del topbar.
  * Una máquina de la cuenta sale con su nombre; cualquier otro aparato, con su id.
+ * @param {Far} far
  */
 export async function netOf (far) {
   const transports = await Promise.all(listTransports().map(async (c) => {
-    try { return await c.stats() } catch (e) { return { url: c.url, error: e?.message || String(e) } }
+    // `url` existe en el cliente (client.js) pero el .d.ts de proxy-client no lo declara.
+    try { return await c.stats() } catch (e) { return { url: /** @type {{ url: string }} */ (/** @type {unknown} */ (c)).url, error: /** @type {Thrown} */ (e)?.message || String(e) } }
   }))
   const names = new Map(far.known().map((m) => [m.id, m.name ? `${m.name} ${m.id}` : m.id]))
+  /** @param {string} pubkey */
   const label = async (pubkey) => { const id = await shortId(pubkey); return names.get(id) || id }
   return { transports, report: await netReport(transports, { label }) }
 }
 
+/**
+ * @param {SessionLike} session
+ * @param {ConsoleHub} hub
+ * @param {Far} far
+ * @param {{ uploadsDir?: string | null }} [opts]
+ */
 export function serveLocal (session, hub, far, { uploadsDir = null } = {}) {
+  /** @type {Record<'message' | 'close', ((msg?: any) => void)[]>} */
   const h = { message: [], close: [] }
-  const inner = { device: null, send: (p) => session.send(p), on (ev, cb) { h[ev]?.push(cb); return this } }
+  /** @type {SessionLike} */
+  const inner = { device: null, send: (/** @type {object} */ p) => session.send(p), on (/** @type {'message' | 'close'} */ ev, /** @type {(msg?: any) => void} */ cb) { h[ev]?.push(cb); return this } }
+  /** @param {Thrown} e */
   const failed = (e) => session.send({ type: 'fail', code: e.code || 'far-error', message: e.message })
+  /** @type {'far' | 'hub' | null} */
   let mode = null
   session.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return
@@ -338,13 +372,14 @@ export function serveLocal (session, hub, far, { uploadsDir = null } = {}) {
  * @param {string} [opts.shell]     shell a lanzar (default $SHELL).
  * @param {boolean} [opts.quiet]
  * @param {()=>void} [opts.onRevoked]
- * @param {(remote:object)=>void} [opts.onLinked]   se enlazó mientras corría y ya atiende a otros aparatos.
+ * @param {(remote:import('@dotrino/remote-agent/agent').RemoteAgent)=>void} [opts.onLinked]   se enlazó mientras corría y ya atiende a otros aparatos.
  * @param {(e:Error)=>void} [opts.onLinkError]     se enlazó, pero la parte remota no arrancó.
- * @returns {Promise<{ consoles: ConsoleHub, socket: string, remote: object|null, machineId: string|null, close: ()=>void }>}
+ * @returns {Promise<{ consoles: ConsoleHub, socket: string, remote: import('@dotrino/remote-agent/agent').RemoteAgent|null, machineId: string|null, close: ()=>void }>}
  */
 export async function startAgent (opts = {}) {
   const dir = opts.dir || dataDir()
   const hub = makeHub(loadPty(), { ...opts, dir })
+  /** @type {import('@dotrino/remote-agent/agent').RemoteAgent | null} */
   let remote = null
   // TRES CLAVES MAL SEGUIDAS DE UN MISMO APARATO: se reporta a la bóveda, que se lo pone en
   // la mesa a quien aprueba (bloquear o ignorar). El freno local ya está puesto; esto es el
@@ -371,6 +406,7 @@ export async function startAgent (opts = {}) {
     onRevoked: () => { hub.killAll(); opts.onRevoked?.() },
     onSession: (session) => serveSession(session, hub, { origin: 'remote', gate, uploadsDir })
   })
+  /** @type {ReturnType<typeof setInterval> | null} */
   let watcher = null
   if (loadLink(dir)) {
     try { remote = await startRemote() } catch (e) {
@@ -378,34 +414,34 @@ export async function startAgent (opts = {}) {
       // una terminal no puede depender de internet. Antes el agente moría aquí y, con la
       // máquina enlazada, no se podía abrir ni una consola local. La parte remota se
       // reintenta por detrás hasta que salga; mientras, se dice.
-      console.error(`[terminal-agent] the remote side did not start (${e.message}); local windows work, retrying every ${REMOTE_RETRY_MS / 1000} s`)
-      opts.onLinkError?.(e)
+      console.error(`[terminal-agent] the remote side did not start (${/** @type {Thrown} */ (e).message}); local windows work, retrying every ${REMOTE_RETRY_MS / 1000} s`)
+      opts.onLinkError?.(/** @type {Thrown} */ (e))
       let trying = false
-      watcher = setInterval(() => {
+      const timer = watcher = setInterval(() => {
         if (trying) return
         trying = true
         startRemote().then((r) => {
           if (stopped) { r.close(); return }
-          clearInterval(watcher); watcher = null
+          clearInterval(timer); watcher = null
           remote = r
           opts.onLinked?.(r)
         }).catch(() => {}).finally(() => { trying = false })
       }, REMOTE_RETRY_MS)
-      watcher.unref()
+      timer.unref()
     }
   } else {
     // Sin enlace: se mira cada poco si aparece (`dotrino-terminal link` desde una ventana).
     // Al aparecer se enciende la parte remota SIN reiniciar, así las consolas abiertas siguen.
-    watcher = setInterval(() => {
+    const timer = watcher = setInterval(() => {
       if (!loadLink(dir)) return
-      clearInterval(watcher); watcher = null
+      clearInterval(timer); watcher = null
       startRemote().then((r) => {
         if (stopped) { r.close(); return }
         remote = r
         opts.onLinked?.(r)
       }).catch((e) => opts.onLinkError?.(e))
     }, LINK_POLL_MS)
-    watcher.unref()
+    timer.unref()
   }
   // Parar el agente sí mata las consolas: sin agente no hay quién las atienda.
   return {

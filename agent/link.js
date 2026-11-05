@@ -19,6 +19,8 @@ export const LABEL = 'terminal-agent'
 /**
  * La carpeta del enlace. `DOTRINO_TERMINAL_DIR` fuerza una concreta (un contenedor); si no,
  * la de la instancia `name` (sin nombre se busca y solo se exige con empate).
+ * @param {string | null} [name]
+ * @returns {string}
  */
 export function dataDir (name) {
   if (process.env.DOTRINO_TERMINAL_DIR) return process.env.DOTRINO_TERMINAL_DIR
@@ -35,6 +37,10 @@ export function enroll ({ qr, dir = dataDir(), label = LABEL, onChallenge }) {
   return raEnroll({ qr, dir, label, onChallenge })
 }
 
+/**
+ * @param {string} q
+ * @returns {Promise<string>}
+ */
 function ask (q) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   return new Promise((resolve) => rl.question(q, (a) => { rl.close(); resolve(a) }))
@@ -44,6 +50,7 @@ function ask (q) {
  * Enlaza la carpeta `dir` con la bóveda, preguntando en la terminal: la invitación de
  * `dotrino-vault pair` y, mientras se espera, el código que hay que aprobar. Lo usan el
  * agente (`dotrino-terminal-agent enroll`) y las ventanas (`dotrino-terminal link`).
+ * @param {string} dir
  */
 export async function linkInteractive (dir) {
   if (!process.stdin.isTTY) {
@@ -76,9 +83,11 @@ export async function linkInteractive (dir) {
  */
 export async function listProfiles () {
   const root = instancesRoot(LABEL)
+  /** @type {string[]} */
   let names = []
   try { names = fs.readdirSync(root).filter((n) => isValidName(n) && fs.statSync(path.join(root, n)).isDirectory()) } catch (_) {}
   if (!names.length) names = [DEFAULT_NAME]
+  /** @type {{ name: string, dir: string, linked: boolean, id: string|null, vault: string|null, scope: string[] }[]} */
   const out = []
   for (const name of names.sort()) {
     const dir = path.join(root, name)

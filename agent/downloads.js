@@ -21,15 +21,22 @@ export const FETCH_MAX = 50 * 1024 * 1024
 /** Lo que lleva cada trozo, antes del base64 (el mismo tamaño que las subidas del cliente). */
 export const FETCH_CHUNK = 96 * 1024
 
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
 /**
  * La ruta absoluta de lo que se pide. `~` es la carpeta personal; una ruta relativa cuelga de
  * `cwd` (la carpeta de la shell de la consola), y sin ella no se adivina: se dice.
  */
+/**
+ * @param {unknown} p
+ * @param {string | null} [cwd]
+ * @returns {string}
+ */
 export function resolvePath (p, cwd = null) {
   if (typeof p !== 'string' || !p || p.length > 4096 || p.includes('\0')) throw fail('bad-fetch', 'fetch: needs a `path`')
   const home = os.homedir()
+  /** @param {string} s */
   const expand = (s) => s === '~' ? home : s.startsWith('~/') ? path.join(home, s.slice(2)) : s
   const full = expand(p)
   if (path.isAbsolute(full)) return path.normalize(full)
@@ -43,6 +50,11 @@ export function resolvePath (p, cwd = null) {
  * @param {string|null} cwd  la carpeta de la consola enganchada, para las rutas relativas.
  * @returns {{ id: string, seq: number, path: string, name: string, size: number, mtime: number, data: string, last?: true }}
  */
+/**
+ * Un trozo de un archivo de esta máquina. `msg` llega de la red: se comprueba campo a campo.
+ * @param {any} msg
+ * @param {string | null} [cwd]
+ */
 export function readPiece (msg, cwd = null) {
   const id = typeof msg.id === 'string' ? msg.id.slice(0, 64) : ''
   const seq = msg.seq
@@ -50,8 +62,8 @@ export function readPiece (msg, cwd = null) {
   const file = resolvePath(msg.path, cwd)
   let st
   try { st = fs.statSync(file) } catch (e) {
-    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') throw fail('no-file', `no such file: ${file}`)
-    if (e.code === 'EACCES' || e.code === 'EPERM') throw fail('no-read', `not allowed to read: ${file}`)
+    if (/** @type {Thrown} */ (e).code === 'ENOENT' || /** @type {Thrown} */ (e).code === 'ENOTDIR') throw fail('no-file', `no such file: ${file}`)
+    if (/** @type {Thrown} */ (e).code === 'EACCES' || /** @type {Thrown} */ (e).code === 'EPERM') throw fail('no-read', `not allowed to read: ${file}`)
     throw e
   }
   if (st.isDirectory()) throw fail('is-dir', `that is a folder: ${file}`)
@@ -63,7 +75,7 @@ export function readPiece (msg, cwd = null) {
   const buf = Buffer.alloc(len)
   let fd
   try { fd = fs.openSync(file, 'r') } catch (e) {
-    if (e.code === 'EACCES' || e.code === 'EPERM') throw fail('no-read', `not allowed to read: ${file}`)
+    if (/** @type {Thrown} */ (e).code === 'EACCES' || /** @type {Thrown} */ (e).code === 'EPERM') throw fail('no-read', `not allowed to read: ${file}`)
     throw e
   }
   try {

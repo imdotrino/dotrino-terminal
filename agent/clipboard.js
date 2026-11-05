@@ -15,9 +15,15 @@ import { execFile } from 'node:child_process'
 /** Los tipos que admite la subida (uploads.js), en orden de preferencia. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
-/** Corre una herramienta y devuelve su salida en bytes. */
+/**
+ * Corre una herramienta y devuelve su salida en bytes.
+ * @param {string} cmd
+ * @param {string[]} args
+ * @returns {Promise<Buffer>}
+ */
 function runTool (cmd, args) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 5000, windowsHide: true }, (err, stdout) => {
@@ -31,13 +37,19 @@ function runTool (cmd, args) {
   })
 }
 
-/** De la lista de tipos que ofrece el portapapeles, el de imagen que se manda, o null. */
+/**
+ * De la lista de tipos que ofrece el portapapeles, el de imagen que se manda, o null.
+ * @param {unknown} targets
+ */
 export function pickImageType (targets) {
   const offered = new Set(String(targets).split(/\r?\n/).map((s) => s.trim()).filter(Boolean))
   return IMAGE_TYPES.find((t) => offered.has(t)) || null
 }
 
-/** Lo que contesta `osascript` (`«data PNGf89504E…»`), en bytes; null si no es eso. */
+/**
+ * Lo que contesta `osascript` (`«data PNGf89504E…»`), en bytes; null si no es eso.
+ * @param {unknown} text
+ */
 export function parseAppleData (text) {
   const m = /«data PNGf([0-9A-Fa-f]+)»/.exec(String(text))
   return m ? Buffer.from(m[1], 'hex') : null
@@ -52,12 +64,13 @@ const WINDOWS_SCRIPT = [
 
 /**
  * La imagen del portapapeles, o null si no hay.
- * @param {{ platform?: string, env?: object, run?: (cmd:string, args:string[]) => Promise<Buffer> }} [opts]
+ * @param {{ platform?: string, env?: Record<string, string | undefined>, run?: (cmd:string, args:string[]) => Promise<Buffer> }} [opts]
  * @returns {Promise<Buffer|null>}
  */
 export async function clipboardImage ({ platform = process.platform, env = process.env, run = runTool } = {}) {
+  /** @type {(cmd: string, args: string[]) => Promise<Buffer | null>} */
   const quiet = async (cmd, args) => {
-    try { return await run(cmd, args) } catch (e) { if (e.code === 'clipboard-empty') return null; throw e }
+    try { return await run(cmd, args) } catch (e) { if (/** @type {Thrown} */ (e).code === 'clipboard-empty') return null; throw e }
   }
   if (platform === 'darwin') {
     const out = await quiet('osascript', ['-e', 'the clipboard as «class PNGf»'])
@@ -81,7 +94,10 @@ export async function clipboardImage ({ platform = process.platform, env = proce
   throw fail('no-display', 'no graphical session here (neither WAYLAND_DISPLAY nor DISPLAY)')
 }
 
-/** Una ruta como se teclea en una shell: entre comillas solo si hace falta. */
+/**
+ * Una ruta como se teclea en una shell: entre comillas solo si hace falta.
+ * @param {string} file
+ */
 export function typedPath (file) {
   return /^[\w@%+=:,./-]+$/.test(file) ? file : `'${file.replace(/'/g, `'\\''`)}'`
 }
@@ -93,7 +109,7 @@ export const UPLOAD_PIECE = 96 * 1024
  * Sube una imagen a la máquina de la consola y devuelve la ruta donde quedó. Va en trozos y
  * cada uno espera su acuse (`filed`). `ask(msg)` manda un mensaje y resuelve con la respuesta
  * (`filed` o `fail`); un `fail` se lanza con su `code`.
- * @param {(msg: object) => Promise<object>} ask
+ * @param {(msg: object) => Promise<{ type?: string, code?: string, message?: string, up?: string, seq?: number, path?: string }>} ask
  * @param {Buffer} bytes
  * @param {{ id?: string }} [opts]
  * @returns {Promise<string>}

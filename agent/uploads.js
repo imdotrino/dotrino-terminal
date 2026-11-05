@@ -24,9 +24,14 @@ export const UPLOAD_CHUNK_MAX = 256 * 1024
 /** Lo que se guarda una imagen: después se borra sola. */
 export const UPLOAD_KEEP_MS = 7 * 24 * 60 * 60 * 1000
 
+/** @type {(code: string, message: string) => Error & { code: string }} */
 const fail = (code, message) => Object.assign(new Error(message), { code })
 
 /** La extensión de una imagen por sus primeros bytes, o null si no es una de las admitidas. */
+/**
+ * @param {Buffer} buf
+ * @returns {'png' | 'jpg' | 'gif' | 'webp' | null}
+ */
 export function imageExt (buf) {
   if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png'
   if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg'
@@ -36,19 +41,25 @@ export function imageExt (buf) {
 }
 
 /** Borra las imágenes que ya cumplieron su tiempo. Un fallo aquí se dice y no para nada más. */
+/**
+ * @param {string} dir
+ * @param {number} [now]
+ */
 export function pruneUploads (dir, now = Date.now()) {
   let names
-  try { names = fs.readdirSync(dir) } catch (e) { if (e.code === 'ENOENT') return; throw e }
+  try { names = fs.readdirSync(dir) } catch (e) { if (/** @type {Thrown} */ (e).code === 'ENOENT') return; throw e }
   for (const name of names) {
     if (!/^img-.*\.(png|jpg|gif|webp)$/.test(name)) continue
     const file = path.join(dir, name)
     try { if (now - fs.statSync(file).mtimeMs > UPLOAD_KEEP_MS) fs.rmSync(file) } catch (e) {
-      console.error('[terminal-agent] could not remove an old image', file, '-', e.message)
+      console.error('[terminal-agent] could not remove an old image', file, '-', /** @type {Thrown} */ (e).message)
     }
   }
 }
 
+/** @param {Date} d */
 const stamp = (d) => {
+  /** @param {number} n */
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
@@ -59,10 +70,16 @@ const stamp = (d) => {
  * @param {string} dir  la carpeta donde se guardan (se crea, solo para el usuario).
  * @returns {{ take: (msg: { up: string, seq: number, data: string, last?: boolean }) => { up: string, seq: number, path?: string }, drop: () => void }}
  */
+/** @param {string} dir */
 export function makeUploads (dir) {
   /** @type {{ up: string, next: number, size: number, parts: Buffer[] } | null} */
   let cur = null
   return {
+    /**
+     * Un trozo de una imagen. `msg` llega de la red: se comprueba campo a campo.
+     * @param {any} msg
+     * @returns {{ up: string, seq: number, path?: string }}
+     */
     take (msg) {
       const up = typeof msg.up === 'string' ? msg.up.slice(0, 64) : ''
       const seq = msg.seq

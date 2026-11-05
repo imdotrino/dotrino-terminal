@@ -25,9 +25,11 @@ import { linkInteractive, loadLink, dataDir, LABEL } from '../link.js'
 import { listInstances, lockInstance, instancesRoot } from '@dotrino/remote-agent/instances'
 import { deviceInfo, formatDeviceInfo } from '@dotrino/vault/device-info'
 
+/** @type {{ version: string }} */
 const { version: VERSION } = createRequire(import.meta.url)('../package.json')
 const args = process.argv.slice(2)
 const cmd = args[0] && !args[0].startsWith('-') ? args[0] : 'run'
+/** @param {string} name */
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
 
 if (args.includes('-h') || args.includes('--help')) {
@@ -64,7 +66,7 @@ if (cmd === 'update') {
     // Solo las banderas de este comando: `--name`/`--dir` ya eligieron la carpeta.
     const own = args.slice(1).filter((a, i, all) => !['--name', '--dir'].includes(a) && !['--name', '--dir'].includes(all[i - 1]))
     r = updatePrefsCommand(own, { dir, lang: 'es' })
-  } catch (e) { console.error('error:', e.message); process.exit(1) }
+  } catch (e) { console.error('error:', /** @type {Thrown} */ (e).message); process.exit(1) }
   if (!r.handled) { console.error('uso: dotrino-terminal-agent update [--name <n>] [--approval on|off] [--notify on|off]'); process.exit(2) }
   ;(r.ok ? console.log : console.error)(r.text)
   process.exit(r.ok ? 0 : 2)
@@ -88,7 +90,7 @@ if (cmd === 'supervise') {
     const s = supervise({ name, dir: dataDir(name), cli })
     const bye = () => { s.stop(); process.exit(0) }
     process.on('SIGINT', bye); process.on('SIGTERM', bye)
-  } catch (e) { console.error('error:', e.message); process.exit(1) }
+  } catch (e) { console.error('error:', /** @type {Thrown} */ (e).message); process.exit(1) }
 }
 
 // `info`: la pieza común del ecosistema (`@dotrino/vault/device-info`). Lo que se viene a
@@ -104,7 +106,7 @@ if (cmd === 'info') {
     const pending = updateStatusText({ dir, current: VERSION, lang: 'es' })
     if (args.includes('--json')) console.log(JSON.stringify(pending ? { ...info, update: pending } : info, null, 2))
     else console.log(formatDeviceInfo(info) + (pending ? '\n' + pending : ''))
-  } catch (e) { console.error('error:', e.message); process.exit(1) }
+  } catch (e) { console.error('error:', /** @type {Thrown} */ (e).message); process.exit(1) }
   process.exit(0)
 }
 
@@ -126,7 +128,7 @@ if (cmd !== 'supervise') try {
   const agent = await startAgent({
     dir, proxyUrl: opt('--proxy'), shell: opt('--shell'),
     onRevoked: () => { console.log('  Esta máquina se quitó de tu bóveda. Para volver a usarla, enlázala otra vez.\n'); process.exit(0) },
-    onLinked: (r) => console.log(`  enlazada: máquina ${r.machineId}. Tus otros aparatos ya pueden abrir estas consolas.\n`),
+    onLinked: (/** @type {import('@dotrino/remote-agent/agent').RemoteAgent} */ r) => console.log(`  enlazada: máquina ${r.machineId}. Tus otros aparatos ya pueden abrir estas consolas.\n`),
     onLinkError: (e) => console.error('[terminal-agent] linked, but the remote side did not start:', e.message)
   })
   console.log('\n  Dotrino Terminal — agente activo')
@@ -144,6 +146,6 @@ if (cmd !== 'supervise') try {
   const bye = () => { clearInterval(keepAlive); stopUpdates(); agent.close(); process.exit(0) }
   process.on('SIGINT', bye); process.on('SIGTERM', bye)
 } catch (e) {
-  console.error('error:', e.message)
+  console.error('error:', /** @type {Thrown} */ (e).message)
   process.exit(1)
 }

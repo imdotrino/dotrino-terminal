@@ -31,20 +31,39 @@ export const DESKTOP_TAG = 'desktop-v'
 export const BINARY = 'dotrino-terminal-desktop'
 const PRODUCT = 'dotrino-terminal-desktop'
 
-/** @returns {any} */
+/** No se pudo: con su código, y el archivo bajado si sirve para instalarlo a mano. */
+/** @typedef {{ ok: false, code: string, reason: string, file?: string }} Failure */
+/** Cómo está instalada la app de escritorio. */
+/** @typedef {{ ok: true, kind: 'deb' | 'rpm' | 'tar' | 'win' } | { ok: true, kind: 'mac', app: string }} InstallKind */
+/** La última release del escritorio, con sus archivos. */
+/** @typedef {{ ok: true, version: string, assets: import('@dotrino/update/fetch').ReleaseAsset[] } | { ok: false, reason: string }} DesktopLatest */
+/** Correr una orden del sistema (`execFileSync`, o su doble en las pruebas). */
+/** @typedef {(cmd: string, args: string[], opts?: import('node:child_process').ExecFileSyncOptions) => unknown} RunFn */
+
+/**
+ * @param {string} code
+ * @param {string} reason
+ * @param {{ file?: string }} [extra]
+ * @returns {Failure}
+ */
 const fail = (code, reason, extra = {}) => ({ ok: false, code, reason, ...extra })
 
-/** La última release del escritorio. `{ ok:false }` si no se pudo mirar, que NO es «al día». */
+/**
+ * La última release del escritorio. `{ ok:false }` si no se pudo mirar, que NO es «al día».
+ * @param {{ version?: string }} [opts]
+ * @returns {Promise<DesktopLatest>}
+ */
 export const latestDesktop = (opts = {}) =>
-  latestVersion({ source: 'github', repo: REPO, tagPrefix: DESKTOP_TAG, product: PRODUCT, ...opts })
+  // Con `source: 'github'` la respuesta buena siempre trae los archivos de la release.
+  /** @type {Promise<DesktopLatest>} */ (latestVersion({ source: 'github', repo: REPO, tagPrefix: DESKTOP_TAG, product: PRODUCT, ...opts }))
 
 /**
  * Cómo está instalada la app que corre desde `exe`, que es lo que decide qué archivo se baja
  * y cómo se pone. Se le pregunta al gestor de paquetes por ESE archivo: mirar solo qué
  * gestor hay se equivoca con un tarball en una máquina con `dpkg`.
  *
- * @param {any} [o]
- * @returns {any} `{ ok:true, kind:'deb'|'rpm'|'tar'|'mac'|'win', app? }` o `{ ok:false, code, reason }`
+ * @param {{ exe?: string, platform?: string, arch?: string, run?: RunFn, writable?: (dir: string) => boolean }} [o]
+ * @returns {InstallKind | Failure} `{ ok:true, kind:'deb'|'rpm'|'tar'|'mac'|'win', app? }` o `{ ok:false, code, reason }`
  */
 export function installKind ({ exe, platform = process.platform, arch = process.arch, run = execFileSync, writable = canWrite } = {}) {
   if (!exe) return fail('no-exe', 'the desktop app was not found')
@@ -61,6 +80,7 @@ export function installKind ({ exe, platform = process.platform, arch = process.
   }
   if (platform !== 'linux') return fail('unsupported-platform', `there is no desktop app for ${platform}`)
   if (arch !== 'x64') return fail('unsupported-arch', `there is no desktop app for ${arch}`)
+  /** @type {(cmd: string, args: string[]) => boolean} */
   const owns = (cmd, args) => { try { run(cmd, args, { stdio: 'ignore' }); return true } catch (_) { return false } }
   if (owns('dpkg', ['-S', exe])) return { ok: true, kind: 'deb' }
   if (owns('rpm', ['-qf', exe])) return { ok: true, kind: 'rpm' }
@@ -68,10 +88,12 @@ export function installKind ({ exe, platform = process.platform, arch = process.
   return { ok: true, kind: 'tar' }
 }
 
+/** @param {string} dir */
 function canWrite (dir) {
   try { fs.accessSync(dir, fs.constants.W_OK); return true } catch (_) { return false }
 }
 
+/** @type {Record<string, { kind: string, re: RegExp }>} */
 const MATCH = {
   deb: { kind: 'deb', re: /_amd64\.deb$/ },
   rpm: { kind: 'rpm', re: /\.x86_64\.rpm$/ },
@@ -80,15 +102,25 @@ const MATCH = {
   win: { kind: 'win', re: /-windows-x64\.zip$/ }
 }
 
-/** El archivo de la release que le toca a esa forma de instalación. */
+/**
+ * El archivo de la release que le toca a esa forma de instalación.
+ * @param {import('@dotrino/update/fetch').ReleaseAsset[]} assets
+ * @param {string} kind
+ */
 export const assetFor = (assets, kind) => pickAsset(assets, [MATCH[kind]])
 
-/** Como root no hace falta `sudo`; si no, se pide en la ventana. */
+/**
+ * Como root no hace falta `sudo`; si no, se pide en la ventana.
+ * @param {string} cmd
+ * @param {string[]} args
+ * @param {{ run: RunFn, uid: number | undefined }} o
+ */
 function asRoot (cmd, args, { run, uid }) {
   const [c, a] = uid === 0 ? [cmd, args] : ['sudo', [cmd, ...args]]
   run(c, a, { stdio: 'inherit' })
 }
 
+/** @type {(cmd: string, run: RunFn) => boolean} */
 const has = (cmd, run) => { try { run('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }); return true } catch (_) { return false } }
 
 /**
@@ -96,6 +128,9 @@ const has = (cmd, run) => { try { run('sh', ['-c', `command -v ${cmd}`], { stdio
  * (`apt-get`, `dnf`, `zypper`) al que solo desempaqueta (`dpkg`, `rpm`): una versión nueva
  * puede pedir una librería que la anterior no pedía, y `rpm -U` se para ahí sin traerla.
  *
+ * @param {string} kind
+ * @param {string} file
+ * @param {{ run?: RunFn }} [o]
  * @returns {[string, string[]]}
  */
 export function packageCommand (kind, file, { run = execFileSync } = {}) {
@@ -111,20 +146,21 @@ export function packageCommand (kind, file, { run = execFileSync } = {}) {
  * quedó bajado y sirve para instalarlo a mano, va en `file`.
  *
  * @param {string} file
- * @param {any} how
- * @param {any} [o]
- * @returns {any}
+ * @param {InstallKind} how
+ * @param {{ exe?: string, run?: RunFn, uid?: number }} [o]
+ * @returns {{ ok: true } | Failure}
  */
 export function install (file, how, { exe, run = execFileSync, uid = process.getuid?.() } = {}) {
   if (how.kind === 'deb' || how.kind === 'rpm') {
     try { asRoot(...packageCommand(how.kind, file, { run }), { run, uid }); return { ok: true } } catch (e) {
-      return fail('install-failed', `the package manager did not install it: ${e.message}`, { file })
+      return fail('install-failed', `the package manager did not install it: ${/** @type {Thrown} */ (e).message}`, { file })
     }
   }
   if (how.kind === 'tar') {
+    if (!exe) return fail('no-exe', 'the desktop app was not found', { file })
     const work = path.dirname(file)
     try { run('tar', ['xzf', file, '-C', work], { stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) {
-      return fail('unpack-failed', `could not unpack the release: ${String(e.stderr || e.message).trim()}`, { file })
+      return fail('unpack-failed', `could not unpack the release: ${String(/** @type {Thrown} */ (e).stderr || /** @type {Thrown} */ (e).message).trim()}`, { file })
     }
     const src = fs.readdirSync(work).map((d) => path.join(work, d, BINARY)).find((f) => fs.existsSync(f))
     if (!src) return fail('bad-tarball', `the tarball has no ${BINARY} inside`, { file })
@@ -149,16 +185,17 @@ export function install (file, how, { exe, run = execFileSync, uid = process.get
       try { fs.renameSync(fresh, how.app) } catch (e) { fs.renameSync(old, how.app); throw e }
       return { ok: true }
     } catch (e) {
-      return fail('install-failed', `could not replace the app: ${String(e.stderr || e.message).trim()}`, { file })
+      return fail('install-failed', `could not replace the app: ${String(/** @type {Thrown} */ (e).stderr || /** @type {Thrown} */ (e).message).trim()}`, { file })
     } finally {
       fs.rmSync(work, { recursive: true, force: true })
     }
   }
   if (how.kind === 'win') {
+    if (!exe) return fail('no-exe', 'the desktop app was not found', { file })
     const work = path.dirname(file)
     // `tar` de Windows (bsdtar, desde Windows 10) desempaqueta un .zip.
     try { run('tar', ['-xf', file, '-C', work], { stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) {
-      return fail('unpack-failed', `could not unpack the release: ${String(e.stderr || e.message).trim()}`, { file })
+      return fail('unpack-failed', `could not unpack the release: ${String(/** @type {Thrown} */ (e).stderr || /** @type {Thrown} */ (e).message).trim()}`, { file })
     }
     const name = `${BINARY}.exe`
     const src = [path.join(work, name), ...fs.readdirSync(work).map((d) => path.join(work, d, name))].find((f) => fs.existsSync(f))
@@ -171,19 +208,21 @@ export function install (file, how, { exe, run = execFileSync, uid = process.get
       fs.renameSync(exe, old)
       try { fs.copyFileSync(src, exe) } catch (e) { fs.renameSync(old, exe); throw e }
     } catch (e) {
-      return fail('install-failed', `could not replace the app: ${e.message}`, { file })
+      return fail('install-failed', `could not replace the app: ${/** @type {Thrown} */ (e).message}`, { file })
     }
     return { ok: true }
   }
-  return fail('unknown-kind', `unknown install kind: ${how.kind}`)
+  return fail('unknown-kind', `unknown install kind: ${/** @type {{ kind: string }} */ (how).kind}`)
 }
 
 /**
  * Todo el camino: mirar, bajar, verificar, instalar. `say(step, data)` va contando por dónde
  * va, para que quien lo enseñe lo diga en su idioma.
  *
- * @param {any} [o]
- * @returns {Promise<any>} `{ ok:true, version, updated, newer?, kind? }` o `{ ok:false, code, reason, file? }`
+ * @param {{ exe?: string, current?: string, check?: boolean, say?: (step: string, data: object) => void, latest?: typeof latestDesktop,
+ *   fetchVerifiedImpl?: typeof fetchVerified, kindOf?: typeof installKind, installImpl?: typeof install }} [o]
+ * @returns {Promise<{ ok: true, version: string, updated: boolean, newer?: boolean, kind?: string } | Failure>}
+ *   `{ ok:true, version, updated, newer?, kind? }` o `{ ok:false, code, reason, file? }`
  */
 export async function updateDesktop ({ exe, current, check = false, say = () => {}, latest = latestDesktop, fetchVerifiedImpl = fetchVerified, kindOf = installKind, installImpl = install } = {}) {
   const r = await latest({ version: current })
@@ -203,11 +242,12 @@ export async function updateDesktop ({ exe, current, check = false, say = () => 
     try { got = await fetchVerifiedImpl(pick.asset, { repo: REPO, product: PRODUCT, version: current, dir }) } catch (e) {
       // La comprobación (sigstore → @npmcli/agent) carga módulos ESM con `require()`: Node lo
       // admite desde 20.19 y 22.12. Con uno anterior no hay con qué verificar, y se dice cuál falta.
-      if (e.code === 'ERR_REQUIRE_ESM') return fail('node-too-old', `Node ${process.version} cannot load the signature checker (needs 20.19 or 22.12 and later)`)
-      return fail(e.code || 'download-failed', e.message)
+      if (/** @type {Thrown} */ (e).code === 'ERR_REQUIRE_ESM') return fail('node-too-old', `Node ${process.version} cannot load the signature checker (needs 20.19 or 22.12 and later)`)
+      return fail(/** @type {Thrown} */ (e).code || 'download-failed', /** @type {Thrown} */ (e).message)
     }
     // Lo que no pasa la verificación no se deja en el disco: nadie debe instalarlo a mano.
     if (!got.ok) return fail(got.code || 'not-verified', got.reason)
+    if (!got.file) return fail('download-failed', 'the release file was verified but not kept')
     say('verified', { name: pick.asset.name, repo: REPO })
     say('install', { kind: how.kind })
     const done = installImpl(got.file, how, { exe })
