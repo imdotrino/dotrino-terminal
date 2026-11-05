@@ -878,6 +878,7 @@ class MainActivity : Activity() {
     }
 
     private var copyKey: android.widget.TextView? = null
+    private var copyUnwrappedKey: android.widget.TextView? = null
 
     // ---------- An image for whatever runs in the console ----------
     //
@@ -1054,6 +1055,13 @@ class MainActivity : Activity() {
             clipboard.setPrimaryClip(ClipData.newPlainText("terminal", v.selectedText()))
             v.clearSelection(); toast(t("key.copied"))
         }
+        // Without the breaks a program put in to fit the width (a long link from Claude Code).
+        copyUnwrappedKey = clipKey("copy-unwrapped", t("key.copyUnwrapped")) {
+            val v = view ?: return@clipKey
+            if (!v.hasSelection) return@clipKey
+            clipboard.setPrimaryClip(ClipData.newPlainText("terminal", com.dotrino.terminal.term.Unwrap.unwrap(v.selectedText())))
+            v.clearSelection(); toast(t("key.copied"))
+        }
         clipKey("paste", t("key.paste")) {
             // An image in the clipboard goes to the machine; anything else is pasted as text.
             val clip = clipboard.primaryClip
@@ -1105,5 +1113,7 @@ class MainActivity : Activity() {
         copyKey?.alpha = if (on) 1f else 0.4f
         copyKey?.background = rounded(col(if (on) R.color.t_accent else R.color.t_panel2), px(8))
         copyKey?.setTextColor(col(if (on) R.color.t_on_accent else R.color.t_text))
+        copyUnwrappedKey?.isEnabled = on
+        copyUnwrappedKey?.alpha = if (on) 1f else 0.4f
     }
 }

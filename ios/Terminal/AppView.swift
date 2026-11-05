@@ -797,6 +797,16 @@ private struct ConsoleScreen: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(hasSelection ? Palette.accent : Palette.panel2))
                 }
                 .disabled(!hasSelection).opacity(hasSelection ? 1 : 0.4).accessibilityIdentifier("key-copy")
+                // Without the breaks a program put in to fit the width (a long link from Claude Code).
+                Button {
+                    guard let v = view, v.hasSelection else { return }
+                    UIPasteboard.general.string = Unwrap.unwrap(v.selectedText()); v.clearSelection(); show(t("key.copied"))
+                } label: {
+                    Text(t("key.copyUnwrapped")).font(.subheadline.bold()).foregroundColor(Palette.text)
+                        .frame(minWidth: 44).padding(.vertical, 9).padding(.horizontal, 6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel2))
+                }
+                .disabled(!hasSelection).opacity(hasSelection ? 1 : 0.4).accessibilityIdentifier("key-copy-unwrapped")
                 Button {
                     // A picture in the clipboard goes to the machine; anything else is pasted as text.
                     if UIPasteboard.general.hasImages, let image = UIPasteboard.general.image {

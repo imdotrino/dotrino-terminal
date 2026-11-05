@@ -33,6 +33,8 @@ use iced_aw::ContextMenu;
 use iced_aw::menu::{Item, Menu, MenuBar};
 use serde::Deserialize;
 
+mod unwrap;
+
 const CLIENT: &str = "dotrino-terminal";
 const CLIENT_PKG: &str = "@dotrino/terminal-agent";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -3628,7 +3630,7 @@ impl App {
                     space().into()
                 };
                 let view: Element<'_, Message> = row![view, bar].height(h).into();
-                // Clic derecho: Copiar y Pegar, lo mismo que el menú Editar.
+                // Clic derecho: Copiar, Copiar sin saltos y Pegar.
                 ContextMenu::new(view, move || {
                     let selected = term.selected_text();
                     let (copy_key, paste_key, click_key) = if cfg!(target_os = "macos") { ("⌘C", "⌘V", "⌘+clic") } else { ("Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+clic") };
@@ -3646,6 +3648,8 @@ impl App {
                     container(
                         items
                             .push(entry(t("Copiar", "Copy"), copy_key, (!selected.is_empty()).then(|| Message::CopyText(id, selected.clone()))))
+                            // Sin los saltos que mete quien ajusta el texto al ancho (un enlace largo de Claude Code).
+                            .push(entry(t("Copiar sin saltos", "Copy without line breaks"), "", (!selected.is_empty()).then(|| Message::CopyText(id, unwrap::unwrap(&selected)))))
                             .push(entry(t("Pegar", "Paste"), paste_key, Some(Message::Paste(id))))
                             .width(220),
                     )

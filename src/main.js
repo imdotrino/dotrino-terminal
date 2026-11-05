@@ -21,6 +21,7 @@ import { clampRatio, splitLeaf, removeLeaf, layoutIds, restoreSaved } from './la
 import { doneWatcher } from './done.js'
 import { prepareImage, imageIn } from './image.js'
 import { findLinks, mimeOf } from './links.js'
+import { unwrap } from './unwrap.js'
 import { playDone } from '@dotrino/notifications/ring'
 import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
 import { keyLabel } from '@dotrino/identity/capabilities'
@@ -100,7 +101,7 @@ const M = {
     image_old: 'Esta máquina aún no recibe imágenes: actualiza su terminal.', image_big: 'La imagen pesa demasiado para enviarla.',
     image_not: 'Ese archivo no es una imagen que se pueda enviar (PNG, JPEG, GIF o WebP).', image_fail: 'No se pudo enviar la imagen: ',
     link_open: 'Abrir', link_open_url: 'Abrir el enlace', link_download: 'Descargar', link_copy_url: 'Copiar el enlace', link_copy_path: 'Copiar la ruta',
-    link_copied: 'Copiado.', file_fetching: (pct) => `Trayendo el archivo de la máquina… ${pct} %`, file_ready: (name) => `Listo: ${name}`,
+    copy: 'Copiar', copy_unwrapped: 'Copiar sin saltos', link_copied: 'Copiado.', file_fetching: (pct) => `Trayendo el archivo de la máquina… ${pct} %`, file_ready: (name) => `Listo: ${name}`,
     file_old: 'Esta máquina aún no manda archivos: actualiza su terminal.', file_none: 'Ese archivo no existe en la máquina.',
     file_dir: 'Esa ruta es una carpeta, no un archivo.', file_big: 'El archivo pesa demasiado para traerlo (más de 50 MB).',
     file_noread: 'La máquina no tiene permiso para leer ese archivo.', file_nocwd: 'No se sabe en qué carpeta está la consola: usa la ruta completa.',
@@ -201,7 +202,7 @@ const M = {
     image_old: 'This machine does not take images yet: update its terminal.', image_big: 'The image is too large to send.',
     image_not: 'That file is not an image that can be sent (PNG, JPEG, GIF or WebP).', image_fail: 'The image could not be sent: ',
     link_open: 'Open', link_open_url: 'Open link', link_download: 'Download', link_copy_url: 'Copy link', link_copy_path: 'Copy path',
-    link_copied: 'Copied.', file_fetching: (pct) => `Getting the file from the machine… ${pct}%`, file_ready: (name) => `Ready: ${name}`,
+    copy: 'Copy', copy_unwrapped: 'Copy without line breaks', link_copied: 'Copied.', file_fetching: (pct) => `Getting the file from the machine… ${pct}%`, file_ready: (name) => `Ready: ${name}`,
     file_old: 'This machine does not send files yet: update its terminal.', file_none: 'That file does not exist on the machine.',
     file_dir: 'That path is a folder, not a file.', file_big: 'The file is too large to get (over 50 MB).',
     file_noread: 'The machine is not allowed to read that file.', file_nocwd: 'The folder of the console is unknown: use the full path.',
@@ -527,8 +528,9 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
         })))
       }
     })
+    // Clic derecho: el enlace de debajo y, si hay algo seleccionado, Copiar y Copiar sin saltos.
     p.view.addEventListener('contextmenu', (e) => {
-      if (!p.hoverLink) return
+      if (!p.hoverLink && !term.hasSelection()) return
       e.preventDefault()
       linkMenu(s, p, p.hoverLink, e.clientX, e.clientY)
     })
@@ -545,17 +547,24 @@ function makeSessionHost ({ tabsEl, termsEl, hint, link }) {
 
   function linkMenu (s, p, l, x, y) {
     document.querySelector('.cmenu')?.remove()
-    const file = asPath(l)
+    const file = l && asPath(l)
+    // La selección se lee al abrir el menú: el clic sobre una entrada no debe cambiarla.
+    const selected = p.term?.hasSelection() ? p.term.getSelection() : ''
     const m = el(`<div class="cmenu" data-testid="link-menu" style="left:${x}px;top:${y}px">
-      <button data-a="open">${t(file == null ? 'link_open_url' : 'link_open')}</button>
+      ${l ? `<button data-a="open">${t(file == null ? 'link_open_url' : 'link_open')}</button>
       ${file == null ? '' : `<button data-a="download">${t('link_download')}</button>`}
-      <button data-a="copy">${t(file == null ? 'link_copy_url' : 'link_copy_path')}</button>
+      <button data-a="copy">${t(file == null ? 'link_copy_url' : 'link_copy_path')}</button>` : ''}
+      ${selected ? `<button data-a="copy-sel" data-testid="menu-copy">${t('copy')}</button>
+      <button data-a="copy-unwrapped" data-testid="menu-copy-unwrapped">${t('copy_unwrapped')}</button>` : ''}
     </div>`)
+    const write = (text) => navigator.clipboard.writeText(text).then(() => { hint.textContent = t('link_copied') }, (err) => { hint.textContent = err.message })
     m.addEventListener('click', (e) => {
       const a = e.target.dataset.a
       m.remove()
       if (a === 'open' || a === 'download') openLink(s, p, l, { download: a === 'download' })
-      if (a === 'copy') navigator.clipboard.writeText(file ?? l.target).then(() => { hint.textContent = t('link_copied') }, (err) => { hint.textContent = err.message })
+      if (a === 'copy') write(file ?? l.target)
+      if (a === 'copy-sel') write(selected)
+      if (a === 'copy-unwrapped') write(unwrap(selected))
     })
     document.body.appendChild(m)
     setTimeout(() => document.addEventListener('click', () => m.remove(), { once: true }), 0)
