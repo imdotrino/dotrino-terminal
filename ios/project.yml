@@ -19,7 +19,7 @@ settings:
     DEVELOPMENT_TEAM: P7G853375S
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: 0.15.1
-    CURRENT_PROJECT_VERSION: "59"
+    CURRENT_PROJECT_VERSION: "60"
 packages:
   # La librería nativa del ecosistema: el repo dotrino-native, como submódulo en ../native
   # (igual que Android). Perfil, transporte, el cliente del agente y la barra compartida.
@@ -48,8 +48,6 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         # La hoja de perfil (dotrino-native) lee el QR de la bóveda al adoptar un perfil.
         NSCameraUsageDescription: "Para escanear el código de emparejamiento de tu bóveda."
-        NSBluetoothAlwaysUsageDescription: "Para encontrar tu bóveda cerca al emparejar, sin escanear ningún código."
-        NSLocalNetworkUsageDescription: "Para encontrar tu bóveda en tu red al emparejar, sin escanear ningún código."
         UILaunchScreen:
           UIColorName: ""
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
