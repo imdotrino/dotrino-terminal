@@ -12,12 +12,33 @@ object Unwrap {
     private const val LONG_TOKEN = 30
 
     private fun hasUrl(s: String) = s.contains("http://") || s.contains("https://") || s.contains("www.")
+    private fun urlChar(c: Char) = (c in 'A'..'Z') || (c in 'a'..'z') || (c in '0'..'9') || c in "%&=?/._~:+#@!$'()*,;[]-"
+
+    /** Removes 2+ space gaps inside a link: the next row's indent when the terminal joined the rows on copy. */
+    private fun closeUrlGaps(s: String): String {
+        val out = StringBuilder()
+        var i = 0
+        while (i < s.length) {
+            if (!(s.startsWith("http://", i) || s.startsWith("https://", i) || s.startsWith("www.", i))) { out.append(s[i]); i++; continue }
+            var j = i
+            while (true) {
+                while (j < s.length && !s[j].isWhitespace()) out.append(s[j++])
+                var k = j
+                while (k < s.length && s[k] == ' ') k++
+                if (k - j >= 2 && k < s.length && urlChar(s[k])) { j = k; continue }
+                break
+            }
+            i = j
+        }
+        return out.toString()
+    }
+
     private fun indent(s: String) = s.length - s.trimStart().length
     private fun len(s: String) = s.codePointCount(0, s.length)
 
     fun unwrap(text: String): String {
         val lines = text.replace("\r", "").split('\n').map { it.trimEnd() }
-        if (lines.size < 2) return text.trim()
+        if (lines.size < 2) return closeUrlGaps(text.trim())
         val width = lines.maxOf { len(it) }
         val common = lines.drop(1).filter { it.isNotEmpty() }.minOfOrNull { indent(it) } ?: 0
         val out = StringBuilder(lines[0].trimStart())
@@ -37,6 +58,6 @@ object Unwrap {
                 else -> out.append(' ').append(cur)
             }
         }
-        return out.toString().trim()
+        return closeUrlGaps(out.toString().trim())
     }
 }

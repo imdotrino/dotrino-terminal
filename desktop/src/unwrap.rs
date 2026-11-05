@@ -11,6 +11,44 @@ fn has_url(s: &str) -> bool {
     s.contains("http://") || s.contains("https://") || s.contains("www.")
 }
 
+fn url_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "%&=?/._~:+#@!$'()*,;[]-".contains(c)
+}
+
+/// Quita los huecos de 2+ espacios que caen dentro de un enlace: la sangría de la fila siguiente
+/// cuando el terminal juntó las filas al copiar. Un espacio solo no se toca: ahí acaba el enlace.
+fn close_url_gaps(s: &str) -> String {
+    let c: Vec<char> = s.chars().collect();
+    let starts = |i: usize| ["http://", "https://", "www."].iter().any(|p| c[i..].iter().take(p.len()).copied().eq(p.chars()));
+    let mut out = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        if !starts(i) {
+            out.push(c[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        loop {
+            while j < c.len() && !c[j].is_whitespace() {
+                out.push(c[j]);
+                j += 1;
+            }
+            let mut k = j;
+            while k < c.len() && c[k] == ' ' {
+                k += 1;
+            }
+            if k - j >= 2 && k < c.len() && url_char(c[k]) {
+                j = k;
+                continue;
+            }
+            break;
+        }
+        i = j;
+    }
+    out
+}
+
 fn indent(s: &str) -> usize {
     s.len() - s.trim_start().len()
 }
@@ -19,7 +57,7 @@ pub fn unwrap(text: &str) -> String {
     let normalized = text.replace('\r', "");
     let lines: Vec<&str> = normalized.split('\n').map(str::trim_end).collect();
     if lines.len() < 2 {
-        return text.trim().to_string();
+        return close_url_gaps(text.trim());
     }
     let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
     let common = lines[1..].iter().filter(|l| !l.is_empty()).map(|l| indent(l)).min().unwrap_or(0);
@@ -47,7 +85,7 @@ pub fn unwrap(text: &str) -> String {
             out.push_str(cur);
         }
     }
-    out.trim().to_string()
+    close_url_gaps(out.trim())
 }
 
 #[cfg(test)]

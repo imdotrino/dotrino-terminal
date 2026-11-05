@@ -10,12 +10,40 @@
  * dentro de un enlace o de una palabra de LONG_TOKEN caracteres o más (un hash, una clave), se
  * pega sin espacio; si no, con un espacio. Las líneas que no se juntan conservan su sangría
  * menos la común.
+ *
+ * Y dentro de un enlace se quita todo hueco de dos o más espacios seguido de algo que puede ir en
+ * un enlace: es la sangría de la fila siguiente cuando el terminal juntó las filas al copiar (sin
+ * salto, pero con los espacios). Un espacio solo no se toca: ahí acaba el enlace.
  */
 const MIN_WRAP = 40
 const MARGIN = 15
 const LONG_TOKEN = 30
 const URL = /https?:\/\/|www\./
 const END = /[.:;!?]$/
+
+const URL_CHAR = /[A-Za-z0-9%&=?\/._~:+#@!$'()*,;[\]-]/
+
+/** Quita los huecos de 2+ espacios que caen dentro de un enlace. */
+function closeUrlGaps (s) {
+  let out = ''
+  let i = 0
+  while (i < s.length) {
+    const m = s.slice(i).match(URL)
+    if (!m) { out += s.slice(i); break }
+    const start = i + m.index
+    out += s.slice(i, start)
+    let j = start
+    for (;;) {
+      while (j < s.length && s[j] !== ' ' && s[j] !== '\n' && s[j] !== '\t') out += s[j++]
+      let k = j
+      while (k < s.length && s[k] === ' ') k++
+      if (k - j >= 2 && k < s.length && URL_CHAR.test(s[k])) { j = k; continue }
+      break
+    }
+    i = j
+  }
+  return out
+}
 
 const len = (s) => [...s].length
 const indent = (s) => s.length - s.trimStart().length
@@ -25,7 +53,7 @@ const isUpper = (c) => c !== c.toLowerCase() && c === c.toUpperCase()
 
 export function unwrap (text) {
   const lines = text.replace(/\r/g, '').split('\n').map((l) => l.trimEnd())
-  if (lines.length < 2) return text.trim()
+  if (lines.length < 2) return closeUrlGaps(text.trim())
   const width = Math.max(...lines.map(len))
   const rest = lines.slice(1).filter((l) => l !== '')
   const common = rest.length ? Math.min(...rest.map(indent)) : 0
@@ -43,5 +71,5 @@ export function unwrap (text) {
     else if (inUrl || len(last) >= LONG_TOKEN) out += cur
     else out += ' ' + cur
   }
-  return out.trim()
+  return closeUrlGaps(out.trim())
 }

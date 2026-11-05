@@ -10,6 +10,29 @@ enum Unwrap {
     private static let longToken = 30
 
     private static func hasURL(_ s: String) -> Bool { s.contains("http://") || s.contains("https://") || s.contains("www.") }
+    private static func urlChar(_ c: Character) -> Bool { (c.isASCII && (c.isLetter || c.isNumber)) || "%&=?/._~:+#@!$'()*,;[]-".contains(c) }
+
+    /// Removes 2+ space gaps inside a link: the next row's indent when the terminal joined the rows on copy.
+    private static func closeURLGaps(_ s: String) -> String {
+        let c = Array(s)
+        func starts(_ i: Int) -> Bool { ["http://", "https://", "www."].contains { p in c[i...].starts(with: Array(p)) } }
+        var out = ""
+        var i = 0
+        while i < c.count {
+            if !starts(i) { out.append(c[i]); i += 1; continue }
+            var j = i
+            while true {
+                while j < c.count && !c[j].isWhitespace { out.append(c[j]); j += 1 }
+                var k = j
+                while k < c.count && c[k] == " " { k += 1 }
+                if k - j >= 2 && k < c.count && urlChar(c[k]) { j = k; continue }
+                break
+            }
+            i = j
+        }
+        return out
+    }
+
     private static func indent(_ s: String) -> Int { s.prefix(while: { $0 == " " || $0 == "\t" }).count }
     private static func trimEnd(_ s: String) -> String {
         var s = s
@@ -19,7 +42,7 @@ enum Unwrap {
 
     static func unwrap(_ text: String) -> String {
         let lines = text.replacingOccurrences(of: "\r", with: "").components(separatedBy: "\n").map(trimEnd)
-        if lines.count < 2 { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if lines.count < 2 { return closeURLGaps(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
         let width = lines.map { $0.unicodeScalars.count }.max() ?? 0
         let common = lines.dropFirst().filter { !$0.isEmpty }.map(indent).min() ?? 0
         var out = String(lines[0].drop(while: { $0 == " " || $0 == "\t" }))
@@ -41,6 +64,6 @@ enum Unwrap {
                 out += " " + cur
             }
         }
-        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return closeURLGaps(out.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
