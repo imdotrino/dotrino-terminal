@@ -21,7 +21,7 @@
     "@dotrino/reputation": "0.12.4",
     "@dotrino/store": "0.12.4",
     "@dotrino/theme": "0.1.0",
-    "@dotrino/topbar": "0.16.3",
+    "@dotrino/topbar": "0.17.3",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0"
   },
