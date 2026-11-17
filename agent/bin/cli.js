@@ -75,21 +75,14 @@ if (cmd === 'update') {
 // `supervise` (Windows): lo lanza la entrada de `HKCU\…\Run` que pone `dotrino-terminal service
 // install`. Al iniciar sesión Windows lo abre CON ventana: se vuelve a lanzar sin ella y sale.
 if (cmd === 'supervise') {
-  const { supervise } = await import('../service.js')
+  const { superviseCommand } = await import('../service.js')
   const { realpathSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const name = opt('--name')
   if (!name) { console.error('uso: dotrino-terminal-agent supervise --name <n>'); process.exit(2) }
   const cli = realpathSync(fileURLToPath(import.meta.url))
-  if (!process.env.DOTRINO_SUPERVISOR) {
-    const { spawn } = await import('node:child_process')
-    spawn(process.execPath, [cli, 'supervise', '--name', name], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, DOTRINO_SUPERVISOR: '1' } }).unref()
-    process.exit(0)
-  }
   try {
-    const s = supervise({ name, dir: dataDir(name), cli })
-    const bye = () => { s.stop(); process.exit(0) }
-    process.on('SIGINT', bye); process.on('SIGTERM', bye)
+    if (superviseCommand({ name, dir: dataDir(name), cli }).relaunched) process.exit(0)
   } catch (e) { console.error('error:', /** @type {Thrown} */ (e).message); process.exit(1) }
 }
 
