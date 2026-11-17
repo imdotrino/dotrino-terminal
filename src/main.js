@@ -80,6 +80,7 @@ const M = {
     connected: (a) => `Conectado a ${a}`,
     error: 'Error: ',
     err_unauthorized: (r) => `No autorizado: ${r}`,
+    err_missing_cap: 'Este aparato no tiene el permiso «terminal». Dáselo en tu bóveda: dotrino-vault caps <ID> +terminal',
     err_blocked: 'Un aprobador bloqueó este aparato; se desbloquea en la bóveda',
     err_unknown_session: 'La máquina ya no conoce esta sesión; vuelve a conectar',
     close: 'Cerrar',
@@ -177,6 +178,7 @@ const M = {
     connected: (a) => `Connected to ${a}`,
     error: 'Error: ',
     err_unauthorized: (r) => `Unauthorized: ${r}`,
+    err_missing_cap: 'This device lacks the «terminal» permission. Grant it in your vault: dotrino-vault caps <ID> +terminal',
     err_blocked: 'An approver blocked this device; unblock it from the vault',
     err_unknown_session: 'The machine no longer knows this session; reconnect',
     close: 'Close',
@@ -258,6 +260,7 @@ topbar.addEventListener('dotrino-lang', (e) => { lang = e.detail.lang; render() 
 /** @param {unknown} err */
 const errorText = (err) => {
   const e = /** @type {AgentError | null | undefined} */ (err)
+  if (e?.code === 'unauthorized' && e.reason === 'missing-cap') return t('err_missing_cap')
   if (e?.code === 'unauthorized') return t('err_unauthorized', e.reason || '?')
   if (e?.code === 'blocked') return t('err_blocked')
   if (e?.code === 'unknown-session') return t('err_unknown_session')

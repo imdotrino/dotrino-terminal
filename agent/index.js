@@ -46,7 +46,7 @@ import { listTransports, netReport } from '@dotrino/proxy-client'
 import { shortId } from './far.js'
 import { ConsoleHub, pieces, isTyped, cwdOf } from './consoles.js'
 import { listenLocal } from './local.js'
-import { makeGate } from './access.js'
+import { makeGate, makeLock } from './access.js'
 import { makeFar } from './far.js'
 import { makeUploads } from './uploads.js'
 import { readPiece } from './downloads.js'
@@ -151,17 +151,10 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
   const release = () => { if (current) { current.detach(viewer); current = null } }
   /** @type {(code: string, message: string, extra?: object) => unknown} */
   const fail = (code, message, extra = {}) => session.send({ type: 'fail', code, message, ...extra })
-  // La clave de la máquina: una vez escrita vale para ESTA conexión.
-  let unlocked = false
-  /** True si esta sesión puede seguir; si no, ya contestó por qué. No saber si hay clave = no pasa. */
-  const mayPass = () => {
-    if (origin !== 'remote' || !gate || unlocked) return true
-    try {
-      if (!gate.required()) return true
-    } catch (e) { fail(/** @type {Thrown} */ (e).code || 'access-unreadable', /** @type {Thrown} */ (e).message); return false }
-    fail('locked', 'this machine asks for its code')
-    return false
-  }
+  // La clave de la máquina (`@dotrino/remote-agent/access`): una vez escrita vale para ESTA
+  // conexión. Solo la piden las sesiones remotas; no saber si hay clave = no pasa.
+  const lock = makeLock({ gate: origin === 'remote' ? gate : null, device: viewer.device, send: (m) => session.send(m) })
+  const mayPass = () => lock.mayPass()
   /** @param {any} msg  lo que llegó de la sesión */
   const takeSize = (msg) => { if (msg.cols && msg.rows) { size = { cols: msg.cols, rows: msg.rows }; viewer.size = size } }
   // La etiqueta con la que se presenta quien mira (una ventana de la app de escritorio).
@@ -223,15 +216,7 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
 
   session.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return
-    if (msg.type === 'unlock') {
-      if (origin !== 'remote' || !gate) { session.send({ type: 'unlocked' }); return }
-      try {
-        if (gate.required()) gate.check(msg.code, viewer.device)
-        unlocked = true
-        session.send({ type: 'unlocked' })
-      } catch (e) { fail(/** @type {Thrown} */ (e).code || 'access-unreadable', /** @type {Thrown} */ (e).message, /** @type {Thrown} */ (e).retryMs ? { retryMs: /** @type {Thrown} */ (e).retryMs } : {}) }
-      return
-    }
+    if (lock.handle(msg)) return
     if (!mayPass()) return
     // Qué versión corre: tras actualizar el paquete, el agente en marcha sigue con la anterior.
     if (msg.type === 'version') { session.send({ type: 'version', version: VERSION }); return }
@@ -399,6 +384,9 @@ export async function startAgent (opts = {}) {
   let stopped = false
   const startRemote = () => startRemoteAgent({
     label: LABEL,
+    // Solo quien tenga `terminal` en el acta abre consolas (auditoría del 2026-11-16): con `sign`
+    // bastaba, y cualquier aparato de la cuenta —un bot, un navegador prestado— abría una shell.
+    needs: ['terminal'],
     dir,
     proxyUrl: opts.proxyUrl,
     quiet: opts.quiet,

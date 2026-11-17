@@ -52,7 +52,7 @@ import { connectLocal } from '../local.js'
 import { titleFilter } from '../title.js'
 import { clipboardImage, uploadImage, typedPath } from '../clipboard.js'
 import { farMessage as farMessageFor } from '../far-messages.js'
-import { hasAccessCode, setAccessCode, clearAccessCode, MIN_LENGTH } from '../access.js'
+import { lockCommand, askHidden as askHiddenOrFail } from '../access.js'
 import { configureEditors, terminalProfile } from '../editors.js'
 
 /** @type {{ version: string }} */
@@ -631,65 +631,19 @@ function ask (q) {
 }
 
 /**
- * Pregunta algo que no debe verse al teclearlo. Solo en una TTY: una clave no se pasa por una tubería.
- * @param {string} q
- * @returns {Promise<string>}
- */
-function askHidden (q) {
-  if (!process.stdin.isTTY) die(t('la clave se teclea: hace falta una terminal', 'the code is typed: a terminal is needed'))
-  process.stdout.write(q)
-  process.stdin.setRawMode(true)
-  process.stdin.resume()
-  return new Promise((resolve) => {
-    let typed = ''
-    const onData = (/** @type {Buffer} */ b) => {
-      // Una tecla que no es texto (flechas, Fin, el teclado numérico SIN Bloq Num) llega como una
-      // secuencia de escape: se descarta entera. Antes solo se saltaba el ESC y el resto («[F»)
-      // entraba en la clave sin que se viera, así que la clave guardada no era la tecleada.
-      const typedText = b.toString('utf8').replace(/\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.|.)?/g, '')
-      for (const ch of typedText) {
-        if (ch === '\r' || ch === '\n') {
-          process.stdin.off('data', onData); process.stdin.setRawMode(false); process.stdin.pause()
-          process.stdout.write('\n'); resolve(typed); return
-        }
-        if (ch === '\x03') { process.stdin.setRawMode(false); process.stdout.write('\n'); process.exit(130) }
-        if (ch === '\x7f' || ch === '\b') typed = typed.slice(0, -1)
-        else if (ch >= ' ') typed += ch
-      }
-    }
-    process.stdin.on('data', onData)
-  })
-}
-
-/**
  * La clave de esta máquina (access.js). Se pone AQUÍ, en la máquina, y la piden solo los otros
  * aparatos: quien está sentado delante ya es el usuario que puede leer y borrar el archivo, así
  * que ni cambiarla ni quitarla piden la anterior. Vale al momento, sin reiniciar el agente.
  */
 async function lock () {
   const dir = opt('--dir') || dataDir(opt('--name'))
-  if (args.includes('--status')) {
-    console.log(hasAccessCode(dir)
-      ? t('Hay clave: tus otros aparatos la escriben para abrir consolas en esta máquina.', 'There is a code: your other devices type it to open consoles on this machine.')
-      : t('Sin clave: cualquier aparato de tu cuenta abre consolas en esta máquina.', 'No code: any device of your account opens consoles on this machine.'))
-    return
-  }
-  if (args.includes('--off')) {
-    if (!hasAccessCode(dir)) { console.log(t('Esta máquina no tenía clave.', 'This machine had no code.')); return }
-    clearAccessCode(dir)
-    console.log(t('Clave quitada. Cualquier aparato de tu cuenta vuelve a abrir consolas aquí.', 'Code removed. Any device of your account opens consoles here again.'))
-    return
-  }
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const changing = hasAccessCode(dir)
-  const first = await askHidden(t(`Clave nueva (PIN o contraseña, mínimo ${MIN_LENGTH}): `, `New code (PIN or password, at least ${MIN_LENGTH}): `))
-  if (first.length < MIN_LENGTH) die(t(`demasiado corta: mínimo ${MIN_LENGTH} caracteres`, `too short: at least ${MIN_LENGTH} characters`))
-  const again = await askHidden(t('Otra vez: ', 'Again: '))
-  if (again !== first) die(t('no coinciden. No se cambió nada.', 'they do not match. Nothing was changed.'))
-  setAccessCode(dir, first)
-  console.log(changing
-    ? t('Clave cambiada. Los aparatos que ya estaban dentro siguen hasta que se desconecten.', 'Code changed. Devices already in stay until they disconnect.')
-    : t('Clave puesta. Tus otros aparatos la escriben para abrir consolas en esta máquina; las ventanas de esta máquina no la piden.', 'Code set. Your other devices type it to open consoles on this machine; this machine\'s own windows do not ask for it.'))
+  try {
+    console.log(await lockCommand({
+      dir, args, lang: /** @type {'es' | 'en'} */ (t('es', 'en')),
+      what: { es: 'abrir consolas', en: 'open consoles' },
+      localNote: { es: 'Las ventanas de esta máquina no la piden.', en: "This machine's own windows do not ask for it." }
+    }))
+  } catch (e) { die(/** @type {Thrown} */ (e).message) }
 }
 
 /**
@@ -835,7 +789,7 @@ async function goVia (conn, ref) {
     // Lo tecleado aquí es la clave, no entrada para la consola.
     process.stdin.off('data', earlyTap)
     early.length = 0
-    const code = await askHidden(t(`Clave de ${name}: `, `Code for ${name}: `))
+    const code = await askHiddenOrFail(t(`Clave de ${name}: `, `Code for ${name}: `)).catch(() => die(t('la clave se teclea: hace falta una terminal', 'the code is typed: a terminal is needed')))
     if (!code) die(t('sin clave no se entra.', 'no code, no entry.'))
     probe = await farRequest(conn, { type: 'unlock', code }, 'unlocked')
     if (probe.type === 'unlocked') break
