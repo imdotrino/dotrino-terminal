@@ -90,14 +90,41 @@ jobs:
         run: npm pack
       - name: Medir lo que se va a publicar
         run: npx --yes @dotrino/update@latest integrity ./*.tgz > npm-integrity.json
+      # LA FIRMA DEL PAQUETE, QUE NO DEPENDE DEL SITIO (CONVENCIONES §15.2): con ella se comprueba
+      # el .tgz aunque el paquete y su medida salgan del mismo espejo.
+      - name: Atestiguar el paquete
+        id: attest-tgz
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: 'agent/*.tgz'
+      - name: La firma junto a cada .tgz
+        run: for f in *.tgz; do cp "${{ steps.attest-tgz.outputs.bundle-path }}" "$f.sigstore.json"; done
+
       - name: Publicar en npm ESE archivo
         run: npm publish ./*.tgz --access public
+
+      # EL ESPEJO PROPIO (CONVENCIONES §15.2): el paquete, sus dependencias, la medida y la firma al
+      # directorio estático de S3, para que el directorio de fuentes pueda mandar ahí si npm o
+      # GitHub fallan. Credenciales por OIDC (rol dotrino-deps-publisher): ningún token guardado.
+      - name: Instalar el paquete para saber sus dependencias
+        run: mkdir mirror-deps && cd mirror-deps && npm init -y >/dev/null && npm install ../*.tgz --ignore-scripts --no-audit --no-fund
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::147464502454:role/dotrino-deps-publisher
+          aws-region: us-east-1
+      - name: Subir al espejo
+        run: |
+          npx --yes @dotrino/update@latest mirror --repo "${{ github.repository }}" --tag "${{ github.ref_name }}" \
+            --lock mirror-deps/package-lock.json --release npm-integrity.json \
+            $(for f in *.tgz.sigstore.json; do echo --release "$f"; done) \
+            --upload s3://dotrino-deps ./*.tgz
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             agent/sbom-*.cdx.json
             agent/npm-integrity.json
+            agent/*.tgz.sigstore.json
           generate_release_notes: true
           # «Latest» es la de la app de escritorio: la portada descarga de releases/latest, y
           # esta release no trae instaladores (el agente va por npm).
