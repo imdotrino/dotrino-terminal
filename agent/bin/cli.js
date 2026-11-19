@@ -18,6 +18,8 @@
  * El agente es un aparato más de tu cuenta: puede vivir en cualquier máquina. Con un
  * solo comando queda enlazado y aparece solo en terminal.dotrino.com.
  */
+// Primero: en Windows, nada de lo que lance el agente abre ventana (ver windows-hide.js).
+import '../windows-hide.js'
 import { createRequire } from 'node:module'
 import { updatePrefsCommand, updateStatusText } from '@dotrino/update/npm'
 import { startAgent } from '../index.js'
@@ -128,6 +130,9 @@ if (cmd !== 'supervise') try {
   console.log('  versión:', VERSION)
   console.log('  ventanas de esta máquina:', agent.socket)
   if (agent.remote) console.log('  máquina:', agent.machineId, '(tus otros aparatos pueden abrir estas consolas)\n')
+  // Enlazada pero sin conectar todavía (sin red, proxio caído): no es «sin enlazar», y decirlo
+  // mandaba a volver a enrolar una máquina que ya lo estaba. La parte remota se reintenta sola.
+  else if (loadLink(dir)) console.log('  enlazada, pero todavía no conecta con tus otros aparatos: se reintenta sola (mira los avisos de arriba)\n')
   else console.log('  sin enlazar: solo ventanas de esta máquina. Para abrirlas desde otros aparatos: dotrino-terminal-agent enroll\n')
   // §15: se actualiza solo. Mira al arrancar y una vez al día; pedir aprobación y avisar son
   // ajustes de este agente (`dotrino-terminal-agent update`). Solo se reinicia sin consolas.

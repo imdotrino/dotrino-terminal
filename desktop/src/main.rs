@@ -1899,6 +1899,8 @@ impl App {
             // El cierre lo hace la app (`Message::Close`): así sabe cuándo se fue la última
             // ventana. El evento `Closed` de iced no llega cuando ya no queda ninguna.
             exit_on_close_request: false,
+            // El icono de la ventana (Windows lo enseña en la barra de título y en la de tareas).
+            icon: window::icon::from_rgba(include_bytes!("../assets/icon-64.rgba").to_vec(), 64, 64).ok(),
             // Linux: la clase de la ventana, para que el escritorio la ate al .desktop (su icono).
             #[cfg(target_os = "linux")]
             platform_specific: window::settings::PlatformSpecific { application_id: "dotrino-terminal".into(), ..Default::default() },

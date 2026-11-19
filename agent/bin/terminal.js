@@ -791,6 +791,10 @@ async function goVia (conn, ref) {
     early.length = 0
     const code = await askHiddenOrFail(t(`Clave de ${name}: `, `Code for ${name}: `)).catch(() => die(t('la clave se teclea: hace falta una terminal', 'the code is typed: a terminal is needed')))
     if (!code) die(t('sin clave no se entra.', 'no code, no entry.'))
+    // `askHidden` deja la TTY en modo normal: mientras la otra máquina contesta, lo tecleado (y
+    // los atajos que manda la app, Ctrl+] n / d) salía en pantalla y en Windows sonaba un pitido.
+    // Se vuelve a crudo y se guarda para la consola, como al arrancar.
+    captureEarly()
     probe = await farRequest(conn, { type: 'unlock', code }, 'unlocked')
     if (probe.type === 'unlocked') break
   }
