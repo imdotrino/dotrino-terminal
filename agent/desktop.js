@@ -194,7 +194,7 @@ export function install (file, how, { exe, run = execFileSync, uid = process.get
     if (!exe) return fail('no-exe', 'the desktop app was not found', { file })
     const work = path.dirname(file)
     // `tar` de Windows (bsdtar, desde Windows 10) desempaqueta un .zip.
-    try { run('tar', ['-xf', file, '-C', work], { stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) {
+    try { run('tar', ['-xf', file, '-C', work], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true }) } catch (e) {
       return fail('unpack-failed', `could not unpack the release: ${String(/** @type {Thrown} */ (e).stderr || /** @type {Thrown} */ (e).message).trim()}`, { file })
     }
     const name = `${BINARY}.exe`
