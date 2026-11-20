@@ -8,6 +8,7 @@
  *   dotrino-terminal kill <id> [--name <n>]    cierra una consola
  *   dotrino-terminal machines [--json]         tus OTRAS máquinas encendidas y sus consolas
  *   dotrino-terminal … --machine <id|nombre>   lo mismo (abrir, attach, ls, kill) en otra máquina
+ *   dotrino-terminal run [--machine <m>] -- <orden>   una orden suelta: su salida y su código, sin consola
  *   dotrino-terminal note [texto]              la nota de esta consola (de qué va): la lee o la cambia
  *   dotrino-terminal profiles [--json]         los perfiles de esta máquina (enlazados o no)
  *   dotrino-terminal link [--name <n>]         enlaza un perfil con tu bóveda
@@ -60,7 +61,11 @@ import { configureEditors, terminalProfile } from '../editors.js'
 const { version: VERSION } = createRequire(import.meta.url)('../package.json')
 /** La conexión con el agente de esta máquina (`local.js`). */
 /** @typedef {Awaited<ReturnType<typeof connectLocal>>} Conn */
-const args = process.argv.slice(2)
+// Lo que va tras «--» es de otro (la orden de `run`): no son opciones de dotrino-terminal.
+const argv = process.argv.slice(2)
+const dashes = argv.indexOf('--')
+const args = dashes >= 0 ? argv.slice(0, dashes) : argv
+const afterDashes = dashes >= 0 ? argv.slice(dashes + 1) : []
 const cmd = args[0] && !args[0].startsWith('-') ? args[0] : 'open'
 /** @param {string} name */
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
@@ -80,6 +85,10 @@ if (args.includes('-h') || args.includes('--help')) {
   dotrino-terminal machines [--json]         tus otras máquinas encendidas y sus consolas
   dotrino-terminal … --machine <id|nombre>   abrir, attach, ls y kill, pero en otra máquina tuya
                                              (su id o su nombre salen en «machines»)
+  dotrino-terminal run [--machine <m>] [--cwd <dir>] -- <orden>
+                                             corre una orden sin abrir consola, en la shell de esa
+                                             máquina: sale su salida (y sus errores, aparte) y
+                                             termina con su código de salida
   dotrino-terminal note                      enseña la nota de esta consola (de qué va)
   dotrino-terminal note <texto>              la reemplaza («-» la lee de la entrada estándar)
   dotrino-terminal note --add <texto>        le añade una línea
@@ -127,6 +136,10 @@ Cerrar la ventana no cierra la consola: sigue abierta y se retoma después.`, `u
   dotrino-terminal machines [--json]         your other machines that are on, and their consoles
   dotrino-terminal … --machine <id|name>     open, attach, ls and kill, but on another machine of yours
                                              (its id or name show up in "machines")
+  dotrino-terminal run [--machine <m>] [--cwd <dir>] -- <command>
+                                             run a command without opening a console, in that
+                                             machine's shell: prints its output (and its errors,
+                                             apart) and exits with its exit code
   dotrino-terminal note                      show this console's note (what it is about)
   dotrino-terminal note <text>               replace it ("-" reads it from standard input)
   dotrino-terminal note --add <text>         append a line
@@ -802,6 +815,47 @@ async function goVia (conn, ref) {
   if (probe.type === 'fail') die(`dotrino-terminal: ${probe.message} (${probe.code})`)
 }
 
+/** La primera versión del agente que entiende `run` (run.js). */
+const RUN_SINCE = '0.57.0'
+/**
+ * `dotrino-terminal run -- <orden>`: una orden suelta en esta máquina o, con `--machine`, en otra
+ * de la cuenta. Sin PTY: la salida y los errores salen aparte, tal cual, y el proceso termina con
+ * el código de la orden. Ctrl+C la para allí.
+ * @param {Conn} conn
+ */
+async function run (conn) {
+  const line = afterDashes.join(' ').trim()
+  if (!line) die(t('falta la orden: dotrino-terminal run [--machine <m>] -- <orden>', 'missing command: dotrino-terminal run [--machine <m>] -- <command>'))
+  // Un agente anterior no contesta a `run` y esto esperaría para siempre: se pregunta antes.
+  const v = await farRequest(conn, { type: 'version' }, 'version')
+  if (v.type === 'fail') die(`dotrino-terminal: ${v.message} (${v.code})`)
+  const { isNewer } = await import('@dotrino/update')
+  if (isNewer(RUN_SINCE, v.version)) {
+    const where = opt('--machine') ? t('de esa máquina', 'on that machine') : t('de esta máquina', 'on this machine')
+    die(t(`el agente ${where} es ${v.version} y «run» necesita ${RUN_SINCE} o más reciente: actualízalo allí y reinícialo.`, `the agent ${where} is ${v.version} and "run" needs ${RUN_SINCE} or newer: update and restart it there.`))
+  }
+  const rid = Math.random().toString(36).slice(2, 10)
+  // Aquí, como cualquier orden, corre en la carpeta donde estás; en otra máquina esa carpeta no
+  // existe: en su carpeta de inicio, salvo `--cwd`.
+  const cwd = opt('--machine') ? opt('--cwd') : path.resolve(opt('--cwd') || process.cwd())
+  let finished = false
+  conn.on('message', (m) => {
+    if (m.rid !== rid && !(m.type === 'fail' && m.rid == null)) return
+    if (m.type === 'run-out') (m.stream === 'err' ? process.stderr : process.stdout).write(Buffer.from(m.data, 'base64'))
+    else if (m.type === 'run-exit') {
+      finished = true
+      conn.close()
+      if (m.error) die(t(`dotrino-terminal: la orden no arrancó: ${m.error}`, `dotrino-terminal: the command did not start: ${m.error}`))
+      process.exitCode = m.code ?? 1
+      // Que lo escrito salga entero antes de irse.
+      process.stdout.write('', () => process.stderr.write('', () => process.exit()))
+    } else if (m.type === 'fail') die(`dotrino-terminal: ${m.message} (${m.code})`)
+  })
+  conn.on('close', () => finished || die(t('dotrino-terminal: se cortó la conexión con el agente antes de que la orden terminara.', 'dotrino-terminal: the connection with the agent was cut before the command finished.')))
+  process.on('SIGINT', () => conn.send({ type: 'run-kill', rid }))
+  conn.send({ type: 'run', rid, cmd: line, ...(cwd ? { cwd } : {}) })
+}
+
 /** @param {number} ms */
 const age = (ms) => {
   const s = Math.round(ms / 1000)
@@ -1236,6 +1290,8 @@ try {
   } else if (cmd === 'attach') {
     if (!args[1]) die(t('falta el id: dotrino-terminal attach <id>  (mira «dotrino-terminal ls»)', 'missing id: dotrino-terminal attach <id>  (see "dotrino-terminal ls")'))
     interactive(conn, { type: 'attach', id: args[1], ...tag() }, dir)
+  } else if (cmd === 'run') {
+    await run(conn)
   } else if (cmd === 'open') {
     // Como cualquier terminal: la consola abre en la carpeta donde estás (o en `--cwd`).
     // En otra máquina, la carpeta de aquí no existe: abre en su carpeta de inicio, salvo `--cwd`.

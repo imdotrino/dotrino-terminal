@@ -46,6 +46,7 @@ dotrino-terminal attach <id>             # retomar una
 dotrino-terminal kill <id>
 dotrino-terminal machines [--json]       # las OTRAS máquinas de la cuenta que están encendidas, y sus consolas
 dotrino-terminal --machine <id|nombre>   # abrir / attach / ls / kill, pero en otra máquina (≥ 0.38)
+dotrino-terminal run [--machine <m>] [--cwd <dir>] -- <orden>  # una orden suelta, sin PTY: stdout y stderr aparte y su código de salida (agente ≥ 0.57 en esa máquina; los argumentos se unen con espacios, como ssh)
 dotrino-terminal profiles [--json]       # los perfiles (agentes con nombre) de esta máquina
 dotrino-terminal link [--name <n>]       # enlazar un perfil con tu bóveda
 dotrino-terminal rename <perfil> [nuevo] # renombrarlo (mueve su carpeta y para su agente; mismo aparato)

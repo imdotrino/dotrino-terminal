@@ -24,13 +24,17 @@
  *                       quedó en esta máquina: uploads.js) ·
  *                     { type:'fetch', id, path, seq } (un trozo de un archivo de esta máquina, para
  *                       abrirlo en el aparato; una ruta relativa cuelga de la carpeta de la consola
- *                       enganchada: downloads.js)
+ *                       enganchada: downloads.js) ·
+ *                     { type:'run', rid, cmd, cwd? } (una orden suelta, sin consola: run.js) ·
+ *                     { type:'run-kill', rid } (la para)
  *   agente → cliente: { type:'consoles', list } · { type:'attached', id, fresh } ·
  *                     { type:'replay', id, data, last } · { type:'out', id, data } ·
  *                     { type:'exit', code, closedBy? } · { type:'fail', code, message, retryMs? } ·
  *                     { type:'unlocked' } · { type:'noted', console } ·
  *                     { type:'filed', up, seq, path? } ·
- *                     { type:'fetched', id, seq, path, name, size, mtime, data, last? }
+ *                     { type:'fetched', id, seq, path, name, size, mtime, data, last? } ·
+ *                     { type:'run-out', rid, stream:'out'|'err', data (base64) } ·
+ *                     { type:'run-exit', rid, code, signal?, error? }
  *
  * Con clave puesta, una sesión remota que no la ha escrito recibe `fail` con `code:'locked'`
  * a todo lo que pida; tras `unlock` vale para esa conexión. `bad-code` y `wait` traen
@@ -50,6 +54,7 @@ import { makeGate, makeLock } from './access.js'
 import { makeFar } from './far.js'
 import { makeUploads } from './uploads.js'
 import { readPiece } from './downloads.js'
+import { startRun, defaultShell } from './run.js'
 
 const require = createRequire(import.meta.url)
 /** @type {{ version: string }} */
@@ -98,7 +103,7 @@ const isDir = (p) => {
  * @param {{ shell?: string, quietMs?: number, dir?: string }} [opts]
  */
 export function makeHub (pty, opts = {}) {
-  const shell = opts.shell || process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash')
+  const shell = opts.shell || defaultShell()
   return new ConsoleHub({
     ...(opts.quietMs ? { quietMs: opts.quietMs } : {}),
     spawn: ({ cols, rows, cwd, id }) => pty.spawn(shell, [], {
@@ -149,6 +154,9 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
     onMeta: (info) => { session.send({ type: 'meta', console: info }) }
   }
   const release = () => { if (current) { current.detach(viewer); current = null } }
+  /** Las órdenes sueltas de esta sesión en marcha (run.js), por su `rid`. */
+  /** @type {Map<string, { kill: () => void }>} */
+  const runs = new Map()
   /** @type {(code: string, message: string, extra?: object) => unknown} */
   const fail = (code, message, extra = {}) => session.send({ type: 'fail', code, message, ...extra })
   // La clave de la máquina (`@dotrino/remote-agent/access`): una vez escrita vale para ESTA
@@ -280,13 +288,37 @@ export function serveSession (session, hub, { origin = 'remote', gate = null, up
       }
       return
     }
+    // Una orden suelta, sin consola (run.js). Corre en la carpeta que diga, o en la de inicio.
+    if (msg.type === 'run') {
+      const rid = String(msg.rid ?? '')
+      if (!rid || typeof msg.cmd !== 'string' || !msg.cmd.trim()) return fail('bad-run', 'run needs a rid and a command', { rid })
+      if (runs.has(rid)) return fail('bad-run', 'that run id is already in use', { rid })
+      if (msg.cwd != null && !isDir(msg.cwd)) return fail('bad-cwd', `not a directory: ${msg.cwd}`, { rid })
+      // Al registro va QUIÉN y CUÁNTO, no la orden: puede llevar una contraseña, y lo que se
+      // teclea en una consola tampoco se apunta.
+      const who = viewer.device ? shortId(viewer.device).then((id) => `device ${id}`, () => 'a device') : Promise.resolve('a local window')
+      who.then((w) => console.log(`[terminal-agent] run (${msg.cmd.length} chars) from ${w}`))
+      runs.set(rid, startRun({
+        cmd: msg.cmd,
+        cwd: msg.cwd || os.homedir(),
+        onOut: (stream, data) => { session.send({ type: 'run-out', rid, stream, data }) },
+        onExit: (r) => {
+          runs.delete(rid)
+          who.then((w) => console.log(`[terminal-agent] run from ${w} ended: ${r.error ? `did not start (${r.error})` : r.signal ? `signal ${r.signal}` : `code ${r.code}`}`))
+          session.send({ type: 'run-exit', rid, ...r })
+        }
+      }))
+      return
+    }
+    if (msg.type === 'run-kill') { runs.get(String(msg.rid ?? ''))?.kill(); return }
     // El orden del panel: es de la máquina, así que lo ve igual cualquier pantalla.
     if (msg.type === 'move') {
       if (!hub.move(String(msg.id), msg.before == null ? null : String(msg.before))) return fail('no-console', 'that console no longer exists')
       session.send({ type: 'consoles', list: hub.list() })
     }
   })
-  session.on('close', () => { release(); uploads?.drop() })
+  // Si quien pidió la orden se va, la orden se para: nadie leería lo que saca.
+  session.on('close', () => { release(); uploads?.drop(); for (const r of runs.values()) r.kill() })
 }
 
 /**
