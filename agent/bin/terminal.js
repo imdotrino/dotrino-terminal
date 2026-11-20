@@ -50,6 +50,7 @@ import { resolveInstance, isValidName } from '@dotrino/remote-agent/instances'
 import readline from 'node:readline'
 import { connectLocal } from '../local.js'
 import { titleFilter } from '../title.js'
+import { win32InputFilter } from '../win32-input.js'
 import { clipboardImage, uploadImage, typedPath } from '../clipboard.js'
 import { farMessage as farMessageFor } from '../far-messages.js'
 import { lockCommand, askHidden as askHiddenOrFail } from '../access.js'
@@ -959,7 +960,12 @@ function interactive (conn, first, dir) {
     if (arrived) out.write('\x07')                 // la campana: alguien entró desde fuera
     showTitle()
   }
-  const filter = titleFilter((title) => { shellTitle = title; showTitle() })
+  const titles = titleFilter((title) => { shellTitle = title; showTitle() })
+  // Una consola de Windows pide teclas en win32-input-mode: esa petición no llega a la terminal
+  // de aquí, o los atajos (Ctrl+] d…) dejan de verse (win32-input.js).
+  const win32Input = win32InputFilter()
+  /** @param {string} data */
+  const filter = (data) => titles(win32Input(data))
   const size = () => ({ cols: out.columns || 80, rows: out.rows || 24 })
 
   /** @type {(code: number, note?: string) => void} */
